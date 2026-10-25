@@ -19,6 +19,7 @@ import { PayrollModule } from './modules/payroll/payroll.module';
 import { BulkImportModule } from './modules/bulk-import/bulk-import.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 import { AiAssistantModule } from './modules/ai-assistant/ai-assistant.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { RequestContextModule } from './common/request-context/request-context.module';
 import { MailModule } from './common/mail/mail.module';
 
@@ -72,6 +73,7 @@ import { MailModule } from './common/mail/mail.module';
     BulkImportModule,
     SubscriptionsModule,
     AiAssistantModule,
+    AnalyticsModule,
   ],
 })
 export class AppModule {}

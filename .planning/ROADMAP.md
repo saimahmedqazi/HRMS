@@ -12,7 +12,7 @@ ZenHR is delivered through a 7-phase vertical MVP progression designed to achiev
 - [x] **Phase 4: Configurable Approval Engine & Leave Management** - Shared reporting-line approval engine, 3-month probation gating, HR leave modal with prescription download, and Resource Requests
 - [x] **Phase 5: Payroll & Asynchronous Bulk Data Pipeline** - Salary structures, PDF payslips, Dept Manager payroll summary, and BullMQ Excel employee import
 - [x] **Phase 6: Subscriptions, Gemini AI Assistant & Security Hardening** - Basic vs Premium tiers, Stripe checkout widget, 3-day retry cron, 2-month lockout, and Gemini AI HR assistant
-- [ ] **Phase 7: Role-Scoped Dashboards, Analytics & Production Deployment** - 7 customized dashboards, Recharts analytics, Vercel & Render production configs, and CI/CD
+- [x] **Phase 7: Role-Scoped Dashboards, Analytics & Production Deployment** - 7 customized dashboards, Recharts analytics, Vercel & Render production configs, and CI/CD
 
 ## Phase Details
 
@@ -88,9 +88,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: Generic configurable approval routing engine supporting dynamic multi-step resolution and audit logging.
-- [ ] 04-02: Leave management module (Casual, Sick with prescription upload, Annual) with probation gating, Admin/HR toggles, and balance deduction.
-- [ ] 04-03: HR Leave modal with prescription download, standing Remote Work permission workflow, and Resource Request module.
+- [x] 04-01: Generic configurable approval routing engine supporting dynamic multi-step resolution and audit logging.
+- [x] 04-02: Leave management module (Casual, Sick with prescription upload, Annual) with probation gating, Admin/HR toggles, and balance deduction.
+- [x] 04-03: HR Leave modal with prescription download, standing Remote Work permission workflow, and Resource Request module.
 
 ### Phase 5: Payroll & Asynchronous Bulk Data Pipeline
 **Goal**: Implement salary structures, allowances, deductions, tax calculation, monthly payroll execution, single and bulk PDF payslips, limited read-only department payroll summary for Department Managers, and asynchronous BullMQ Excel employee import pipeline.
@@ -106,9 +106,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 05-01: Salary structures, allowances, deductions, tax calculations, and monthly payroll execution engine.
-- [ ] 05-02: Single and bulk PDF payslip generator and role-scoped payslip viewer (including Dept Manager summary).
-- [ ] 05-03: Excel bulk employee import worker (BullMQ) with validation preview and downloadable error reports.
+- [x] 05-01: Salary structures, allowances, deductions, tax calculations, and monthly payroll execution engine.
+- [x] 05-02: Single and bulk PDF payslip generator and role-scoped payslip viewer (including Dept Manager summary).
+- [x] 05-03: Excel bulk employee import worker (BullMQ) with validation preview and downloadable error reports.
 
 ### Phase 6: Subscriptions, Gemini AI Assistant & Security Hardening
 **Goal**: Enforce two-tier subscription gating (Basic vs Premium), Stripe prebuilt payment widget, BullMQ 3-day retry cron (Day +1, +2, +3), 2-month non-payment lockout, Google Gemini AI assistant with HR guardrails, and audit logging.
@@ -125,9 +125,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 06-01: Two-tier subscription gating and Stripe prebuilt widget integration on frontend and backend.
-- [ ] 06-02: BullMQ Stripe 3-day retry cron worker, failure alert system, and 2-month non-payment suspension lockout.
-- [ ] 06-03: Google Gemini API integration with HR system prompts, context injection, topic classifier guardrails, and security audit log.
+- [x] 06-01: Two-tier subscription gating and Stripe prebuilt widget integration on frontend and backend.
+- [x] 06-02: BullMQ Stripe 3-day retry cron worker, failure alert system, and 2-month non-payment suspension lockout.
+- [x] 06-03: Google Gemini API integration with HR system prompts, context injection, topic classifier guardrails, and security audit log.
 
 ### Phase 7: Role-Scoped Dashboards, Analytics & Production Deployment
 **Goal**: Build 7 role-scoped dashboards, Recharts analytics modules, production deployment configurations for Vercel (frontend) and Render (backend API, PostgreSQL, Redis), complete `.env.example` templates, and CI/CD pipelines ahead of 10 November 2026.
@@ -143,9 +143,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 07-01: 7 role-scoped dashboard views and action queues (HR Exceptions Queue, Remote Work Queue, Approvals).
-- [ ] 07-02: Interactive Recharts analytics module covering attendance, payroll, hiring, and revenue metrics.
-- [ ] 07-03: Production deployment configurations (Docker, Render, Vercel), `.env.example` verification, and CI/CD pipelines.
+- [x] 07-01: 7 role-scoped dashboard views and action queues (HR Exceptions Queue, Remote Work Queue, Approvals).
+- [x] 07-02: Interactive Recharts analytics module covering attendance, payroll, hiring, and revenue metrics.
+- [x] 07-03: Production deployment configurations (Docker, Render, Vercel), `.env.example` verification, and CI/CD pipelines.
 
 ## Progress
 
@@ -154,10 +154,10 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Multi-Tenant Core & Two-Layer RBAC Engine | 0/3 | Not started | - |
-| 2. Organization Hierarchy, Employee Management & Cloud Storage | 0/3 | Not started | - |
-| 3. Attendance, Work Timer & Real-Time Alert Engine | 0/4 | Not started | - |
-| 4. Configurable Approval Engine & Leave Management | 0/3 | Not started | - |
-| 5. Payroll & Asynchronous Bulk Data Pipeline | 0/3 | Not started | - |
-| 6. Subscriptions, Gemini AI Assistant & Security Hardening | 0/3 | Not started | - |
-| 7. Role-Scoped Dashboards, Analytics & Production Deployment | 0/3 | Not started | - |
+| 1. Multi-Tenant Core & Two-Layer RBAC Engine | 3/3 | Complete | 2026-10-26 |
+| 2. Organization Hierarchy, Employee Management & Cloud Storage | 3/3 | Complete | 2026-10-26 |
+| 3. Attendance, Work Timer & Real-Time Alert Engine | 4/4 | Complete | 2026-10-26 |
+| 4. Configurable Approval Engine & Leave Management | 3/3 | Complete | 2026-10-26 |
+| 5. Payroll & Asynchronous Bulk Data Pipeline | 3/3 | Complete | 2026-10-26 |
+| 6. Subscriptions, Gemini AI Assistant & Security Hardening | 3/3 | Complete | 2026-10-26 |
+| 7. Role-Scoped Dashboards, Analytics & Production Deployment | 3/3 | Complete | 2026-10-26 |

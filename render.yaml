@@ -1,0 +1,61 @@
+services:
+  # Backend API Web Service (Persistent container for Socket.IO, BullMQ, and Cron jobs)
+  - type: web
+    name: zenhr-backend-api
+    runtime: node
+    plan: standard
+    region: frankfurt
+    buildCommand: npm install && npx prisma generate --schema=./apps/backend/prisma/schema.prisma && npm run build --workspace=apps/backend
+    startCommand: node apps/backend/dist/main
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: zenhr-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: zenhr-redis
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: TOTP_ENCRYPTION_KEY
+        generateValue: true
+
+  # Frontend Web Service
+  - type: web
+    name: zenhr-frontend-web
+    runtime: node
+    plan: standard
+    region: frankfurt
+    buildCommand: npm install && npm run build --workspace=apps/frontend
+    startCommand: npm run start --workspace=apps/frontend
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: zenhr-backend-api
+          property: host
+
+databases:
+  # Managed PostgreSQL 16
+  - name: zenhr-postgres
+    databaseName: zenhr_production
+    user: zenhr_admin
+    plan: standard
+    region: frankfurt
+    postgresMajorVersion: 16
+
+  # Managed Redis 7
+  - name: zenhr-redis
+    plan: standard
+    region: frankfurt
+    maxmemoryPolicy: noeviction
