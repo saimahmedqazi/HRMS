@@ -11,7 +11,7 @@ ZenHR is delivered through a 7-phase vertical MVP progression designed to achiev
 - [x] **Phase 3: Attendance, Work Timer & Real-Time Alert Engine** - Check-in/out, Work Timer with break notifications, overtime calculation, nightly absence cron, and IP whitelist
 - [x] **Phase 4: Configurable Approval Engine & Leave Management** - Shared reporting-line approval engine, 3-month probation gating, HR leave modal with prescription download, and Resource Requests
 - [x] **Phase 5: Payroll & Asynchronous Bulk Data Pipeline** - Salary structures, PDF payslips, Dept Manager payroll summary, and BullMQ Excel employee import
-- [ ] **Phase 6: Subscriptions, Gemini AI Assistant & Security Hardening** - Basic vs Premium tiers, Stripe checkout widget, 3-day retry cron, 2-month lockout, and Gemini AI HR assistant
+- [x] **Phase 6: Subscriptions, Gemini AI Assistant & Security Hardening** - Basic vs Premium tiers, Stripe checkout widget, 3-day retry cron, 2-month lockout, and Gemini AI HR assistant
 - [ ] **Phase 7: Role-Scoped Dashboards, Analytics & Production Deployment** - 7 customized dashboards, Recharts analytics, Vercel & Render production configs, and CI/CD
 
 ## Phase Details

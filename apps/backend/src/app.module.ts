@@ -17,6 +17,8 @@ import { LeaveModule } from './modules/leave/leave.module';
 import { ResourcesModule } from './modules/resources/resources.module';
 import { PayrollModule } from './modules/payroll/payroll.module';
 import { BulkImportModule } from './modules/bulk-import/bulk-import.module';
+import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
+import { AiAssistantModule } from './modules/ai-assistant/ai-assistant.module';
 import { RequestContextModule } from './common/request-context/request-context.module';
 import { MailModule } from './common/mail/mail.module';
 
@@ -68,6 +70,8 @@ import { MailModule } from './common/mail/mail.module';
     ResourcesModule,
     PayrollModule,
     BulkImportModule,
+    SubscriptionsModule,
+    AiAssistantModule,
   ],
 })
 export class AppModule {}
