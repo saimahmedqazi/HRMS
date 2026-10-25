@@ -6,7 +6,7 @@ ZenHR is delivered through a 7-phase vertical MVP progression designed to achiev
 
 ## Phases
 
-- [ ] **Phase 1: Multi-Tenant Core & Two-Layer RBAC Engine** - Full-stack foundation, Prisma multi-tenant isolation, JWT cookie auth, 7 roles, and 5 data scopes
+- [x] **Phase 1: Multi-Tenant Core & Two-Layer RBAC Engine** - Full-stack foundation, Prisma multi-tenant isolation, JWT cookie auth, 7 roles, and 5 data scopes
 - [ ] **Phase 2: Organization Hierarchy, Employee Management & Cloud Storage** - Departments, designations, employee directory, status badges, and Cloudinary/S3 uploads
 - [ ] **Phase 3: Attendance, Work Timer & Real-Time Alert Engine** - Check-in/out, Work Timer with break notifications, overtime calculation, nightly absence cron, and IP whitelist
 - [ ] **Phase 4: Configurable Approval Engine & Leave Management** - Shared reporting-line approval engine, 3-month probation gating, HR leave modal with prescription download, and Resource Requests
@@ -30,9 +30,9 @@ ZenHR is delivered through a 7-phase vertical MVP progression designed to achiev
 **Plans**: 3 plans
 
 Plans:
-- [ ] 01-01: Full-stack monorepo scaffolding (Next.js App Router + NestJS API), PostgreSQL schema, Prisma client extension with multi-tenant isolation.
-- [ ] 01-02: Authentication system with JWT access/refresh tokens in httpOnly cookies, password hashing, and session management.
-- [ ] 01-03: Two-layer RBAC guards (7 roles, 5 data scopes) and Super Admin audit-logged Support Mode with frontend shell integration.
+- [x] 01-01: Full-stack monorepo scaffolding (Next.js App Router + NestJS API), PostgreSQL schema, Prisma client extension with multi-tenant isolation.
+- [x] 01-02: Authentication system with JWT access/refresh tokens in httpOnly cookies, password hashing, and session management.
+- [x] 01-03: Two-layer RBAC guards (7 roles, 5 data scopes) and Super Admin audit-logged Support Mode with frontend shell integration.
 
 ### Phase 2: Organization Hierarchy, Employee Management & Cloud Storage
 **Goal**: Deliver company organizational structure (departments, designations, reporting lines), comprehensive employee directory, status badges (`Active`, `On probation`, `Suspended`, etc.), and Cloudinary/S3 file storage pipeline.
