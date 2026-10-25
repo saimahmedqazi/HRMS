@@ -15,6 +15,8 @@ import { AttendanceModule } from './modules/attendance/attendance.module';
 import { WorkTimerModule } from './modules/work-timer/work-timer.module';
 import { LeaveModule } from './modules/leave/leave.module';
 import { ResourcesModule } from './modules/resources/resources.module';
+import { PayrollModule } from './modules/payroll/payroll.module';
+import { BulkImportModule } from './modules/bulk-import/bulk-import.module';
 import { RequestContextModule } from './common/request-context/request-context.module';
 import { MailModule } from './common/mail/mail.module';
 
@@ -64,6 +66,8 @@ import { MailModule } from './common/mail/mail.module';
     WorkTimerModule,
     LeaveModule,
     ResourcesModule,
+    PayrollModule,
+    BulkImportModule,
   ],
 })
 export class AppModule {}
