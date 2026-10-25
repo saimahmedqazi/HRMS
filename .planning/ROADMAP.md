@@ -8,7 +8,7 @@ ZenHR is delivered through a 7-phase vertical MVP progression designed to achiev
 
 - [x] **Phase 1: Multi-Tenant Core & Two-Layer RBAC Engine** - Full-stack foundation, Prisma multi-tenant isolation, JWT cookie auth, 7 roles, and 5 data scopes
 - [x] **Phase 2: Organization Hierarchy, Employee Management & Cloud Storage** - Departments, designations, employee directory, status badges, and Cloudinary/S3 uploads
-- [ ] **Phase 3: Attendance, Work Timer & Real-Time Alert Engine** - Check-in/out, Work Timer with break notifications, overtime calculation, nightly absence cron, and IP whitelist
+- [x] **Phase 3: Attendance, Work Timer & Real-Time Alert Engine** - Check-in/out, Work Timer with break notifications, overtime calculation, nightly absence cron, and IP whitelist
 - [ ] **Phase 4: Configurable Approval Engine & Leave Management** - Shared reporting-line approval engine, 3-month probation gating, HR leave modal with prescription download, and Resource Requests
 - [ ] **Phase 5: Payroll & Asynchronous Bulk Data Pipeline** - Salary structures, PDF payslips, Dept Manager payroll summary, and BullMQ Excel employee import
 - [ ] **Phase 6: Subscriptions, Gemini AI Assistant & Security Hardening** - Basic vs Premium tiers, Stripe checkout widget, 3-day retry cron, 2-month lockout, and Gemini AI HR assistant
@@ -68,10 +68,10 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 03-01: Attendance check-in/out engine (Onsite, Remote validation, and HR Exceptions Queue) with optional consent-gated location capture.
-- [ ] 03-02: Socket.IO WebSocket gateway, client integration, and Nodemailer email notification dispatcher.
-- [ ] 03-03: Work Timer module gated behind Premium plan, break pause alert dispatch, and automatic overtime calculation.
-- [ ] 03-04: Nightly BullMQ absence cron worker and login IP tracking with HR IP Whitelist management.
+- [x] 03-01: Attendance check-in/out engine (Onsite, Remote validation, and HR Exceptions Queue) with optional consent-gated location capture.
+- [x] 03-02: Socket.IO WebSocket gateway, client integration, and Nodemailer email notification dispatcher.
+- [x] 03-03: Work Timer module gated behind Premium plan, break pause alert dispatch, and automatic overtime calculation.
+- [x] 03-04: Nightly BullMQ absence cron worker and login IP tracking with HR IP Whitelist management.
 
 ### Phase 4: Configurable Approval Engine & Leave Management
 **Goal**: Build generic reporting-line approval engine, 3-month probation gating on Employee role anchored to `hireDate`, Casual/Sick/Annual leave workflows with mandatory toggle, HR leave modal with prescription download, and Resource Request workflow.
