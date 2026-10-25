@@ -7,7 +7,7 @@ ZenHR is delivered through a 7-phase vertical MVP progression designed to achiev
 ## Phases
 
 - [x] **Phase 1: Multi-Tenant Core & Two-Layer RBAC Engine** - Full-stack foundation, Prisma multi-tenant isolation, JWT cookie auth, 7 roles, and 5 data scopes
-- [ ] **Phase 2: Organization Hierarchy, Employee Management & Cloud Storage** - Departments, designations, employee directory, status badges, and Cloudinary/S3 uploads
+- [x] **Phase 2: Organization Hierarchy, Employee Management & Cloud Storage** - Departments, designations, employee directory, status badges, and Cloudinary/S3 uploads
 - [ ] **Phase 3: Attendance, Work Timer & Real-Time Alert Engine** - Check-in/out, Work Timer with break notifications, overtime calculation, nightly absence cron, and IP whitelist
 - [ ] **Phase 4: Configurable Approval Engine & Leave Management** - Shared reporting-line approval engine, 3-month probation gating, HR leave modal with prescription download, and Resource Requests
 - [ ] **Phase 5: Payroll & Asynchronous Bulk Data Pipeline** - Salary structures, PDF payslips, Dept Manager payroll summary, and BullMQ Excel employee import
@@ -48,9 +48,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 02-01: Departments, designations, and organizational reporting hierarchy backend services and management UI.
-- [ ] 02-02: Comprehensive Employee CRUD, profile management, and status badge system with in-app/email alerts.
-- [ ] 02-03: Multer file upload pipeline integrated with Cloudinary (free tier) and AWS S3 storing HTTPS URLs in PostgreSQL.
+- [x] 02-01: Departments, designations, and organizational reporting hierarchy backend services and management UI.
+- [x] 02-02: Comprehensive Employee CRUD, profile management, and status badge system with in-app/email alerts.
+- [x] 02-03: Multer file upload pipeline integrated with Cloudinary (free tier) and AWS S3 storing HTTPS URLs in PostgreSQL.
 
 ### Phase 3: Attendance, Work Timer & Real-Time Alert Engine
 **Goal**: Implement check-in/out (Onsite immediate Present, authorized Remote, HR Exceptions Queue), Work Timer (Premium) with Socket.IO + email break alerts to Team Lead, Dept Manager, and CEO, overtime calculation, nightly BullMQ absence cron, and IP tracking/whitelist.
