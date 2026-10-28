@@ -23,6 +23,14 @@ export interface UserProfile {
   lastLoginAt?: string;
   lastLoginLocation?: string;
   companyId?: string | null;
+  supportModeCompanyId?: string | null;
+  supportModeCompany?: {
+    id: string;
+    name: string;
+    logoUrl?: string;
+    subscriptionTier: 'BASIC' | 'PREMIUM';
+    status: string;
+  } | null;
   company?: {
     id: string;
     name: string;

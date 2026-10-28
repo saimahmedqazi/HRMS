@@ -72,7 +72,7 @@ export function Sidebar() {
             {user?.company?.name || 'ZenHR Platform'}
           </h2>
           <span className="inline-block text-[10px] font-semibold tracking-wide uppercase px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300">
-            {user?.role.replace('_', ' ')}
+            {user?.role ? user.role.replace(/_/g, ' ') : 'USER'}
           </span>
         </div>
       </div>
@@ -105,7 +105,7 @@ export function Sidebar() {
         <div className="flex items-center justify-between mb-2">
           <div className="overflow-hidden pr-2">
             <p className="text-xs font-semibold truncate text-slate-800 dark:text-slate-200">
-              {user ? `${user.firstName} ${user.lastName}` : 'User'}
+              {user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : user?.email || 'User'}
             </p>
             <p className="text-[11px] truncate text-slate-400">{user?.email}</p>
           </div>

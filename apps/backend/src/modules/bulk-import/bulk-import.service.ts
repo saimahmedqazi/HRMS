@@ -38,7 +38,7 @@ export class BulkImportService {
    */
   parseWorkbook(buffer: Buffer): any[] {
     try {
-      const workbook = xlsx.read(buffer, { type: 'buffer' });
+      const workbook = xlsx.read(buffer, { type: 'buffer', cellDates: true });
       const sheetName = workbook.SheetNames[0];
       if (!sheetName) return [];
       const sheet = workbook.Sheets[sheetName];
@@ -88,7 +88,6 @@ export class BulkImportService {
       const lastName = (row.lastName || row.LastName || row['Last Name'] || '').toString().trim();
       const email = (row.email || row.Email || '').toString().trim().toLowerCase();
       const employeeCode = (row.employeeCode || row.EmployeeCode || row['Employee Code'] || '').toString().trim().toUpperCase();
-      const hireDate = (row.hireDate || row.HireDate || row['Hire Date'] || '').toString().trim();
 
       if (!firstName) {
         errors.push({ row: rowNum, field: 'firstName', message: 'First name is required' });
@@ -122,7 +121,18 @@ export class BulkImportService {
         hasError = true;
       }
 
-      if (!hireDate || isNaN(Date.parse(hireDate))) {
+      let hireDateStr = '';
+      const rawHireDate = row.hireDate ?? row.HireDate ?? row['Hire Date'];
+      if (rawHireDate instanceof Date && !isNaN(rawHireDate.getTime())) {
+        hireDateStr = rawHireDate.toISOString();
+      } else if (typeof rawHireDate === 'number') {
+        const d = new Date(Math.round((rawHireDate - 25569) * 86400 * 1000));
+        if (!isNaN(d.getTime())) hireDateStr = d.toISOString();
+      } else if (typeof rawHireDate === 'string' && rawHireDate.trim() && !isNaN(Date.parse(rawHireDate))) {
+        hireDateStr = new Date(rawHireDate).toISOString();
+      }
+
+      if (!hireDateStr) {
         errors.push({ row: rowNum, field: 'hireDate', message: 'Valid hire date (YYYY-MM-DD) is required' });
         hasError = true;
       }
@@ -135,7 +145,7 @@ export class BulkImportService {
           lastName,
           email,
           employeeCode,
-          hireDate,
+          hireDate: hireDateStr,
           departmentName: (row.departmentName || row.Department || '').toString().trim() || undefined,
           designationName: (row.designationName || row.Designation || '').toString().trim() || undefined,
           baseSalary: row.baseSalary ? Number(row.baseSalary) : undefined,
@@ -179,7 +189,15 @@ export class BulkImportService {
       const lastName = (row.lastName || row.LastName || row['Last Name'] || '').toString().trim();
       const email = (row.email || row.Email || '').toString().trim().toLowerCase();
       const employeeCode = (row.employeeCode || row.EmployeeCode || row['Employee Code'] || '').toString().trim().toUpperCase();
-      const hireDateStr = (row.hireDate || row.HireDate || row['Hire Date'] || '').toString().trim();
+      let hireDate = new Date();
+      const rawHireDate = row.hireDate ?? row.HireDate ?? row['Hire Date'];
+      if (rawHireDate instanceof Date && !isNaN(rawHireDate.getTime())) {
+        hireDate = rawHireDate;
+      } else if (typeof rawHireDate === 'number') {
+        hireDate = new Date(Math.round((rawHireDate - 25569) * 86400 * 1000));
+      } else if (typeof rawHireDate === 'string' && rawHireDate.trim() && !isNaN(Date.parse(rawHireDate))) {
+        hireDate = new Date(rawHireDate);
+      }
       const deptName = (row.departmentName || row.Department || '').toString().trim();
       const desigName = (row.designationName || row.Designation || '').toString().trim();
       const baseSalary = row.baseSalary ? Number(row.baseSalary) : undefined;
@@ -227,7 +245,6 @@ export class BulkImportService {
           });
 
           // Create Employee
-          const hireDate = new Date(hireDateStr);
           const probationEnd = new Date(hireDate.getTime() + 90 * 24 * 60 * 60 * 1000);
 
           const emp = await tx.employee.create({

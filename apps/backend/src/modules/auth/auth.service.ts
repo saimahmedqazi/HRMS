@@ -486,7 +486,7 @@ export class AuthService {
     });
   }
 
-  async getMe(userId: string) {
+  async getMe(userId: string, supportModeCompanyId?: string | null) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -526,7 +526,26 @@ export class AuthService {
     });
 
     if (!user) throw new NotFoundException('User not found');
-    return user;
+
+    let supportModeCompany = null;
+    if (supportModeCompanyId) {
+      supportModeCompany = await this.prisma.company.findUnique({
+        where: { id: supportModeCompanyId },
+        select: {
+          id: true,
+          name: true,
+          logoUrl: true,
+          subscriptionTier: true,
+          status: true,
+        },
+      });
+    }
+
+    return {
+      ...user,
+      supportModeCompanyId: supportModeCompanyId || null,
+      supportModeCompany,
+    };
   }
 
   getAllowedModules(role: UserRole): string[] {

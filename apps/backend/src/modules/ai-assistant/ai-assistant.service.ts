@@ -94,20 +94,27 @@ SECURITY & PRIVACY RULES:
     if (this.aiClient) {
       try {
         const modelName = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-        const response = await this.aiClient.models.generateContent({
-          model: modelName,
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: `${systemPrompt}\n\nUser Question: ${dto.message}` }],
-            },
-          ],
-        });
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Gemini API call timed out after 5000ms')), 5000),
+        );
+
+        const response: any = await Promise.race([
+          this.aiClient.models.generateContent({
+            model: modelName,
+            contents: [
+              {
+                role: 'user',
+                parts: [{ text: `${systemPrompt}\n\nUser Question: ${dto.message}` }],
+              },
+            ],
+          }),
+          timeoutPromise,
+        ]);
 
         const reply = response.text || 'I am currently unable to process your request.';
         return { reply, model: modelName };
       } catch (err: any) {
-        this.logger.error(`Gemini API call failed: ${err.message}`, err.stack);
+        this.logger.warn(`Gemini API fallback to local policy engine: ${err.message}`);
         // Fallback to intelligent deterministic response
       }
     }
@@ -124,7 +131,10 @@ SECURITY & PRIVACY RULES:
       reply = `Here is your current leave balance:\n• Casual Leave: ${casualBalance ? casualBalance.allocated - casualBalance.used : 10} days available\n• Sick Leave: ${sickBalance ? sickBalance.allocated - sickBalance.used : 14} days available\n• Annual Leave: ${annualBalance ? annualBalance.allocated - annualBalance.used : 14} days available`;
     } else if (query.includes('break') || query.includes('timer') || query.includes('alert')) {
       reply = `The ZenHR Work Timer tracks your active time and breaks. If your cumulative break time exceeds 60 minutes in a single shift, a real-time overstay notification is broadcast to your Team Lead and Department Manager.`;
-    } else if (query.includes('salary') && (query.includes('others') || query.includes('colleague') || query.includes('manager'))) {
+    } else if (
+      (query.includes('salary') || query.includes('compensation') || query.includes('earns') || query.includes('pay')) &&
+      !query.includes('my salary') && !query.includes('my pay') && !query.includes('my compensation')
+    ) {
       reply = `For privacy and data compliance reasons, I cannot disclose personal or compensation details of other staff members. You can review your own personal payslips under the My Payslips tab.`;
     } else {
       reply = `Hello ${employee?.firstName || 'there'}! I am your ZenHR AI Assistant. I can help answer questions regarding your leave balances, probation guidelines, attendance policies, and approval workflows. How can I assist you today?`;

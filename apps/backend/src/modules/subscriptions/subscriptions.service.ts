@@ -43,11 +43,13 @@ export class SubscriptionsService {
     });
 
     if (!subscription) {
+      const company = await this.prisma.company.findUnique({ where: { id: companyId } });
+      const tier = company?.subscriptionTier || SubscriptionTier.BASIC;
       const trialEnd = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
       subscription = await this.prisma.subscription.create({
         data: {
           companyId,
-          tier: SubscriptionTier.BASIC,
+          tier,
           status: SubscriptionStatus.TRIALING,
           trialEnd,
         },

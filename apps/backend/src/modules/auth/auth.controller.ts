@@ -168,7 +168,7 @@ export class AuthController {
   @Get('me')
   @ApiOperation({ summary: 'Get current user profile, company, and employee context' })
   async getMe(@CurrentUser() user: AuthenticatedUser) {
-    return this.authService.getMe((user.id || user.sub)!);
+    return this.authService.getMe((user.id || user.sub)!, user.supportModeCompanyId);
   }
 
   @Get('me/modules')
