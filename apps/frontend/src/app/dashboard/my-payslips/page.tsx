@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, API_BASE_URL } from '@/lib/api';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { CreditCard, Download, Calendar, DollarSign } from 'lucide-react';
 
@@ -77,7 +77,7 @@ export default function MyPayslipsPage() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <a
-                        href={`http://localhost:4000/api/v1/payroll/payslips/${p.id}/pdf`}
+                        href={`${API_BASE_URL}/api/v1/payroll/payslips/${p.id}/pdf`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-primary-600 hover:bg-primary-700 text-white shadow-sm"

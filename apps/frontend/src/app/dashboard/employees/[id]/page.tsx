@@ -3,7 +3,7 @@
 import React, { useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, API_BASE_URL } from '@/lib/api';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   User,
@@ -102,7 +102,7 @@ export default function EmployeeDetailPage() {
     formData.append('file', file);
 
     try {
-      await fetch(`http://localhost:4000/api/v1/employees/${id}/avatar`, {
+      await fetch(`${API_BASE_URL}/api/v1/employees/${id}/avatar`, {
         method: 'POST',
         body: formData,
         credentials: 'include',
@@ -123,7 +123,7 @@ export default function EmployeeDetailPage() {
     formData.append('type', docType);
 
     try {
-      await fetch(`http://localhost:4000/api/v1/employees/${id}/documents`, {
+      await fetch(`${API_BASE_URL}/api/v1/employees/${id}/documents`, {
         method: 'POST',
         body: formData,
         credentials: 'include',

@@ -51,7 +51,12 @@ const ALL_NAV_ITEMS: NavItem[] = [
   { id: 'settings', name: 'Settings', href: '/dashboard/settings', icon: Settings },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  isOpen?: boolean;
+  onClose?: () => void;
+}
+
+export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
   const { user, allowedModules, logout } = useAuth();
 
@@ -61,7 +66,20 @@ export function Sidebar() {
   );
 
   return (
-    <aside className="w-64 flex flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shrink-0 select-none">
+    <>
+      {/* Mobile backdrop */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm md:hidden"
+          onClick={onClose}
+        />
+      )}
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 w-64 flex flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shrink-0 select-none transition-transform duration-300 ease-in-out md:static md:translate-x-0 ${
+          isOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'
+        }`}
+      >
       {/* Brand & Organization Header */}
       <div className="flex h-16 items-center gap-3 border-b border-slate-200 px-6 dark:border-slate-800">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 text-white font-bold text-lg shadow-md shadow-blue-500/20">
@@ -75,6 +93,15 @@ export function Sidebar() {
             {user?.role ? user.role.replace(/_/g, ' ') : 'USER'}
           </span>
         </div>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="ml-auto rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 md:hidden"
+            title="Close menu"
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {/* Role-Adaptive Navigation Links */}
@@ -87,6 +114,7 @@ export function Sidebar() {
             <Link
               key={item.id}
               href={item.href}
+              onClick={onClose}
               className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
                 isActive
                   ? 'bg-blue-600 text-white shadow-sm'
@@ -124,5 +152,6 @@ export function Sidebar() {
         )}
       </div>
     </aside>
+    </>
   );
 }

@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, API_BASE_URL } from '@/lib/api';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   CreditCard,
@@ -73,7 +73,7 @@ export default function PayrollDashboardPage() {
 
         <div className="flex items-center gap-3">
           <a
-            href={`http://localhost:4000/api/v1/payroll/runs/pdf-bulk?month=${selectedMonth}&year=${selectedYear}`}
+            href={`${API_BASE_URL}/api/v1/payroll/runs/pdf-bulk?month=${selectedMonth}&year=${selectedYear}`}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 shadow-sm"
@@ -231,7 +231,7 @@ export default function PayrollDashboardPage() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <a
-                        href={`http://localhost:4000/api/v1/payroll/payslips/${p.id}/pdf`}
+                        href={`${API_BASE_URL}/api/v1/payroll/payslips/${p.id}/pdf`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-primary-700 bg-primary-50 dark:bg-primary-950/40 dark:text-primary-300 rounded hover:bg-primary-100"

@@ -12,6 +12,7 @@ import { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
 interface JwtPayload {
+  id?: string;
   sub: string;
   email: string;
   role: string;
@@ -48,7 +49,10 @@ export class JwtAuthGuard implements CanActivate {
       const payload = this.jwtService.verify<JwtPayload>(token, {
         secret: this.configService.get<string>('app.jwt.accessSecret'),
       });
-      request.user = payload;
+      request.user = {
+        ...payload,
+        id: payload.sub,
+      };
       return true;
     } catch {
       throw new UnauthorizedException('Invalid or expired token');
