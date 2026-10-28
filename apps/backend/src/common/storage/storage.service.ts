@@ -30,9 +30,15 @@ export class StorageService {
   private readonly isConfigured: boolean;
 
   constructor(private readonly configService: ConfigService) {
-    const cloudName = this.configService.get<string>('app.cloudinary.cloudName');
-    const apiKey = this.configService.get<string>('app.cloudinary.apiKey');
-    const apiSecret = this.configService.get<string>('app.cloudinary.apiSecret');
+    const cloudName =
+      this.configService.get<string>('app.cloudinary.cloudName') ||
+      this.configService.get<string>('CLOUDINARY_CLOUD_NAME');
+    const apiKey =
+      this.configService.get<string>('app.cloudinary.apiKey') ||
+      this.configService.get<string>('CLOUDINARY_API_KEY');
+    const apiSecret =
+      this.configService.get<string>('app.cloudinary.apiSecret') ||
+      this.configService.get<string>('CLOUDINARY_API_SECRET');
 
     if (cloudName && apiKey && apiSecret) {
       cloudinary.config({

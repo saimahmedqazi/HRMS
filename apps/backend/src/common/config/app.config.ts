@@ -35,6 +35,22 @@ export const appConfig = registerAs('app', () => ({
     fromAddress: process.env.MAIL_FROM_ADDRESS || 'noreply@zenhr.com',
   },
 
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+    apiKey: process.env.CLOUDINARY_API_KEY,
+    apiSecret: process.env.CLOUDINARY_API_SECRET,
+  },
+
+  stripe: {
+    secretKey: process.env.STRIPE_SECRET_KEY,
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+    premiumPriceId: process.env.STRIPE_PREMIUM_PRICE_ID,
+  },
+
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY,
+  },
+
   security: {
     bcryptRounds: 12,
     maxLoginAttempts: 5,

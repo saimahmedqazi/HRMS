@@ -5,7 +5,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Stripe from 'stripe';
+const Stripe = require('stripe');
+import type StripeType from 'stripe';
 import {
   SubscriptionTier,
   SubscriptionStatus,
@@ -18,7 +19,7 @@ import { MailService } from '@common/mail/mail.service';
 @Injectable()
 export class SubscriptionsService {
   private readonly logger = new Logger(SubscriptionsService.name);
-  private stripe: Stripe | null = null;
+  private stripe: StripeType | null = null;
 
   constructor(
     private readonly prisma: PrismaService,

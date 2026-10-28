@@ -93,8 +93,9 @@ SECURITY & PRIVACY RULES:
     // 4. If live Gemini API key is configured, invoke Gemini API
     if (this.aiClient) {
       try {
+        const modelName = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
         const response = await this.aiClient.models.generateContent({
-          model: 'gemini-2.0-flash',
+          model: modelName,
           contents: [
             {
               role: 'user',
@@ -104,7 +105,7 @@ SECURITY & PRIVACY RULES:
         });
 
         const reply = response.text || 'I am currently unable to process your request.';
-        return { reply, model: 'gemini-2.0-flash' };
+        return { reply, model: modelName };
       } catch (err: any) {
         this.logger.error(`Gemini API call failed: ${err.message}`, err.stack);
         // Fallback to intelligent deterministic response

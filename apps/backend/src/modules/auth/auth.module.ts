@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, Global } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -9,10 +9,12 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { DataScopeModule } from '../../common/services/data-scope.module';
 import { MailModule } from '../../common/mail/mail.module';
 
+@Global()
 @Module({
   imports: [
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
+      global: true,
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('app.jwt.accessSecret', 'change-in-production'),
