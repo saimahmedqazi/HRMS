@@ -541,8 +541,42 @@ export class AuthService {
       });
     }
 
+    const firstName =
+      user.employee?.firstName ||
+      (user.role === UserRole.SUPER_ADMIN
+        ? 'Super'
+        : user.role === UserRole.OPERATION_MANAGER
+        ? 'Operations'
+        : '');
+    const lastName =
+      user.employee?.lastName ||
+      (user.role === UserRole.SUPER_ADMIN
+        ? 'Admin'
+        : user.role === UserRole.OPERATION_MANAGER
+        ? 'Manager'
+        : '');
+    const lastLoginLocation =
+      [user.lastLoginCity, user.lastLoginCountry].filter(Boolean).join(', ') || null;
+
     return {
       ...user,
+      firstName,
+      lastName,
+      avatarUrl: user.employee?.profilePictureUrl || null,
+      lastLoginLocation,
+      employee: user.employee
+        ? {
+            ...user.employee,
+            employeeNumber: user.employee.employeeCode,
+            designation: user.employee.designation
+              ? {
+                  ...user.employee.designation,
+                  title: user.employee.designation.name,
+                }
+              : null,
+          }
+        : null,
+      company: supportModeCompany || user.company,
       supportModeCompanyId: supportModeCompanyId || null,
       supportModeCompany,
     };

@@ -22,6 +22,8 @@ export interface UserProfile {
   avatarUrl?: string;
   lastLoginAt?: string;
   lastLoginLocation?: string;
+  twoFaEnabled?: boolean;
+  dataScope?: string;
   companyId?: string | null;
   supportModeCompanyId?: string | null;
   supportModeCompany?: {
@@ -107,6 +109,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         },
         refetchUser: () => {
           refetchUser();
+          queryClient.invalidateQueries({ queryKey: ['auth', 'modules'] });
         },
       }}
     >

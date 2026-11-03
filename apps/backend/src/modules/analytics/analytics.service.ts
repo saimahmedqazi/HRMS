@@ -15,17 +15,65 @@ export class AnalyticsService {
     const totalUsers = await this.prisma.user.count();
     const totalEmployees = await this.prisma.employee.count({ where: { deletedAt: null } });
 
-    const premiumSubs = await this.prisma.subscription.count({
-      where: { tier: SubscriptionTier.PREMIUM, status: 'ACTIVE' },
+    const subPremiumCount = await this.prisma.subscription.count({
+      where: { tier: SubscriptionTier.PREMIUM, status: { in: ['ACTIVE', 'TRIALING'] } },
     });
-    const basicSubs = await this.prisma.subscription.count({
-      where: { tier: SubscriptionTier.BASIC, status: 'ACTIVE' },
+    const subBasicCount = await this.prisma.subscription.count({
+      where: { tier: SubscriptionTier.BASIC, status: { in: ['ACTIVE', 'TRIALING'] } },
     });
     const pastDueSubs = await this.prisma.subscription.count({
       where: { status: 'PAST_DUE' },
     });
 
+    const companyPremiumCount = await this.prisma.company.count({
+      where: { subscriptionTier: SubscriptionTier.PREMIUM },
+    });
+    const companyBasicCount = await this.prisma.company.count({
+      where: { subscriptionTier: SubscriptionTier.BASIC },
+    });
+
+    const premiumSubs = Math.max(subPremiumCount, companyPremiumCount);
+    const basicSubs = Math.max(subBasicCount, companyBasicCount);
+
     const mrr = premiumSubs * 149 + basicSubs * 49;
+
+    const companiesList =
+      typeof (this.prisma.company as any).findMany === 'function'
+        ? await this.prisma.company.findMany({
+            orderBy: { createdAt: 'desc' },
+            include: {
+              subscriptions: {
+                take: 1,
+                orderBy: { createdAt: 'desc' },
+              },
+              _count: {
+                select: {
+                  employees: true,
+                  users: true,
+                },
+              },
+            },
+          })
+        : [];
+
+    const companySubscriptions = (companiesList || []).map((c: any) => {
+      const sub = c.subscriptions?.[0];
+      const start = sub?.currentPeriodStart || c.createdAt || new Date();
+      const end =
+        sub?.currentPeriodEnd ||
+        new Date(new Date(start).getTime() + 30 * 24 * 60 * 60 * 1000);
+      return {
+        id: c.id,
+        name: c.name,
+        email: c.email,
+        tier: sub?.tier || c.subscriptionTier,
+        status: sub?.status || c.status,
+        employees: c._count?.employees || 0,
+        monthlyRate: (sub?.tier || c.subscriptionTier) === 'PREMIUM' ? 149 : 49,
+        billingStartDate: start,
+        nextBillingDate: end,
+      };
+    });
 
     return {
       totalCompanies,
@@ -38,6 +86,7 @@ export class AnalyticsService {
         pastDue: pastDueSubs,
         estimatedMRR: mrr,
       },
+      companySubscriptions,
     };
   }
 
@@ -46,9 +95,13 @@ export class AnalyticsService {
    */
   async getDashboardOverview(
     companyId: string,
-    user: { id: string; role: UserRole },
+    user: { id: string; role: UserRole; supportModeCompanyId?: string | null },
   ) {
-    if (user.role === UserRole.SUPER_ADMIN) {
+    if (
+      (user.role === UserRole.SUPER_ADMIN && !user.supportModeCompanyId) ||
+      user.role === UserRole.OPERATION_MANAGER ||
+      !companyId
+    ) {
       return this.getSuperAdminMetrics();
     }
 

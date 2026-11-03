@@ -292,6 +292,47 @@ async function main() {
   });
   console.log('✅ Seeded Company 2:', globex.name);
 
+  // Seed explicit Subscriptions with billing dates for both tenants
+  const now = new Date();
+  const nextMonth = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const trialEnd = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+
+  await prisma.subscription.upsert({
+    where: { companyId: acme.id },
+    update: {
+      tier: SubscriptionTier.PREMIUM,
+      status: 'ACTIVE',
+      currentPeriodStart: now,
+      currentPeriodEnd: nextMonth,
+    },
+    create: {
+      companyId: acme.id,
+      tier: SubscriptionTier.PREMIUM,
+      status: 'ACTIVE',
+      currentPeriodStart: now,
+      currentPeriodEnd: nextMonth,
+      trialEnd,
+    },
+  });
+
+  await prisma.subscription.upsert({
+    where: { companyId: globex.id },
+    update: {
+      tier: SubscriptionTier.BASIC,
+      status: 'ACTIVE',
+      currentPeriodStart: now,
+      currentPeriodEnd: nextMonth,
+    },
+    create: {
+      companyId: globex.id,
+      tier: SubscriptionTier.BASIC,
+      status: 'ACTIVE',
+      currentPeriodStart: now,
+      currentPeriodEnd: nextMonth,
+      trialEnd,
+    },
+  });
+
   const globexAdmin = await prisma.user.create({
     data: {
       companyId: globex.id,

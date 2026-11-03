@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   Users,
@@ -43,6 +44,11 @@ interface EmployeesResponse {
 
 export default function EmployeesPage() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const canOnboard =
+    user?.role === 'SUPER_ADMIN' ||
+    user?.role === 'COMPANY_ADMIN' ||
+    user?.role === 'HR_MANAGER';
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [deptFilter, setDeptFilter] = useState('');
@@ -124,15 +130,17 @@ export default function EmployeesPage() {
             {meta ? `${meta.total} total workforce records` : 'Workforce directory'}
           </p>
         </div>
-        <button
-          onClick={() => {
-            setCreatedCredentials(null);
-            setShowOnboardModal(true);
-          }}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
-        >
-          <Plus className="h-4 w-4" /> Onboard Employee
-        </button>
+        {canOnboard && (
+          <button
+            onClick={() => {
+              setCreatedCredentials(null);
+              setShowOnboardModal(true);
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
+          >
+            <Plus className="h-4 w-4" /> Onboard Employee
+          </button>
+        )}
       </div>
 
       {/* Filters Bar */}

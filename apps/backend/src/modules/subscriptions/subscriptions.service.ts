@@ -45,15 +45,26 @@ export class SubscriptionsService {
     if (!subscription) {
       const company = await this.prisma.company.findUnique({ where: { id: companyId } });
       const tier = company?.subscriptionTier || SubscriptionTier.BASIC;
-      const trialEnd = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+      const now = new Date();
+      const trialEnd = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+      const currentPeriodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
       subscription = await this.prisma.subscription.create({
         data: {
           companyId,
           tier,
           status: SubscriptionStatus.TRIALING,
+          currentPeriodStart: now,
+          currentPeriodEnd,
           trialEnd,
         },
       });
+    } else if (!subscription.currentPeriodEnd) {
+      const start = subscription.currentPeriodStart || subscription.createdAt || new Date();
+      subscription = {
+        ...subscription,
+        currentPeriodStart: start,
+        currentPeriodEnd: new Date(new Date(start).getTime() + 30 * 24 * 60 * 60 * 1000),
+      };
     }
 
     return subscription;
@@ -63,11 +74,69 @@ export class SubscriptionsService {
    * Get subscription status and features manifest.
    */
   async getSubscription(companyId: string) {
+    if (!companyId) {
+      const companies =
+        typeof (this.prisma.company as any).findMany === 'function'
+          ? await this.prisma.company.findMany({
+              orderBy: { createdAt: 'desc' },
+              include: {
+                subscriptions: {
+                  take: 1,
+                  orderBy: { createdAt: 'desc' },
+                },
+                _count: {
+                  select: { employees: true },
+                },
+              },
+            })
+          : [];
+
+      const platformSubscriptions = (companies || []).map((c: any) => {
+        const sub = c.subscriptions?.[0];
+        const start = sub?.currentPeriodStart || c.createdAt || new Date();
+        const end =
+          sub?.currentPeriodEnd ||
+          new Date(new Date(start).getTime() + 30 * 24 * 60 * 60 * 1000);
+        const trialEnd =
+          sub?.trialEnd ||
+          new Date(new Date(c.createdAt || new Date()).getTime() + 14 * 24 * 60 * 60 * 1000);
+
+        return {
+          companyId: c.id,
+          companyName: c.name,
+          email: c.email,
+          tier: sub?.tier || c.subscriptionTier,
+          status: sub?.status || 'ACTIVE',
+          monthlyAmount: (sub?.tier || c.subscriptionTier) === 'PREMIUM' ? 149 : 49,
+          employees: c._count?.employees || 0,
+          currentPeriodStart: start,
+          currentPeriodEnd: end,
+          trialEnd,
+        };
+      });
+
+      return {
+        tier: SubscriptionTier.PREMIUM,
+        status: SubscriptionStatus.ACTIVE,
+        currentPeriodStart: new Date(),
+        currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        platformSubscriptions,
+        features: {
+          workTimer: true,
+          aiAssistant: true,
+          bulkDataImport: true,
+          documentUploads: true,
+          maxEmployees: 'Unlimited',
+        },
+      };
+    }
+
     const sub = await this.ensureSubscription(companyId);
     const isPremium = sub.tier === SubscriptionTier.PREMIUM && sub.status !== SubscriptionStatus.SUSPENDED;
 
     return {
       ...sub,
+      monthlyAmount: sub.tier === SubscriptionTier.PREMIUM ? 149 : 49,
       features: {
         workTimer: isPremium,
         aiAssistant: isPremium,

@@ -174,6 +174,16 @@ export class AuthController {
   @Get('me/modules')
   @ApiOperation({ summary: 'Get allowed modules manifest for current user role (server-driven sidebar)' })
   async getMyModules(@CurrentUser() user: AuthenticatedUser) {
+    if (user.role === UserRole.SUPER_ADMIN && user.supportModeCompanyId) {
+      const superModules = this.authService.getAllowedModules(UserRole.SUPER_ADMIN);
+      const adminModules = this.authService.getAllowedModules(UserRole.COMPANY_ADMIN);
+      const merged = Array.from(new Set([...superModules, ...adminModules]));
+      return {
+        role: user.role,
+        supportModeCompanyId: user.supportModeCompanyId,
+        allowedModules: merged,
+      };
+    }
     const modules = this.authService.getAllowedModules(user.role as UserRole);
     return { role: user.role, allowedModules: modules };
   }

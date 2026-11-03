@@ -60,7 +60,7 @@ export class LeaveController {
     @Query('employeeId') employeeId?: string,
     @Query('year') year?: string,
   ) {
-    const targetEmpId = employeeId || user.employeeId;
+    const targetEmpId = employeeId || user.employeeId || user.id;
     return this.leaveService.getLeaveBalances(
       user.companyId,
       targetEmpId,

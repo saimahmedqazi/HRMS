@@ -82,62 +82,67 @@ export default function DepartmentPayrollSummaryPage() {
       </div>
 
       {/* KPI Cards */}
-      {summary ? (
+      {(Array.isArray(summary) ? summary : summary ? [summary] : []).length > 0 ? (
         <div className="space-y-6">
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 shadow-sm">
-            <div className="flex items-center justify-between pb-4 border-b border-gray-100 dark:border-gray-800">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-primary-50 dark:bg-primary-950/40 text-primary-600 rounded-lg">
-                  <Building2 className="w-6 h-6" />
+          {(Array.isArray(summary) ? summary : [summary]).map((deptSummary: any, idx: number) => (
+            <div
+              key={deptSummary.departmentId || idx}
+              className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 shadow-sm"
+            >
+              <div className="flex items-center justify-between pb-4 border-b border-gray-100 dark:border-gray-800">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-primary-50 dark:bg-primary-950/40 text-primary-600 rounded-lg">
+                    <Building2 className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-900 dark:text-white">
+                      {deptSummary.departmentName} Department
+                    </h2>
+                    <p className="text-xs text-gray-500">
+                      Cycle: {deptSummary.month}/{deptSummary.year}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h2 className="text-lg font-bold text-gray-900 dark:text-white">
-                    {summary.departmentName} Department
-                  </h2>
-                  <p className="text-xs text-gray-500">
-                    Cycle: {summary.month}/{summary.year}
+
+                <div className="text-right">
+                  <span className="text-xs text-gray-400">Department Headcount</span>
+                  <p className="text-xl font-extrabold text-gray-900 dark:text-white">
+                    {deptSummary.headcount} employee(s)
                   </p>
                 </div>
               </div>
 
-              <div className="text-right">
-                <span className="text-xs text-gray-400">Department Headcount</span>
-                <p className="text-xl font-extrabold text-gray-900 dark:text-white">
-                  {summary.headcount} employee(s)
-                </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+                <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
+                  <span className="text-xs uppercase text-gray-500 font-medium">Total Gross</span>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white mt-1">
+                    ${Number(deptSummary.totalGross || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
+
+                <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
+                  <span className="text-xs uppercase text-gray-500 font-medium">Total Withholding</span>
+                  <p className="text-xl font-bold text-rose-500 mt-1">
+                    ${Number(deptSummary.totalDeductions || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
+
+                <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
+                  <span className="text-xs uppercase text-gray-500 font-medium">Total Net Payout</span>
+                  <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                    ${Number(deptSummary.totalNet || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
+
+                <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
+                  <span className="text-xs uppercase text-gray-500 font-medium">Average Net / Head</span>
+                  <p className="text-xl font-bold text-blue-600 dark:text-blue-400 mt-1">
+                    ${Number(deptSummary.averageNet || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
               </div>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
-              <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
-                <span className="text-xs uppercase text-gray-500 font-medium">Total Gross</span>
-                <p className="text-xl font-bold text-gray-900 dark:text-white mt-1">
-                  ${Number(summary.totalGross).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </p>
-              </div>
-
-              <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
-                <span className="text-xs uppercase text-gray-500 font-medium">Total Withholding</span>
-                <p className="text-xl font-bold text-rose-500 mt-1">
-                  ${Number(summary.totalDeductions).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </p>
-              </div>
-
-              <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
-                <span className="text-xs uppercase text-gray-500 font-medium">Total Net Payout</span>
-                <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                  ${Number(summary.totalNet).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </p>
-              </div>
-
-              <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
-                <span className="text-xs uppercase text-gray-500 font-medium">Average Net / Head</span>
-                <p className="text-xl font-bold text-blue-600 dark:text-blue-400 mt-1">
-                  ${Number(summary.averageNet).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </p>
-              </div>
-            </div>
-          </div>
+          ))}
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-12 text-center shadow-sm">

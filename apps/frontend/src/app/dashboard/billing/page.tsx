@@ -80,53 +80,183 @@ export default function BillingDashboardPage() {
       )}
 
       {/* Current Plan Status Card */}
-      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-              Active Tier:
-            </span>
-            <span
-              className={`px-3 py-1 text-xs font-bold rounded-full ${
-                isPremium
-                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm'
-                  : 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
-              }`}
-            >
-              {subscription?.tier || 'BASIC'} PLAN
-            </span>
-            <StatusBadge status={subscription?.status || 'ACTIVE'} />
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 shadow-sm space-y-5">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2.5">
+              <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                Active Tier:
+              </span>
+              <span
+                className={`px-3 py-1 text-xs font-bold rounded-full ${
+                  isPremium
+                    ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm'
+                    : 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
+                }`}
+              >
+                {subscription?.tier || 'BASIC'} PLAN
+              </span>
+              <StatusBadge status={subscription?.status || 'ACTIVE'} />
+            </div>
+
+            <p className="text-xs text-gray-500 mt-2">
+              {isPremium
+                ? 'Your company enjoys full access to Work Timer alerts, Gemini AI Assistant, and bulk import.'
+                : 'You are on the Basic tier (limited to 25 employees and core HR workflows).'}
+            </p>
           </div>
 
-          <p className="text-xs text-gray-500 mt-2">
-            {isPremium
-              ? 'Your company enjoys full access to Work Timer alerts, Gemini AI Assistant, and bulk import.'
-              : 'You are on the Basic tier (limited to 25 employees and core HR workflows).'}
-          </p>
+          <div className="flex items-center gap-3">
+            {!isPremium && (
+              <button
+                onClick={() => checkoutMutation.mutate()}
+                disabled={checkoutMutation.isPending}
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white shadow-md shadow-orange-500/20"
+              >
+                <Sparkles className="w-4 h-4" />
+                {checkoutMutation.isPending ? 'Redirecting...' : 'Upgrade to Premium ($149/mo)'}
+              </button>
+            )}
+
+            <button
+              onClick={() => portalMutation.mutate()}
+              disabled={portalMutation.isPending}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 shadow-sm"
+            >
+              <CreditCard className="w-4 h-4" />
+              Billing Portal
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          {!isPremium && (
-            <button
-              onClick={() => checkoutMutation.mutate()}
-              disabled={checkoutMutation.isPending}
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white shadow-md shadow-orange-500/20"
-            >
-              <Sparkles className="w-4 h-4" />
-              {checkoutMutation.isPending ? 'Redirecting...' : 'Upgrade to Premium ($149/mo)'}
-            </button>
-          )}
+        {/* Subscription Billing Cycle & Renewal Dates */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-gray-100 dark:border-gray-800">
+          <div className="p-3.5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
+            <span className="text-[11px] uppercase font-semibold text-gray-400 flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-primary-600" />
+              Billing Cycle Start Date
+            </span>
+            <p className="text-sm font-bold text-gray-900 dark:text-white mt-1">
+              {subscription?.currentPeriodStart
+                ? new Date(subscription.currentPeriodStart).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })
+                : new Date().toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })}
+            </p>
+          </div>
 
-          <button
-            onClick={() => portalMutation.mutate()}
-            disabled={portalMutation.isPending}
-            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 shadow-sm"
-          >
-            <CreditCard className="w-4 h-4" />
-            Billing Portal
-          </button>
+          <div className="p-3.5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
+            <span className="text-[11px] uppercase font-semibold text-gray-400 flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-emerald-600" />
+              Next Billing / Renewal Date
+            </span>
+            <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+              {subscription?.currentPeriodEnd
+                ? new Date(subscription.currentPeriodEnd).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })
+                : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })}
+            </p>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
+            <span className="text-[11px] uppercase font-semibold text-gray-400 flex items-center gap-1.5">
+              <CreditCard className="w-3.5 h-3.5 text-amber-500" />
+              Monthly Subscription Rate
+            </span>
+            <p className="text-sm font-bold text-gray-900 dark:text-white mt-1">
+              ${isPremium ? '149.00' : '49.00'} USD / month
+            </p>
+          </div>
         </div>
       </div>
+
+      {/* Platform Subscriptions Table for Super Admin & Operation Manager */}
+      {subscription?.platformSubscriptions && subscription.platformSubscriptions.length > 0 && (
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 shadow-sm">
+          <div className="mb-4">
+            <h2 className="text-base font-bold text-gray-900 dark:text-white">
+              Platform Tenant Subscriptions & Billing Dates
+            </h2>
+            <p className="text-xs text-gray-500">
+              All registered client organizations with their subscription tier, billing start date, and next renewal date.
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-gray-50 dark:bg-gray-800/60 text-gray-500 uppercase">
+                <tr>
+                  <th className="py-2.5 px-3">Client Company</th>
+                  <th className="py-2.5 px-3">Subscription Tier</th>
+                  <th className="py-2.5 px-3">Monthly Amount</th>
+                  <th className="py-2.5 px-3">Billing Start Date</th>
+                  <th className="py-2.5 px-3">Next Billing Date</th>
+                  <th className="py-2.5 px-3">Trial End Date</th>
+                  <th className="py-2.5 px-3">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {subscription.platformSubscriptions.map((sub: any) => (
+                  <tr key={sub.companyId}>
+                    <td className="py-3 px-3 font-semibold text-gray-900 dark:text-white">
+                      {sub.companyName}
+                      <span className="block text-[11px] font-normal text-gray-400">{sub.email}</span>
+                    </td>
+                    <td className="py-3 px-3">
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                          sub.tier === 'PREMIUM'
+                            ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                            : 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
+                        }`}
+                      >
+                        {sub.tier}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 font-bold text-emerald-600">${sub.monthlyAmount}/mo</td>
+                    <td className="py-3 px-3 text-gray-700 dark:text-gray-300">
+                      {new Date(sub.currentPeriodStart).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
+                    </td>
+                    <td className="py-3 px-3 font-bold text-indigo-600 dark:text-indigo-400">
+                      {new Date(sub.currentPeriodEnd).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
+                    </td>
+                    <td className="py-3 px-3 text-gray-500">
+                      {new Date(sub.trialEnd).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
+                    </td>
+                    <td className="py-3 px-3">
+                      <StatusBadge status={sub.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Feature Comparison Matrix */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

@@ -90,7 +90,7 @@ export class ResourcesService {
     user: { id: string; role: UserRole },
     status?: ResourceRequestStatus,
   ) {
-    const where: any = { companyId };
+    const where: any = companyId ? { companyId } : {};
     if (status) {
       where.status = status;
     }
@@ -127,7 +127,7 @@ export class ResourcesService {
     dto: ApproveResourceRequestDto,
   ) {
     const request = await this.prisma.resourceRequest.findFirst({
-      where: { id, companyId },
+      where: companyId ? { id, companyId } : { id },
       include: { requestedBy: { include: { user: true } } },
     });
 
@@ -140,6 +140,8 @@ export class ResourcesService {
     }
 
     const isAuthorized =
+      userRole === UserRole.SUPER_ADMIN ||
+      userRole === UserRole.OPERATION_MANAGER ||
       userRole === UserRole.COMPANY_ADMIN ||
       userRole === UserRole.HR_MANAGER ||
       userRole === UserRole.DEPARTMENT_MANAGER ||
@@ -148,6 +150,8 @@ export class ResourcesService {
     if (!isAuthorized) {
       throw new ForbiddenException('Not authorized to approve this resource request.');
     }
+
+    const targetCompanyId = companyId || request.companyId;
 
     if (dto.decision === 'REJECT') {
       const rejected = await this.prisma.resourceRequest.update({
@@ -162,7 +166,7 @@ export class ResourcesService {
 
       await this.prisma.notification.create({
         data: {
-          companyId,
+          companyId: targetCompanyId,
           userId: request.requestedBy.userId,
           type: NotificationType.GENERAL,
           title: 'Resource Request Rejected',
@@ -186,7 +190,7 @@ export class ResourcesService {
 
     await this.prisma.notification.create({
       data: {
-        companyId,
+        companyId: targetCompanyId,
         userId: request.requestedBy.userId,
         type: NotificationType.GENERAL,
         title: 'Resource Request Approved (Ready for Fulfillment)',
@@ -219,7 +223,7 @@ export class ResourcesService {
     }
 
     const request = await this.prisma.resourceRequest.findFirst({
-      where: { id, companyId },
+      where: companyId ? { id, companyId } : { id },
       include: { requestedBy: { include: { user: true } } },
     });
 
@@ -230,6 +234,8 @@ export class ResourcesService {
     if (request.status !== ResourceRequestStatus.STEP_1_APPROVED) {
       throw new BadRequestException('Request must be approved before fulfillment.');
     }
+
+    const targetCompanyId = companyId || request.companyId;
 
     const fulfilled = await this.prisma.resourceRequest.update({
       where: { id },
@@ -243,7 +249,7 @@ export class ResourcesService {
 
     await this.prisma.notification.create({
       data: {
-        companyId,
+        companyId: targetCompanyId,
         userId: request.requestedBy.userId,
         type: NotificationType.GENERAL,
         title: 'Resource Request Fulfilled',

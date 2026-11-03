@@ -4,6 +4,7 @@ import React, { useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, API_BASE_URL } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   User,
@@ -25,6 +26,11 @@ export default function EmployeeDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const canUpdateStatus =
+    user?.role === 'SUPER_ADMIN' ||
+    user?.role === 'COMPANY_ADMIN' ||
+    user?.role === 'HR_MANAGER';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
 
@@ -209,17 +215,19 @@ export default function EmployeeDetailPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                setNewStatus(emp.status);
-                setShowStatusModal(true);
-              }}
-              className="rounded-lg border border-zinc-300 px-3.5 py-2 text-xs font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-            >
-              Update Status
-            </button>
-          </div>
+          {canUpdateStatus && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setNewStatus(emp.status);
+                  setShowStatusModal(true);
+                }}
+                className="rounded-lg border border-zinc-300 px-3.5 py-2 text-xs font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                Update Status
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

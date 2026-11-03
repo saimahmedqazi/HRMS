@@ -104,6 +104,22 @@ export class LeaveService {
    * Get current leave balances for an employee.
    */
   async getLeaveBalances(companyId: string, employeeId: string, year?: number) {
+    if (!companyId || !employeeId) {
+      return [];
+    }
+
+    const emp = await this.prisma.employee.findFirst({
+      where: {
+        companyId,
+        OR: [{ id: employeeId }, { userId: employeeId }],
+      },
+    });
+
+    if (!emp) {
+      return [];
+    }
+
+    const resolvedEmployeeId = emp.id;
     const targetYear = year || new Date().getFullYear();
     const settings = await this.ensureDefaultLeaveTypes(companyId);
 
@@ -111,7 +127,7 @@ export class LeaveService {
     const balances = await this.prisma.leaveBalance.findMany({
       where: {
         companyId,
-        employeeId,
+        employeeId: resolvedEmployeeId,
         year: targetYear,
       },
     });
@@ -123,7 +139,7 @@ export class LeaveService {
         const created = await this.prisma.leaveBalance.create({
           data: {
             companyId,
-            employeeId,
+            employeeId: resolvedEmployeeId,
             leaveType: setting.leaveType,
             year: targetYear,
             allocated: setting.annualAllocation,

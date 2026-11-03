@@ -28,7 +28,10 @@ export class SuperAdminService {
         subscriptions: {
           select: {
             status: true,
+            tier: true,
+            currentPeriodStart: true,
             currentPeriodEnd: true,
+            trialEnd: true,
           },
           take: 1,
           orderBy: { createdAt: 'desc' },
@@ -43,7 +46,30 @@ export class SuperAdminService {
       },
     });
 
-    return companies;
+    return companies.map((company) => {
+      const sub = company.subscriptions?.[0];
+      const periodStart = sub?.currentPeriodStart || company.createdAt;
+      const periodEnd =
+        sub?.currentPeriodEnd ||
+        new Date(new Date(periodStart).getTime() + 30 * 24 * 60 * 60 * 1000);
+      const trialEnd =
+        sub?.trialEnd ||
+        new Date(new Date(company.createdAt).getTime() + 14 * 24 * 60 * 60 * 1000);
+
+      return {
+        ...company,
+        subscriptions: [
+          {
+            status: sub?.status || 'ACTIVE',
+            tier: sub?.tier || company.subscriptionTier,
+            currentPeriodStart: periodStart,
+            currentPeriodEnd: periodEnd,
+            trialEnd,
+            monthlyAmount: company.subscriptionTier === 'PREMIUM' ? 149 : 49,
+          },
+        ],
+      };
+    });
   }
 
   async getCompanyDetails(id: string) {

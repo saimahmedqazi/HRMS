@@ -28,6 +28,19 @@ interface CompanyItem {
   employeeCount?: number;
   userCount?: number;
   createdAt: string;
+  subscriptions?: Array<{
+    status: string;
+    tier?: string;
+    currentPeriodStart?: string;
+    currentPeriodEnd?: string;
+    trialEnd?: string;
+    monthlyAmount?: number;
+  }>;
+  _count?: {
+    users: number;
+    employees: number;
+    departments: number;
+  };
 }
 
 export default function SuperAdminCompaniesPage() {
@@ -173,52 +186,84 @@ export default function SuperAdminCompaniesPage() {
                     <StatusBadge status={comp.status} />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 my-3.5 p-2.5 bg-slate-50 dark:bg-slate-950/60 rounded-xl text-xs">
+                  <div className="grid grid-cols-2 gap-2.5 my-3.5 p-3 bg-slate-50 dark:bg-slate-950/60 rounded-xl text-xs">
                     <div>
-                      <span className="text-[10px] uppercase font-semibold text-slate-400 block">Tier</span>
+                      <span className="text-[10px] uppercase font-semibold text-slate-400 block">Plan Tier</span>
                       <span
                         className={`inline-block font-bold text-[11px] ${
                           isPremium ? 'text-amber-600 dark:text-amber-400' : 'text-blue-600 dark:text-blue-400'
                         }`}
                       >
-                        {comp.subscriptionTier}
+                        {comp.subscriptionTier} (${isPremium ? '149' : '49'}/mo)
                       </span>
                     </div>
                     <div>
-                      <span className="text-[10px] uppercase font-semibold text-slate-400 block">Created</span>
-                      <span className="text-[11px] text-slate-600 dark:text-slate-300">
-                        {new Date(comp.createdAt).toLocaleDateString()}
+                      <span className="text-[10px] uppercase font-semibold text-slate-400 block">Workforce</span>
+                      <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+                        {comp._count?.employees ?? 0} employees • {comp._count?.departments ?? 0} depts
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] uppercase font-semibold text-slate-400 block">Billing Start Date</span>
+                      <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                        {new Date(
+                          comp.subscriptions?.[0]?.currentPeriodStart || comp.createdAt,
+                        ).toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                        })}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] uppercase font-semibold text-slate-400 block">Next Billing Date</span>
+                      <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">
+                        {new Date(
+                          comp.subscriptions?.[0]?.currentPeriodEnd ||
+                            new Date(comp.createdAt).getTime() + 30 * 24 * 60 * 60 * 1000,
+                        ).toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                        })}
                       </span>
                     </div>
                   </div>
                 </div>
 
                 <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2">
-                  <button
-                    onClick={() => setSupportModalCompany(comp)}
-                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-sm transition"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    Support Mode
-                  </button>
+                  {user?.role === 'SUPER_ADMIN' ? (
+                    <>
+                      <button
+                        onClick={() => setSupportModalCompany(comp)}
+                        className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-sm transition"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        Support Mode
+                      </button>
 
-                  {user?.role === 'SUPER_ADMIN' && (
-                    <button
-                      onClick={() =>
-                        toggleStatusMutation.mutate({
-                          id: comp.id,
-                          status: isSuspended ? 'ACTIVE' : 'SUSPENDED',
-                        })
-                      }
-                      disabled={toggleStatusMutation.isPending}
-                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition ${
-                        isSuspended
-                          ? 'border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300'
-                          : 'border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900/60 dark:text-rose-400'
-                      }`}
-                    >
-                      {isSuspended ? 'Reactivate' : 'Suspend'}
-                    </button>
+                      <button
+                        onClick={() =>
+                          toggleStatusMutation.mutate({
+                            id: comp.id,
+                            status: isSuspended ? 'ACTIVE' : 'SUSPENDED',
+                          })
+                        }
+                        disabled={toggleStatusMutation.isPending}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition ${
+                          isSuspended
+                            ? 'border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300'
+                            : 'border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900/60 dark:text-rose-400'
+                        }`}
+                      >
+                        {isSuspended ? 'Reactivate' : 'Suspend'}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Active Subscription Cycle Verified
+                    </span>
                   )}
                 </div>
               </div>

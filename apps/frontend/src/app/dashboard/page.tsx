@@ -52,19 +52,65 @@ export default function DashboardHubPage() {
   }
 
   const role = user.role;
+  const isInSupportMode = Boolean(user.supportModeCompanyId);
 
-  // 1. SUPER_ADMIN VIEW
-  if (role === 'SUPER_ADMIN') {
+  // 1. SUPER_ADMIN (when not in Support Mode) & OPERATION_MANAGER VIEW
+  if ((role === 'SUPER_ADMIN' && !isInSupportMode) || role === 'OPERATION_MANAGER') {
     const stats = overview || {};
+    const tierChartData = [
+      {
+        name: 'Premium ($149/mo)',
+        count: stats.subscriptions?.premium || 0,
+        revenue: (stats.subscriptions?.premium || 0) * 149,
+      },
+      {
+        name: 'Basic ($49/mo)',
+        count: stats.subscriptions?.basic || 0,
+        revenue: (stats.subscriptions?.basic || 0) * 49,
+      },
+      {
+        name: 'Active Tenants',
+        count: stats.activeCompanies || 0,
+        revenue: stats.subscriptions?.estimatedMRR || 0,
+      },
+      {
+        name: 'Past Due',
+        count: stats.subscriptions?.pastDue || 0,
+        revenue: 0,
+      },
+    ];
+
+    const companyChartData = (stats.companySubscriptions || []).map((c: any) => ({
+      name: c.name,
+      employees: c.employees || 0,
+      mrr: c.monthlyRate || 0,
+    }));
+
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
-            Platform Master Console
-          </h1>
-          <p className="text-sm text-gray-500">
-            Global multi-tenant metrics, enterprise MRR telemetry, and tenant support access.
-          </p>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+              {role === 'SUPER_ADMIN' ? 'Platform Master Console' : 'Operations Command Center'}
+            </h1>
+            <p className="text-sm text-gray-500">
+              Global multi-tenant metrics, enterprise MRR telemetry, subscription billing dates, and tenant operations.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/dashboard/companies"
+              className="px-3.5 py-2 text-xs font-semibold rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 hover:bg-gray-50"
+            >
+              View Client Companies
+            </Link>
+            <Link
+              href="/dashboard/billing"
+              className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-primary-600 hover:bg-primary-700 text-white"
+            >
+              Subscription Billing Dates
+            </Link>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -101,58 +147,142 @@ export default function DashboardHubPage() {
           </div>
         </div>
 
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 shadow-sm flex items-center justify-between">
-          <div>
-            <h3 className="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
-              <ShieldAlert className="w-5 h-5 text-primary-600" />
-              <span>Super Admin Support Mode</span>
-            </h3>
-            <p className="text-xs text-gray-500 mt-1">
-              Assume time-limited 1-hour audited support mode into any client company workspace.
-            </p>
-          </div>
-          <Link
-            href="/dashboard/support-mode"
-            className="px-4 py-2 text-xs font-semibold rounded-lg bg-primary-600 hover:bg-primary-700 text-white"
-          >
-            Launch Support Console
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  // 2. OPERATION_MANAGER VIEW
-  if (role === 'OPERATION_MANAGER') {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
-            Operations Command Center
-          </h1>
-          <p className="text-sm text-gray-500">
-            Hardware provisioning, software licenses fulfillment, and cross-department workflows.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Platform Analytics Graphs */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-sm">
-            <span className="text-xs uppercase text-gray-500 font-semibold">Resource Requisitions</span>
-            <p className="text-2xl font-extrabold text-primary-600 mt-1">Pending Fulfillment</p>
+            <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-4">
+              Subscription Tier & Tenant Status Distribution
+            </h3>
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={tierChartData}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
+                  <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Bar dataKey="count" fill="#4F46E5" radius={[6, 6, 0, 0]} name="Tenants" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-sm">
+            <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-4">
+              Tenant Workforce & Monthly Subscription Revenue ($)
+            </h3>
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={companyChartData}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
+                  <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Bar dataKey="mrr" fill="#10B981" radius={[6, 6, 0, 0]} name="Monthly Rate ($)" />
+                  <Bar dataKey="employees" fill="#3B82F6" radius={[6, 6, 0, 0]} name="Employees" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+
+        {/* Tenant Subscription Billing Dates Table */}
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-sm font-bold text-gray-900 dark:text-white">
+                Client Subscription Billing & Renewal Dates
+              </h3>
+              <p className="text-xs text-gray-500">
+                Active billing cycles and upcoming renewal dates across all tenant organizations.
+              </p>
+            </div>
             <Link
-              href="/dashboard/resources"
-              className="text-xs text-primary-600 hover:underline inline-flex items-center gap-1 mt-2 font-medium"
+              href="/dashboard/billing"
+              className="text-xs font-semibold text-primary-600 hover:underline"
             >
-              Fulfill Requisitions &rarr;
+              Full Billing Console &rarr;
             </Link>
           </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-gray-50 dark:bg-gray-800/60 text-gray-500 uppercase">
+                <tr>
+                  <th className="py-2.5 px-3">Organization</th>
+                  <th className="py-2.5 px-3">Plan Tier</th>
+                  <th className="py-2.5 px-3">Monthly Billing</th>
+                  <th className="py-2.5 px-3">Billing Start Date</th>
+                  <th className="py-2.5 px-3">Next Renewal Date</th>
+                  <th className="py-2.5 px-3">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {(stats.companySubscriptions || []).map((sub: any) => (
+                  <tr key={sub.id}>
+                    <td className="py-3 px-3 font-semibold text-gray-900 dark:text-white">
+                      {sub.name}
+                      <span className="block text-[11px] font-normal text-gray-400">{sub.email}</span>
+                    </td>
+                    <td className="py-3 px-3">
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          sub.tier === 'PREMIUM'
+                            ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                            : 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
+                        }`}
+                      >
+                        {sub.tier}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 font-bold text-emerald-600">${sub.monthlyRate}/mo</td>
+                    <td className="py-3 px-3 text-gray-600 dark:text-gray-300">
+                      {new Date(sub.billingStartDate).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
+                    </td>
+                    <td className="py-3 px-3 font-semibold text-indigo-600 dark:text-indigo-400">
+                      {new Date(sub.nextBillingDate).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
+                    </td>
+                    <td className="py-3 px-3">
+                      <StatusBadge status={sub.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
+
+        {role === 'SUPER_ADMIN' && (
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 shadow-sm flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <ShieldAlert className="w-5 h-5 text-primary-600" />
+                <span>Super Admin Support Mode</span>
+              </h3>
+              <p className="text-xs text-gray-500 mt-1">
+                Assume time-limited 1-hour audited support mode into any client company workspace.
+              </p>
+            </div>
+            <Link
+              href="/dashboard/support-mode"
+              className="px-4 py-2 text-xs font-semibold rounded-lg bg-primary-600 hover:bg-primary-700 text-white"
+            >
+              Launch Support Console
+            </Link>
+          </div>
+        )}
       </div>
     );
   }
 
-  // 3. COMPANY_ADMIN (CEO) VIEW
-  if (role === 'COMPANY_ADMIN') {
+  // 2. COMPANY_ADMIN (CEO) VIEW (or SUPER_ADMIN in Support Mode)
+  if (role === 'COMPANY_ADMIN' || (role === 'SUPER_ADMIN' && isInSupportMode)) {
     const stats = overview || {};
     return (
       <div className="space-y-6">

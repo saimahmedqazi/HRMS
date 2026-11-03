@@ -46,6 +46,7 @@ const ALL_NAV_ITEMS: NavItem[] = [
   { id: 'bulk-import', name: 'Bulk Import', href: '/dashboard/bulk-import', icon: FileSpreadsheet },
   { id: 'resources', name: 'Resource Requests', href: '/dashboard/resources', icon: PackageCheck },
   { id: 'ai-assistant', name: 'AI Assistant', href: '/dashboard/ai-assistant', icon: Bot },
+  { id: 'my-profile', name: 'My Profile', href: '/dashboard/my-profile', icon: Users },
   { id: 'support-mode', name: 'Support Mode', href: '/dashboard/support-mode', icon: ShieldAlert },
   { id: 'billing', name: 'Billing & Plan', href: '/dashboard/billing', icon: CreditCard },
   { id: 'settings', name: 'Settings', href: '/dashboard/settings', icon: Settings },

@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   Clock,
@@ -16,28 +17,65 @@ import {
   History,
   CheckCircle,
   Calendar,
+  ChevronLeft,
+  ChevronRight,
+  BarChart3,
 } from 'lucide-react';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  Legend,
+} from 'recharts';
 
 export default function AttendanceDashboardPage() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const isHrOrAdmin =
+    user?.role === 'SUPER_ADMIN' ||
+    user?.role === 'COMPANY_ADMIN' ||
+    user?.role === 'HR_MANAGER';
   const [isRemote, setIsRemote] = useState(false);
   const [notes, setNotes] = useState('');
   const [timerSeconds, setTimerSeconds] = useState(0);
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
 
   // Fetch today's attendance
-  const { data: attendanceData, isLoading: loadingAttendance } = useQuery({
+  const { data: attendanceData } = useQuery({
     queryKey: ['attendance-today'],
     queryFn: () => api.get<any>('/attendance/today'),
   });
 
   // Fetch today's work timer
-  const { data: timerData, isLoading: loadingTimer } = useQuery({
+  const { data: timerData } = useQuery({
     queryKey: ['timer-today'],
     queryFn: () => api.get<any>('/timer/today'),
   });
 
+  // Fetch attendance records for calendar & graph
+  const { data: recordsData } = useQuery({
+    queryKey: ['attendance-records'],
+    queryFn: () => api.get<any>('/attendance/records'),
+  });
+
+  // Fetch dashboard overview for 7-day trend & headcount
+  const { data: overviewData } = useQuery({
+    queryKey: ['dashboard-overview'],
+    queryFn: () => api.get<any>('/analytics/overview'),
+  });
+
   const attendance = attendanceData;
   const timer = timerData;
+  const recordsList: any[] = Array.isArray(recordsData)
+    ? recordsData
+    : recordsData?.data || [];
 
   // Local clock ticker for running timer
   useEffect(() => {
@@ -69,6 +107,8 @@ export default function AttendanceDashboardPage() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['attendance-today'] });
+      queryClient.invalidateQueries({ queryKey: ['attendance-records'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] });
       setNotes('');
     },
   });
@@ -77,6 +117,8 @@ export default function AttendanceDashboardPage() {
     mutationFn: () => api.post('/attendance/check-out', {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['attendance-today'] });
+      queryClient.invalidateQueries({ queryKey: ['attendance-records'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] });
     },
   });
 
@@ -110,6 +152,78 @@ export default function AttendanceDashboardPage() {
     return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
+  // Compute Present / Remote / Exceptions / Absent summary counts
+  const presentCount = recordsList.filter((r) => r.status === 'PRESENT').length;
+  const remoteCount = recordsList.filter((r) => r.status === 'PRESENT_REMOTE').length;
+  const exceptionCount = recordsList.filter(
+    (r) => r.status === 'ABSENT_PENDING_REVIEW' || r.status === 'LATE',
+  ).length;
+  const absentCount = recordsList.filter((r) => r.status === 'ABSENT').length;
+
+  const statusBreakdownChart = [
+    {
+      category: 'Present (Onsite)',
+      Present: isHrOrAdmin
+        ? overviewData?.todaySummary?.present ?? presentCount
+        : presentCount,
+      Remote: 0,
+      Absent: 0,
+      Exceptions: 0,
+    },
+    {
+      category: 'Present (Remote)',
+      Present: 0,
+      Remote: isHrOrAdmin
+        ? overviewData?.todaySummary?.remote ?? remoteCount
+        : remoteCount,
+      Absent: 0,
+      Exceptions: 0,
+    },
+    {
+      category: 'Absent',
+      Present: 0,
+      Remote: 0,
+      Absent: isHrOrAdmin
+        ? overviewData?.todaySummary?.absent ?? absentCount
+        : absentCount,
+      Exceptions: 0,
+    },
+    {
+      category: 'Exceptions / Late',
+      Present: 0,
+      Remote: 0,
+      Absent: 0,
+      Exceptions: isHrOrAdmin
+        ? overviewData?.pendingExceptions ?? exceptionCount
+        : exceptionCount,
+    },
+  ];
+
+  const trendChartData =
+    overviewData?.attendanceTrend && overviewData.attendanceTrend.length > 0
+      ? overviewData.attendanceTrend
+      : statusBreakdownChart.map((item) => ({
+          day: item.category,
+          present: item.Present,
+          remote: item.Remote,
+          absent: item.Absent + item.Exceptions,
+        }));
+
+  // Monthly Calendar computation
+  const year = calendarMonth.getFullYear();
+  const month = calendarMonth.getMonth();
+  const firstDayOfWeek = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  const calendarCells: Array<{ day: number | null; dateStr: string | null }> = [];
+  for (let i = 0; i < firstDayOfWeek; i++) {
+    calendarCells.push({ day: null, dateStr: null });
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    calendarCells.push({ day: d, dateStr });
+  }
+
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -119,22 +233,59 @@ export default function AttendanceDashboardPage() {
             Attendance & Work Timer
           </h1>
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Log your daily punches, track work intervals, and review attendance history.
+            Log daily punches, view Present vs. Absent analytics graphs, and inspect the monthly attendance calendar.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Link
-            href="/dashboard/attendance/exceptions"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300"
-          >
-            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> Exceptions Queue
-          </Link>
+          {isHrOrAdmin && (
+            <Link
+              href="/dashboard/attendance/exceptions"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300"
+            >
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> Exceptions Queue
+            </Link>
+          )}
           <Link
             href="/dashboard/attendance/history"
             className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300"
           >
             <History className="h-3.5 w-3.5" /> History Log
           </Link>
+        </div>
+      </div>
+
+      {/* Attendance KPI Summary Cards (Present vs Remote vs Exceptions vs Absent) */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <span className="text-[11px] font-semibold uppercase text-zinc-500">Present (Onsite)</span>
+          <p className="mt-1 text-2xl font-extrabold text-emerald-600 dark:text-emerald-400">
+            {isHrOrAdmin ? (overviewData?.todaySummary?.present ?? presentCount) : presentCount}
+          </p>
+          <span className="text-[11px] text-zinc-400">Verified onsite check-ins</span>
+        </div>
+
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <span className="text-[11px] font-semibold uppercase text-zinc-500">Present (Remote)</span>
+          <p className="mt-1 text-2xl font-extrabold text-blue-600 dark:text-blue-400">
+            {isHrOrAdmin ? (overviewData?.todaySummary?.remote ?? remoteCount) : remoteCount}
+          </p>
+          <span className="text-[11px] text-zinc-400">Authorized remote sessions</span>
+        </div>
+
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <span className="text-[11px] font-semibold uppercase text-zinc-500">Absent Count</span>
+          <p className="mt-1 text-2xl font-extrabold text-rose-600 dark:text-rose-400">
+            {isHrOrAdmin ? (overviewData?.todaySummary?.absent ?? absentCount) : absentCount}
+          </p>
+          <span className="text-[11px] text-zinc-400">Unexcused / no check-in</span>
+        </div>
+
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <span className="text-[11px] font-semibold uppercase text-zinc-500">Exceptions / Pending</span>
+          <p className="mt-1 text-2xl font-extrabold text-amber-600 dark:text-amber-400">
+            {isHrOrAdmin ? (overviewData?.pendingExceptions ?? exceptionCount) : exceptionCount}
+          </p>
+          <span className="text-[11px] text-zinc-400">Awaiting HR review</span>
         </div>
       </div>
 
@@ -322,6 +473,175 @@ export default function AttendanceDashboardPage() {
             Breaks exceeding 60 minutes automatically broadcast real-time alerts to your Team Lead,
             Department Manager, and CEO.
           </p>
+        </div>
+      </div>
+
+      {/* Attendance Analytics Graph (Present vs Remote vs Absent) & Monthly Calendar */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Attendance Graph: Present vs Remote vs Absent */}
+        <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                <BarChart3 className="h-5 w-5 text-indigo-600" />
+                Attendance Analytics Graph (Present vs. Absent)
+              </h2>
+              <p className="text-xs text-zinc-500">
+                Daily breakdown of Onsite Present, Remote Present, and Absent counts.
+              </p>
+            </div>
+          </div>
+
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={trendChartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
+                <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize: '12px' }} />
+                <Bar dataKey="present" fill="#10B981" radius={[4, 4, 0, 0]} name="Present (Onsite)" />
+                <Bar dataKey="remote" fill="#3B82F6" radius={[4, 4, 0, 0]} name="Present (Remote)" />
+                <Bar dataKey="absent" fill="#F43F5E" radius={[4, 4, 0, 0]} name="Absent / Exceptions" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Interactive Monthly Attendance Calendar */}
+        <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-indigo-600" />
+                Monthly Attendance Calendar
+              </h2>
+              <p className="text-xs text-zinc-500">
+                Daily attendance status and check-in coverage across the month.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCalendarMonth(new Date(year, month - 1, 1))}
+                className="rounded-lg border border-zinc-200 p-1.5 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 min-w-[110px] text-center">
+                {calendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCalendarMonth(new Date(year, month + 1, 1))}
+                className="rounded-lg border border-zinc-200 p-1.5 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Weekday Headers */}
+          <div className="grid grid-cols-7 gap-1.5 text-center text-[10px] font-bold uppercase text-zinc-400 mb-2">
+            <div>Sun</div>
+            <div>Mon</div>
+            <div>Tue</div>
+            <div>Wed</div>
+            <div>Thu</div>
+            <div>Fri</div>
+            <div>Sat</div>
+          </div>
+
+          {/* Calendar Days Grid */}
+          <div className="grid grid-cols-7 gap-1.5">
+            {calendarCells.map((cell, idx) => {
+              if (!cell.day || !cell.dateStr) {
+                return <div key={`empty-${idx}`} className="h-14 rounded-lg bg-zinc-50/40 dark:bg-zinc-950/20" />;
+              }
+
+              const dayRecords = recordsList.filter((r) => {
+                if (!r.date) return false;
+                return new Date(r.date).toISOString().slice(0, 10) === cell.dateStr;
+              });
+
+              const dayOfWeek = new Date(year, month, cell.day).getDay();
+              const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+              const isToday = new Date().toISOString().slice(0, 10) === cell.dateStr;
+
+              const dayPresent = dayRecords.filter(
+                (r) => r.status === 'PRESENT' || r.status === 'PRESENT_REMOTE',
+              ).length;
+              const dayAbsent = dayRecords.filter(
+                (r) => r.status === 'ABSENT' || r.status === 'ABSENT_PENDING_REVIEW',
+              ).length;
+
+              let cellBadge = null;
+              if (dayRecords.length > 0) {
+                if (isHrOrAdmin && dayRecords.length > 1) {
+                  cellBadge = (
+                    <div className="mt-1 flex flex-col gap-0.5 text-[9px] font-semibold">
+                      <span className="rounded bg-emerald-100 px-1 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                        {dayPresent} P
+                      </span>
+                      {dayAbsent > 0 && (
+                        <span className="rounded bg-rose-100 px-1 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">
+                          {dayAbsent} A
+                        </span>
+                      )}
+                    </div>
+                  );
+                } else {
+                  const st = dayRecords[0].status;
+                  const isPres = st === 'PRESENT' || st === 'PRESENT_REMOTE';
+                  cellBadge = (
+                    <span
+                      className={`mt-1 inline-block rounded px-1 py-0.5 text-[9px] font-bold truncate ${
+                        isPres
+                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                          : 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                      }`}
+                    >
+                      {st === 'PRESENT_REMOTE' ? 'Remote' : isPres ? 'Present' : 'Absent'}
+                    </span>
+                  );
+                }
+              } else if (isToday && attendance?.status) {
+                cellBadge = (
+                  <span className="mt-1 inline-block rounded bg-emerald-100 px-1 py-0.5 text-[9px] font-bold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                    Present
+                  </span>
+                );
+              } else if (isWeekend) {
+                cellBadge = (
+                  <span className="mt-1 inline-block text-[9px] text-zinc-400">Off</span>
+                );
+              }
+
+              return (
+                <div
+                  key={cell.dateStr}
+                  className={`h-14 rounded-lg border p-1.5 flex flex-col justify-between text-xs transition ${
+                    isToday
+                      ? 'border-indigo-500 bg-indigo-50/30 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
+                      : 'border-zinc-100 bg-white dark:border-zinc-800 dark:bg-zinc-900'
+                  }`}
+                >
+                  <span
+                    className={`text-[11px] font-bold ${
+                      isToday
+                        ? 'text-indigo-600 dark:text-indigo-400'
+                        : isWeekend
+                          ? 'text-zinc-400'
+                          : 'text-zinc-700 dark:text-zinc-300'
+                    }`}
+                  >
+                    {cell.day}
+                  </span>
+                  {cellBadge}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
