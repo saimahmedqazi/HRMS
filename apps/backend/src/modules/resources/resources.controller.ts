@@ -49,6 +49,8 @@ export class ResourcesController {
     UserRole.DEPARTMENT_MANAGER,
     UserRole.HR_MANAGER,
     UserRole.COMPANY_ADMIN,
+    UserRole.OPERATION_MANAGER,
+    UserRole.SUPER_ADMIN,
   )
   @ApiOperation({ summary: 'Approve or reject a resource request' })
   async approveResourceRequest(

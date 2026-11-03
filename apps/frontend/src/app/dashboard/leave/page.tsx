@@ -39,6 +39,13 @@ export default function LeaveDashboardPage() {
     queryFn: () => api.get<any[]>('/leave/types'),
   });
 
+  // Keep selectedSettingId in sync when leave types load
+  React.useEffect(() => {
+    if (!selectedSettingId && leaveTypes.length > 0) {
+      setSelectedSettingId(leaveTypes[0].id);
+    }
+  }, [leaveTypes, selectedSettingId]);
+
   // 3. Fetch balances
   const { data: balances = [], isLoading: loadingBalances } = useQuery({
     queryKey: ['leave-balances'],
@@ -92,8 +99,13 @@ export default function LeaveDashboardPage() {
   // Create Leave Request Mutation
   const createMutation = useMutation({
     mutationFn: async () => {
+      const finalSettingId = selectedSettingId || leaveTypes[0]?.id;
+      if (!finalSettingId || !startDate || !endDate) {
+        throw new Error('Please fill all required fields');
+      }
+
       const formData = new FormData();
-      formData.append('leaveTypeSettingId', selectedSettingId);
+      formData.append('leaveTypeSettingId', finalSettingId);
       formData.append('startDate', startDate);
       formData.append('endDate', endDate);
       if (reason) formData.append('reason', reason);
@@ -367,7 +379,7 @@ export default function LeaveDashboardPage() {
                   Leave Type
                 </label>
                 <select
-                  value={selectedSettingId}
+                  value={selectedSettingId || (leaveTypes[0]?.id ?? '')}
                   onChange={(e) => setSelectedSettingId(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500"
                   required

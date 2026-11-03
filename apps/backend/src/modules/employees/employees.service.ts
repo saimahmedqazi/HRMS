@@ -85,10 +85,20 @@ export class EmployeesService {
       ...(query.search
         ? {
             OR: [
-              { firstName: { contains: query.search, mode: 'insensitive' } },
-              { lastName: { contains: query.search, mode: 'insensitive' } },
-              { employeeCode: { contains: query.search, mode: 'insensitive' } },
-              { user: { email: { contains: query.search, mode: 'insensitive' } } },
+              { firstName: { contains: query.search.trim(), mode: 'insensitive' } },
+              { lastName: { contains: query.search.trim(), mode: 'insensitive' } },
+              { employeeCode: { contains: query.search.trim(), mode: 'insensitive' } },
+              { user: { email: { contains: query.search.trim(), mode: 'insensitive' } } },
+              ...(query.search.trim().includes(' ')
+                ? [
+                    {
+                      AND: [
+                        { firstName: { contains: query.search.trim().split(/\s+/)[0], mode: 'insensitive' } },
+                        { lastName: { contains: query.search.trim().split(/\s+/).slice(1).join(' '), mode: 'insensitive' } },
+                      ],
+                    },
+                  ]
+                : []),
             ],
           }
         : {}),
