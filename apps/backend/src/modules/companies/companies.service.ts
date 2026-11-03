@@ -58,6 +58,9 @@ export class CompaniesService {
 
     for (const key of allowedFields) {
       if (dto[key] !== undefined) {
+        if (key === 'name' && typeof dto[key] === 'string' && dto[key].trim() === '') {
+          continue; // Prevent blanking out the organization name
+        }
         safeData[key] = dto[key];
       }
     }

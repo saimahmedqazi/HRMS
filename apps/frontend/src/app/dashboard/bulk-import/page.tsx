@@ -61,13 +61,23 @@ export default function BulkImportDashboardPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
-          Bulk Employee Import
-        </h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          Upload Excel spreadsheets (.xlsx, .csv) to batch onboard workforce profiles with validation.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+            Bulk Employee Import
+          </h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Upload Excel spreadsheets (.xlsx, .csv) to batch onboard workforce profiles with validation.
+          </p>
+        </div>
+        <a
+          href="/templates/workforce-import-sample.xlsx"
+          download
+          className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 shadow-sm"
+        >
+          <Download className="w-4 h-4" />
+          Download Sample Template (.xlsx)
+        </a>
       </div>
 
       {/* Error alert */}

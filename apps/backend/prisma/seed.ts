@@ -48,7 +48,11 @@ async function main() {
   // 3. Demo Tenant 1: Acme Corp (PREMIUM)
   const acme = await prisma.company.upsert({
     where: { email: 'contact@acme.com' },
-    update: {},
+    update: {
+      name: 'Acme Corporation',
+      status: CompanyStatus.ACTIVE,
+      subscriptionTier: SubscriptionTier.PREMIUM,
+    },
     create: {
       name: 'Acme Corporation',
       slug: 'acme-corp',
@@ -60,17 +64,22 @@ async function main() {
   console.log('✅ Seeded Company 1:', acme.name);
 
   // Default shift for Acme
-  await prisma.shift.create({
-    data: {
-      companyId: acme.id,
-      name: 'Standard Day Shift',
-      startTime: '09:00',
-      endTime: '17:00',
-      breakDuration: 60,
-      workDays: [1, 2, 3, 4, 5],
-      isDefault: true,
-    },
+  let shift = await prisma.shift.findFirst({
+    where: { companyId: acme.id, isDefault: true },
   });
+  if (!shift) {
+    shift = await prisma.shift.create({
+      data: {
+        companyId: acme.id,
+        name: 'Standard Day Shift',
+        startTime: '09:00',
+        endTime: '17:00',
+        breakDuration: 60,
+        workDays: [1, 2, 3, 4, 5],
+        isDefault: true,
+      },
+    });
+  }
 
   // Default leave types for Acme
   await prisma.leaveTypeSetting.createMany({
@@ -83,38 +92,56 @@ async function main() {
   });
 
   // Departments for Acme
-  const engDept = await prisma.department.create({
-    data: { companyId: acme.id, name: 'Engineering', description: 'Engineering & Development' },
+  const engDept = await prisma.department.upsert({
+    where: { companyId_name: { companyId: acme.id, name: 'Engineering' } },
+    update: {},
+    create: { companyId: acme.id, name: 'Engineering', description: 'Engineering & Development' },
   });
-  const hrDept = await prisma.department.create({
-    data: { companyId: acme.id, name: 'Human Resources', description: 'People & Operations' },
+  const hrDept = await prisma.department.upsert({
+    where: { companyId_name: { companyId: acme.id, name: 'Human Resources' } },
+    update: {},
+    create: { companyId: acme.id, name: 'Human Resources', description: 'People & Operations' },
   });
 
   // Designations for Acme
-  const ceoDesig = await prisma.designation.create({
-    data: { companyId: acme.id, name: 'Chief Executive Officer' },
+  const ceoDesig = await prisma.designation.upsert({
+    where: { companyId_name: { companyId: acme.id, name: 'Chief Executive Officer' } },
+    update: {},
+    create: { companyId: acme.id, name: 'Chief Executive Officer' },
   });
-  const hrDesig = await prisma.designation.create({
-    data: { companyId: acme.id, name: 'HR Manager' },
+  const hrDesig = await prisma.designation.upsert({
+    where: { companyId_name: { companyId: acme.id, name: 'HR Manager' } },
+    update: {},
+    create: { companyId: acme.id, name: 'HR Manager' },
   });
-  const engMgrDesig = await prisma.designation.create({
-    data: { companyId: acme.id, name: 'Engineering Manager' },
+  const engMgrDesig = await prisma.designation.upsert({
+    where: { companyId_name: { companyId: acme.id, name: 'Engineering Manager' } },
+    update: {},
+    create: { companyId: acme.id, name: 'Engineering Manager' },
   });
-  const teamLeadDesig = await prisma.designation.create({
-    data: { companyId: acme.id, name: 'Frontend Team Lead' },
+  const teamLeadDesig = await prisma.designation.upsert({
+    where: { companyId_name: { companyId: acme.id, name: 'Frontend Team Lead' } },
+    update: {},
+    create: { companyId: acme.id, name: 'Frontend Team Lead' },
   });
-  const devDesig = await prisma.designation.create({
-    data: { companyId: acme.id, name: 'Software Engineer' },
+  const devDesig = await prisma.designation.upsert({
+    where: { companyId_name: { companyId: acme.id, name: 'Software Engineer' } },
+    update: {},
+    create: { companyId: acme.id, name: 'Software Engineer' },
   });
 
   // Team for Acme
-  const frontendTeam = await prisma.team.create({
-    data: { companyId: acme.id, departmentId: engDept.id, name: 'Frontend Team' },
+  const frontendTeam = await prisma.team.upsert({
+    where: { companyId_name: { companyId: acme.id, name: 'Frontend Team' } },
+    update: {},
+    create: { companyId: acme.id, departmentId: engDept.id, name: 'Frontend Team' },
   });
 
   // Acme Company Admin (CEO)
-  const ceoUser = await prisma.user.create({
-    data: {
+  const ceoUser = await prisma.user.upsert({
+    where: { email: 'ceo@acme.com' },
+    update: { passwordHash },
+    create: {
       companyId: acme.id,
       email: 'ceo@acme.com',
       passwordHash,
@@ -123,8 +150,10 @@ async function main() {
       isEmailVerified: true,
     },
   });
-  const ceoEmp = await prisma.employee.create({
-    data: {
+  const ceoEmp = await prisma.employee.upsert({
+    where: { companyId_employeeCode: { companyId: acme.id, employeeCode: 'EMP-001' } },
+    update: {},
+    create: {
       companyId: acme.id,
       userId: ceoUser.id,
       employeeCode: 'EMP-001',
@@ -138,8 +167,10 @@ async function main() {
   });
 
   // Acme HR Manager
-  const hrUser = await prisma.user.create({
-    data: {
+  const hrUser = await prisma.user.upsert({
+    where: { email: 'hr@acme.com' },
+    update: { passwordHash },
+    create: {
       companyId: acme.id,
       email: 'hr@acme.com',
       passwordHash,
@@ -148,8 +179,10 @@ async function main() {
       isEmailVerified: true,
     },
   });
-  const hrEmp = await prisma.employee.create({
-    data: {
+  const hrEmp = await prisma.employee.upsert({
+    where: { companyId_employeeCode: { companyId: acme.id, employeeCode: 'EMP-002' } },
+    update: {},
+    create: {
       companyId: acme.id,
       userId: hrUser.id,
       employeeCode: 'EMP-002',
@@ -164,8 +197,10 @@ async function main() {
   });
 
   // Acme Department Manager
-  const deptMgrUser = await prisma.user.create({
-    data: {
+  const deptMgrUser = await prisma.user.upsert({
+    where: { email: 'eng.manager@acme.com' },
+    update: { passwordHash },
+    create: {
       companyId: acme.id,
       email: 'eng.manager@acme.com',
       passwordHash,
@@ -174,8 +209,10 @@ async function main() {
       isEmailVerified: true,
     },
   });
-  const deptMgrEmp = await prisma.employee.create({
-    data: {
+  const deptMgrEmp = await prisma.employee.upsert({
+    where: { companyId_employeeCode: { companyId: acme.id, employeeCode: 'EMP-003' } },
+    update: {},
+    create: {
       companyId: acme.id,
       userId: deptMgrUser.id,
       employeeCode: 'EMP-003',
@@ -194,8 +231,10 @@ async function main() {
   });
 
   // Acme Team Lead
-  const teamLeadUser = await prisma.user.create({
-    data: {
+  const teamLeadUser = await prisma.user.upsert({
+    where: { email: 'team.lead@acme.com' },
+    update: { passwordHash },
+    create: {
       companyId: acme.id,
       email: 'team.lead@acme.com',
       passwordHash,
@@ -204,8 +243,10 @@ async function main() {
       isEmailVerified: true,
     },
   });
-  const teamLeadEmp = await prisma.employee.create({
-    data: {
+  const teamLeadEmp = await prisma.employee.upsert({
+    where: { companyId_employeeCode: { companyId: acme.id, employeeCode: 'EMP-004' } },
+    update: {},
+    create: {
       companyId: acme.id,
       userId: teamLeadUser.id,
       employeeCode: 'EMP-004',
@@ -225,8 +266,10 @@ async function main() {
   });
 
   // Acme Regular Employee (Probation Completed)
-  const empUser = await prisma.user.create({
-    data: {
+  const empUser = await prisma.user.upsert({
+    where: { email: 'employee@acme.com' },
+    update: { passwordHash },
+    create: {
       companyId: acme.id,
       email: 'employee@acme.com',
       passwordHash,
@@ -235,8 +278,10 @@ async function main() {
       isEmailVerified: true,
     },
   });
-  await prisma.employee.create({
-    data: {
+  await prisma.employee.upsert({
+    where: { companyId_employeeCode: { companyId: acme.id, employeeCode: 'EMP-005' } },
+    update: {},
+    create: {
       companyId: acme.id,
       userId: empUser.id,
       employeeCode: 'EMP-005',
@@ -252,8 +297,10 @@ async function main() {
   });
 
   // Acme Probationary Employee (Probation Active)
-  const newbieUser = await prisma.user.create({
-    data: {
+  const newbieUser = await prisma.user.upsert({
+    where: { email: 'newbie@acme.com' },
+    update: { passwordHash },
+    create: {
       companyId: acme.id,
       email: 'newbie@acme.com',
       passwordHash,
@@ -262,8 +309,10 @@ async function main() {
       isEmailVerified: true,
     },
   });
-  await prisma.employee.create({
-    data: {
+  await prisma.employee.upsert({
+    where: { companyId_employeeCode: { companyId: acme.id, employeeCode: 'EMP-006' } },
+    update: {},
+    create: {
       companyId: acme.id,
       userId: newbieUser.id,
       employeeCode: 'EMP-006',
@@ -333,8 +382,10 @@ async function main() {
     },
   });
 
-  const globexAdmin = await prisma.user.create({
-    data: {
+  const globexAdmin = await prisma.user.upsert({
+    where: { email: 'ceo@globex.com' },
+    update: { passwordHash },
+    create: {
       companyId: globex.id,
       email: 'ceo@globex.com',
       passwordHash,
@@ -343,8 +394,10 @@ async function main() {
       isEmailVerified: true,
     },
   });
-  await prisma.employee.create({
-    data: {
+  await prisma.employee.upsert({
+    where: { companyId_employeeCode: { companyId: globex.id, employeeCode: 'EMP-101' } },
+    update: {},
+    create: {
       companyId: globex.id,
       userId: globexAdmin.id,
       employeeCode: 'EMP-101',

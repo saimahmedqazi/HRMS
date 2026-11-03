@@ -117,9 +117,9 @@ export function Header({ onMenuClick }: HeaderProps) {
             <Menu className="h-5 w-5" />
           </button>
         )}
-        <h1 className="text-base font-semibold text-slate-800 dark:text-slate-100">
+        <span className="text-base font-semibold text-slate-800 dark:text-slate-100">
           ZenHR Portal
-        </h1>
+        </span>
         {user?.company?.subscriptionTier && (
           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
             <ShieldCheck className="h-3 w-3" />

@@ -71,16 +71,18 @@ export default function SettingsPage() {
   }, [hasCompany, activeTab]);
 
   const updateCompanyMutation = useMutation({
-    mutationFn: () =>
-      api.patch('/companies/me', {
-        name: companyName,
-        phone: companyPhone,
-        address: companyAddress,
-        website: companyWebsite,
-        industry: companyIndustry,
-        size: companySize,
-        timezone: companyTimezone,
-      }),
+    mutationFn: () => {
+      const payload: any = {};
+      const targetName = (companyName || companyData?.name || '').trim();
+      if (targetName) payload.name = targetName;
+      if (companyPhone && companyPhone.trim()) payload.phone = companyPhone.trim();
+      if (companyAddress && companyAddress.trim()) payload.address = companyAddress.trim();
+      if (companyWebsite && companyWebsite.trim()) payload.website = companyWebsite.trim();
+      if (companyIndustry && companyIndustry.trim()) payload.industry = companyIndustry.trim();
+      if (companySize && companySize.trim()) payload.size = companySize.trim();
+      if (companyTimezone && companyTimezone.trim()) payload.timezone = companyTimezone.trim();
+      return api.patch('/companies/me', payload);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['company-me'] });
       refetchUser();
