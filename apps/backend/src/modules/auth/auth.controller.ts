@@ -57,7 +57,13 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const ip = req.ip || req.socket.remoteAddress || '127.0.0.1';
+    const rawIp =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+      (req.headers['x-real-ip'] as string)?.trim() ||
+      req.ip ||
+      req.socket.remoteAddress ||
+      '127.0.0.1';
+    const ip = rawIp.replace(/^::ffff:/, '');
     const userAgent = req.headers['user-agent'] || 'Unknown';
 
     const result = await this.authService.login(dto, ip, userAgent);

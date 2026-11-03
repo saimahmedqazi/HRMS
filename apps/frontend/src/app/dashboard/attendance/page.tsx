@@ -20,6 +20,10 @@ import {
   ChevronLeft,
   ChevronRight,
   BarChart3,
+  Globe,
+  ShieldCheck,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 import {
   BarChart,
@@ -42,10 +46,28 @@ export default function AttendanceDashboardPage() {
   const [isRemote, setIsRemote] = useState(false);
   const [notes, setNotes] = useState('');
   const [timerSeconds, setTimerSeconds] = useState(0);
+  const [coords, setCoords] = useState<{ latitude?: number; longitude?: number }>({});
+  const [newWhitelistIp, setNewWhitelistIp] = useState('');
+  const [newWhitelistDesc, setNewWhitelistDesc] = useState('');
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setCoords({
+            latitude: Number(pos.coords.latitude.toFixed(6)),
+            longitude: Number(pos.coords.longitude.toFixed(6)),
+          });
+        },
+        () => {},
+        { timeout: 3000, maximumAge: 60000 },
+      );
+    }
+  }, []);
 
   // Fetch today's attendance
   const { data: attendanceData } = useQuery({
@@ -69,6 +91,12 @@ export default function AttendanceDashboardPage() {
   const { data: overviewData } = useQuery({
     queryKey: ['dashboard-overview'],
     queryFn: () => api.get<any>('/analytics/overview'),
+  });
+
+  // Fetch IP Whitelist & current client IP telemetry
+  const { data: whitelistData } = useQuery({
+    queryKey: ['attendance-ip-whitelist'],
+    queryFn: () => api.get<any>('/attendance/ip-whitelist'),
   });
 
   const attendance = attendanceData;
@@ -104,12 +132,31 @@ export default function AttendanceDashboardPage() {
       api.post('/attendance/check-in', {
         isRemote,
         notes: notes || undefined,
+        ...(coords.latitude !== undefined ? { latitude: coords.latitude } : {}),
+        ...(coords.longitude !== undefined ? { longitude: coords.longitude } : {}),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['attendance-today'] });
       queryClient.invalidateQueries({ queryKey: ['attendance-records'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] });
       setNotes('');
+    },
+  });
+
+  const addWhitelistMutation = useMutation({
+    mutationFn: (payload: { ipAddress: string; description?: string }) =>
+      api.post('/attendance/ip-whitelist', payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['attendance-ip-whitelist'] });
+      setNewWhitelistIp('');
+      setNewWhitelistDesc('');
+    },
+  });
+
+  const removeWhitelistMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/attendance/ip-whitelist/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['attendance-ip-whitelist'] });
     },
   });
 
@@ -356,11 +403,46 @@ export default function AttendanceDashboardPage() {
               </div>
 
               {isRemote && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 p-2.5 rounded-lg border border-amber-200 dark:border-amber-900">
-                  ⚠️ Remote check-ins without an approved standing permission are routed to the HR
-                  Exceptions Queue for review.
+                <p
+                  className={`text-xs p-2.5 rounded-lg border ${
+                    whitelistData?.isCurrentIpWhitelisted
+                      ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900'
+                      : 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900'
+                  }`}
+                >
+                  {whitelistData?.isCurrentIpWhitelisted
+                    ? `✅ Your IP (${whitelistData.currentClientIp}) is whitelisted by HR for Remote/Hybrid work — your remote check-in will be immediately approved.`
+                    : '⚠️ Remote check-ins from non-whitelisted IPs without an approved standing permission are routed to the HR Exceptions Queue.'}
                 </p>
               )}
+
+              {/* Detected Network IP & Coordinates Banner */}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-[11px] text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-400">
+                <span className="flex items-center gap-1.5">
+                  <Globe className="h-3.5 w-3.5 text-indigo-600" />
+                  IP:{' '}
+                  <strong className="font-mono text-zinc-900 dark:text-zinc-100">
+                    {whitelistData?.currentClientIp || user?.lastLoginIp || '127.0.0.1'}
+                  </strong>
+                </span>
+                <span className="flex items-center gap-1">
+                  <MapPin className="h-3.5 w-3.5 text-emerald-600" />
+                  Lat/Long:{' '}
+                  <strong className="font-mono text-zinc-900 dark:text-zinc-100">
+                    {coords.latitude ?? whitelistData?.currentGeo?.latitude ?? 24.8607},{' '}
+                    {coords.longitude ?? whitelistData?.currentGeo?.longitude ?? 67.0011}
+                  </strong>
+                </span>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                    whitelistData?.isCurrentIpWhitelisted
+                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                      : 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
+                  }`}
+                >
+                  {whitelistData?.isCurrentIpWhitelisted ? 'HR Whitelisted IP' : 'Standard IP'}
+                </span>
+              </div>
 
               <input
                 type="text"
@@ -644,6 +726,127 @@ export default function AttendanceDashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* HR IP Whitelist Management for Office & Remote/Hybrid (WFH) Employees */}
+      {isHrOrAdmin && (
+        <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5 text-indigo-600" />
+                HR IP Whitelist (Office & Remote / Hybrid WFH Access Control)
+              </h2>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Whitelist Office gateways and Remote/Hybrid employee IP addresses so authorized WFH staff bypass office IP restrictions automatically.
+              </p>
+            </div>
+            {whitelistData?.currentClientIp && !whitelistData?.isCurrentIpWhitelisted && (
+              <button
+                type="button"
+                onClick={() =>
+                  addWhitelistMutation.mutate({
+                    ipAddress: whitelistData.currentClientIp,
+                    description: 'Authorized Office / HR Admin Network IP',
+                  })
+                }
+                disabled={addWhitelistMutation.isPending}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Whitelist My Current IP ({whitelistData.currentClientIp})
+              </button>
+            )}
+          </div>
+
+          {/* Add IP Form */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!newWhitelistIp.trim()) return;
+              addWhitelistMutation.mutate({
+                ipAddress: newWhitelistIp.trim(),
+                description:
+                  newWhitelistDesc.trim() || 'Remote / Hybrid Employee Whitelisted IP',
+              });
+            }}
+            className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+          >
+            <input
+              type="text"
+              value={newWhitelistIp}
+              onChange={(e) => setNewWhitelistIp(e.target.value)}
+              placeholder="IP Address (e.g. 203.0.113.45 or 127.0.0.1)"
+              className="rounded-lg border border-zinc-300 px-3 py-2 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800"
+            />
+            <input
+              type="text"
+              value={newWhitelistDesc}
+              onChange={(e) => setNewWhitelistDesc(e.target.value)}
+              placeholder="Label (e.g. Hybrid WFH - Evan Wright or HQ Office Router)"
+              className="rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
+            />
+            <button
+              type="submit"
+              disabled={!newWhitelistIp.trim() || addWhitelistMutation.isPending}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+            >
+              <Plus className="h-4 w-4" />
+              {addWhitelistMutation.isPending ? 'Adding...' : 'Add IP to Whitelist'}
+            </button>
+          </form>
+
+          {/* Whitelisted IPs Table */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-zinc-50 dark:bg-zinc-800/60 text-zinc-500 uppercase">
+                <tr>
+                  <th className="py-2.5 px-3">Whitelisted IP Address</th>
+                  <th className="py-2.5 px-3">Employee / Location Label</th>
+                  <th className="py-2.5 px-3">Added On</th>
+                  <th className="py-2.5 px-3 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {(!whitelistData?.items || whitelistData.items.length === 0) ? (
+                  <tr>
+                    <td colSpan={4} className="py-4 px-3 text-center text-zinc-400">
+                      No IP restrictions configured yet. Add Office or Remote/Hybrid employee IPs above to enforce IP whitelisting.
+                    </td>
+                  </tr>
+                ) : (
+                  whitelistData.items.map((item: any) => (
+                    <tr key={item.id}>
+                      <td className="py-2.5 px-3 font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                        {item.ipAddress}
+                      </td>
+                      <td className="py-2.5 px-3 font-medium text-zinc-800 dark:text-zinc-200">
+                        {item.description || 'Whitelisted Network'}
+                      </td>
+                      <td className="py-2.5 px-3 text-zinc-500">
+                        {new Date(item.createdAt).toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                        })}
+                      </td>
+                      <td className="py-2.5 px-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => removeWhitelistMutation.mutate(item.id)}
+                          disabled={removeWhitelistMutation.isPending}
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

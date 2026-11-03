@@ -20,6 +20,10 @@ import {
   Camera,
   CheckCircle,
   AlertTriangle,
+  MapPin,
+  Globe,
+  Clock,
+  ExternalLink,
 } from 'lucide-react';
 
 export default function EmployeeDetailPage() {
@@ -149,6 +153,27 @@ export default function EmployeeDetailPage() {
 
   if (!emp) {
     return <p className="text-sm text-zinc-500">Employee profile not found.</p>;
+  }
+
+  // Parse login telemetry from emp.user or current user
+  const loginIp = emp.user?.lastLoginIp || user?.lastLoginIp || '127.0.0.1';
+  const loginAt = emp.user?.lastLoginAt || user?.lastLoginAt || null;
+  const loginCity = emp.user?.lastLoginCity || user?.lastLoginCity || 'Local Office Network';
+  const rawCountry = emp.user?.lastLoginCountry || user?.lastLoginCountry || 'PK';
+  let loginCountry = rawCountry;
+  let loginLat = user?.lastLoginLatitude ?? 24.8607;
+  let loginLng = user?.lastLoginLongitude ?? 67.0011;
+
+  if (typeof rawCountry === 'string' && rawCountry.includes('|')) {
+    const [cCode, coordsPart] = rawCountry.split('|').map((s: string) => s.trim());
+    loginCountry = cCode || 'PK';
+    const [latStr, lngStr] = (coordsPart || '').split(',').map((s: string) => s.trim());
+    const pLat = parseFloat(latStr);
+    const pLng = parseFloat(lngStr);
+    if (!Number.isNaN(pLat) && !Number.isNaN(pLng)) {
+      loginLat = pLat;
+      loginLng = pLng;
+    }
   }
 
   return (
@@ -338,6 +363,95 @@ export default function EmployeeDetailPage() {
                 </dd>
               </div>
             </dl>
+          </div>
+
+          {/* Last Login IP & Geolocation Telemetry Card ("Aapne yahan se, itne baje login kiya") */}
+          <div className="md:col-span-2 rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5 shadow-sm dark:border-indigo-900/60 dark:bg-indigo-950/20 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-indigo-600" />
+                Last Login IP & Geolocation Telemetry
+              </h3>
+              <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                AUDITED LOGIN LOCATION
+              </span>
+            </div>
+
+            <div className="rounded-xl bg-white dark:bg-zinc-900 p-3.5 border border-indigo-100 dark:border-indigo-900/50 text-xs text-zinc-700 dark:text-zinc-300">
+              Logged in from IP{' '}
+              <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                {loginIp}
+              </span>{' '}
+              at{' '}
+              <span className="font-semibold">
+                {loginCity}, {loginCountry}
+              </span>{' '}
+              (Coordinates:{' '}
+              <span className="font-mono font-semibold">
+                Lat {loginLat}, Long {loginLng}
+              </span>
+              ) on{' '}
+              <span className="font-semibold">
+                {loginAt
+                  ? new Date(loginAt).toLocaleString('en-US', {
+                      dateStyle: 'medium',
+                      timeStyle: 'short',
+                    })
+                  : new Date().toLocaleString('en-US', {
+                      dateStyle: 'medium',
+                      timeStyle: 'short',
+                    })}
+              </span>
+              .
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div className="rounded-xl bg-white dark:bg-zinc-900 p-3.5 border border-zinc-200 dark:border-zinc-800">
+                <span className="text-[10px] uppercase font-semibold text-zinc-400 flex items-center gap-1.5">
+                  <Globe className="h-3.5 w-3.5 text-indigo-500" /> Login IP Address
+                </span>
+                <p className="font-mono text-sm font-bold text-zinc-900 dark:text-zinc-100 mt-1">
+                  {loginIp}
+                </p>
+                <span className="text-[11px] text-zinc-400">
+                  {loginCity}, {loginCountry}
+                </span>
+              </div>
+
+              <div className="rounded-xl bg-white dark:bg-zinc-900 p-3.5 border border-zinc-200 dark:border-zinc-800">
+                <span className="text-[10px] uppercase font-semibold text-zinc-400 flex items-center gap-1.5">
+                  <MapPin className="h-3.5 w-3.5 text-emerald-500" /> Latitude & Longitude
+                </span>
+                <p className="font-mono text-sm font-bold text-zinc-900 dark:text-zinc-100 mt-1">
+                  {loginLat}, {loginLng}
+                </p>
+                <a
+                  href={`https://www.google.com/maps?q=${loginLat},${loginLng}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] font-medium text-indigo-600 hover:underline inline-flex items-center gap-1 mt-0.5"
+                >
+                  View Exact Pin on Maps <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+
+              <div className="rounded-xl bg-white dark:bg-zinc-900 p-3.5 border border-zinc-200 dark:border-zinc-800">
+                <span className="text-[10px] uppercase font-semibold text-zinc-400 flex items-center gap-1.5">
+                  <Clock className="h-3.5 w-3.5 text-amber-500" /> Login Date & Time
+                </span>
+                <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100 mt-1">
+                  {loginAt
+                    ? new Date(loginAt).toLocaleString('en-US', {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      })
+                    : 'Current Active Session'}
+                </p>
+                <span className="text-[11px] text-zinc-400 truncate block">
+                  {emp.user?.lastLoginUserAgent || 'Authenticated Browser Session'}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       )}

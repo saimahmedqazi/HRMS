@@ -178,6 +178,8 @@ export class EmployeesService {
             dataScope: true,
             isEmailVerified: true,
             lastLoginAt: true,
+            lastLoginIp: true,
+            lastLoginUserAgent: true,
             lastLoginCity: true,
             lastLoginCountry: true,
             twoFaEnabled: true,

@@ -21,6 +21,12 @@ export interface UserProfile {
   lastName: string;
   avatarUrl?: string;
   lastLoginAt?: string;
+  lastLoginIp?: string;
+  lastLoginCity?: string;
+  lastLoginCountry?: string;
+  lastLoginLatitude?: number;
+  lastLoginLongitude?: number;
+  lastLoginUserAgent?: string;
   lastLoginLocation?: string;
   twoFaEnabled?: boolean;
   dataScope?: string;

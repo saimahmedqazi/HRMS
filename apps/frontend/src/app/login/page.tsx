@@ -24,6 +24,24 @@ export default function LoginPage() {
   const [tempToken, setTempToken] = useState<string | null>(null);
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [coords, setCoords] = useState<{ latitude?: number; longitude?: number }>({});
+
+  React.useEffect(() => {
+    if (typeof window !== 'undefined' && 'geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setCoords({
+            latitude: Number(pos.coords.latitude.toFixed(6)),
+            longitude: Number(pos.coords.longitude.toFixed(6)),
+          });
+        },
+        () => {
+          // Non-blocking: backend falls back to IP geolocation
+        },
+        { timeout: 3000, maximumAge: 60000 },
+      );
+    }
+  }, []);
 
   const {
     register,
@@ -40,7 +58,11 @@ export default function LoginPage() {
     try {
       const response = await api.post<
         { user: unknown } | { requires2fa: true; tempToken: string }
-      >('/auth/login', data);
+      >('/auth/login', {
+        ...data,
+        ...(coords.latitude !== undefined ? { latitude: coords.latitude } : {}),
+        ...(coords.longitude !== undefined ? { longitude: coords.longitude } : {}),
+      });
 
       if ('requires2fa' in response && response.requires2fa) {
         setRequires2fa(true);

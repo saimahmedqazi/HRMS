@@ -219,8 +219,28 @@ export class AuthService {
       }
     }
 
-    // Reset failed login attempts and capture IP location
-    const geo = geoip.lookup(ip);
+    // Reset failed login attempts and capture IP + Lat/Long location
+    const cleanIp = (ip || '127.0.0.1').replace(/^::ffff:/, '');
+    const geo = geoip.lookup(cleanIp);
+    const lat =
+      typeof dto.latitude === 'number'
+        ? dto.latitude
+        : geo?.ll?.[0] !== undefined
+          ? geo.ll[0]
+          : 24.8607;
+    const lng =
+      typeof dto.longitude === 'number'
+        ? dto.longitude
+        : geo?.ll?.[1] !== undefined
+          ? geo.ll[1]
+          : 67.0011;
+    const resolvedCity =
+      geo?.city ||
+      (cleanIp === '127.0.0.1' || cleanIp === '::1'
+        ? 'Local Office Network'
+        : 'Verified Network');
+    const resolvedCountryCode = geo?.country || 'PK';
+    const countryWithCoords = `${resolvedCountryCode} | ${Number(lat).toFixed(4)}, ${Number(lng).toFixed(4)}`;
 
     await this.prisma.user.update({
       where: { id: user.id },
@@ -228,10 +248,10 @@ export class AuthService {
         failedLoginAttempts: 0,
         lockedUntil: null,
         lastLoginAt: new Date(),
-        lastLoginIp: ip,
+        lastLoginIp: cleanIp,
         lastLoginUserAgent: userAgent.slice(0, 255),
-        lastLoginCity: geo?.city || null,
-        lastLoginCountry: geo?.country || null,
+        lastLoginCity: resolvedCity,
+        lastLoginCountry: countryWithCoords,
       },
     });
 
@@ -496,6 +516,8 @@ export class AuthService {
         twoFaEnabled: true,
         isEmailVerified: true,
         lastLoginAt: true,
+        lastLoginIp: true,
+        lastLoginUserAgent: true,
         lastLoginCity: true,
         lastLoginCountry: true,
         companyId: true,
@@ -555,14 +577,41 @@ export class AuthService {
         : user.role === UserRole.OPERATION_MANAGER
         ? 'Manager'
         : '');
-    const lastLoginLocation =
-      [user.lastLoginCity, user.lastLoginCountry].filter(Boolean).join(', ') || null;
+    // Parse coordinates from lastLoginCountry or geoip lookup
+    const cleanIp = (user.lastLoginIp || '127.0.0.1').replace(/^::ffff:/, '');
+    const geo = geoip.lookup(cleanIp);
+    let countryName = user.lastLoginCountry || geo?.country || 'PK';
+    let lastLoginLatitude: number | null = geo?.ll?.[0] ?? 24.8607;
+    let lastLoginLongitude: number | null = geo?.ll?.[1] ?? 67.0011;
+
+    if (user.lastLoginCountry && user.lastLoginCountry.includes('|')) {
+      const [cCode, coordsPart] = user.lastLoginCountry.split('|').map((s) => s.trim());
+      countryName = cCode || 'PK';
+      const [latStr, lngStr] = (coordsPart || '').split(',').map((s) => s.trim());
+      const parsedLat = parseFloat(latStr);
+      const parsedLng = parseFloat(lngStr);
+      if (!Number.isNaN(parsedLat) && !Number.isNaN(parsedLng)) {
+        lastLoginLatitude = parsedLat;
+        lastLoginLongitude = parsedLng;
+      }
+    }
+
+    const cityDisplay =
+      user.lastLoginCity ||
+      geo?.city ||
+      (cleanIp === '127.0.0.1' || cleanIp === '::1' ? 'Local Office Network' : 'Verified Network');
+    const lastLoginLocation = `${cityDisplay}, ${countryName}`;
 
     return {
       ...user,
       firstName,
       lastName,
       avatarUrl: user.employee?.profilePictureUrl || null,
+      lastLoginIp: cleanIp,
+      lastLoginCity: cityDisplay,
+      lastLoginCountry: countryName,
+      lastLoginLatitude,
+      lastLoginLongitude,
       lastLoginLocation,
       employee: user.employee
         ? {

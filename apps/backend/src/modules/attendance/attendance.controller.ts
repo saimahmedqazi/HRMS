@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Body,
   Param,
   Query,
@@ -181,5 +182,48 @@ export class AttendanceController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.attendanceService.approvePermissionStep2(id, user);
+  }
+
+  @Get('ip-whitelist')
+  @ApiOperation({ summary: 'List company whitelisted IPs (Office & Remote/Hybrid WFH) and current client IP telemetry' })
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.COMPANY_ADMIN,
+    UserRole.HR_MANAGER,
+    UserRole.DEPARTMENT_MANAGER,
+    UserRole.TEAM_LEAD,
+    UserRole.EMPLOYEE,
+  )
+  async listIpWhitelist(
+    @Req() req: Request,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const ip =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+      (req.headers['x-real-ip'] as string)?.trim() ||
+      req.ip ||
+      req.socket.remoteAddress ||
+      '127.0.0.1';
+    return this.attendanceService.listIpWhitelist(user, ip);
+  }
+
+  @Post('ip-whitelist')
+  @ApiOperation({ summary: 'HR/Admin: Add an Office or Remote/Hybrid WFH IP to company whitelist' })
+  @Roles(UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  async addIpWhitelist(
+    @Body() dto: { ipAddress: string; description?: string },
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.attendanceService.addIpWhitelist(dto, user);
+  }
+
+  @Delete('ip-whitelist/:id')
+  @ApiOperation({ summary: 'HR/Admin: Remove an IP from company whitelist' })
+  @Roles(UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  async removeIpWhitelist(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.attendanceService.removeIpWhitelist(id, user);
   }
 }

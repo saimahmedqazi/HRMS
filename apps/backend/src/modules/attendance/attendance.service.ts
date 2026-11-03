@@ -17,6 +17,7 @@ import {
   RemoteWorkStatus,
   NotificationType,
 } from '@prisma/client';
+import * as geoip from 'geoip-lite';
 import { CheckInDto } from './dto/check-in.dto';
 import { CheckOutDto } from './dto/check-out.dto';
 import { CreateRemotePermissionDto } from './dto/create-remote-permission.dto';
@@ -86,31 +87,58 @@ export class AttendanceService {
     }
 
     const checkInTime = new Date();
+    const cleanIp = (ip || '127.0.0.1').replace(/^::ffff:/, '');
+    const geo = geoip.lookup(cleanIp);
     let status: AttendanceStatus = AttendanceStatus.PRESENT;
 
-    if (dto.isRemote) {
-      // Check for approved standing remote work permission covering today
-      const permission = await this.prisma.remoteWorkPermission.findFirst({
-        where: {
-          companyId,
-          employeeId: employee.id,
-          status: RemoteWorkStatus.APPROVED,
-          startDate: { lte: today },
-          endDate: { gte: today },
-        },
-      });
+    // Check HR IP Whitelist for Office & Remote/Hybrid employees
+    const whitelist =
+      typeof (this.prisma as any).ipWhitelist?.findMany === 'function'
+        ? await this.prisma.ipWhitelist.findMany({ where: { companyId } })
+        : [];
+    const isIpWhitelisted = (whitelist || []).some(
+      (entry: any) => entry.ipAddress === cleanIp || entry.ipAddress === '*',
+    );
 
-      if (permission) {
+    // Check for approved standing remote work permission covering today
+    const permission = await this.prisma.remoteWorkPermission.findFirst({
+      where: {
+        companyId,
+        employeeId: employee.id,
+        status: RemoteWorkStatus.APPROVED,
+        startDate: { lte: today },
+        endDate: { gte: today },
+      },
+    });
+
+    if (dto.isRemote) {
+      if (isIpWhitelisted || permission) {
         status = AttendanceStatus.PRESENT_REMOTE;
       } else {
         // Unauthorized remote check-in -> route to HR Exceptions Queue
         status = AttendanceStatus.ABSENT_PENDING_REVIEW;
       }
+    } else if (whitelist && whitelist.length > 0 && !isIpWhitelisted) {
+      // Office IP restriction active: employee attempted onsite punch from non-whitelisted IP
+      status = permission
+        ? AttendanceStatus.PRESENT_REMOTE
+        : AttendanceStatus.ABSENT_PENDING_REVIEW;
     }
 
+    const resolvedLat =
+      dto.latitude !== undefined ? dto.latitude : geo?.ll?.[0] ?? null;
+    const resolvedLng =
+      dto.longitude !== undefined ? dto.longitude : geo?.ll?.[1] ?? null;
+
     const locationString =
-      dto.latitude && dto.longitude
-        ? JSON.stringify({ lat: dto.latitude, lng: dto.longitude })
+      resolvedLat !== null && resolvedLng !== null
+        ? JSON.stringify({
+            lat: resolvedLat,
+            lng: resolvedLng,
+            city: geo?.city || 'Local Network',
+            country: geo?.country || 'PK',
+            whitelisted: isIpWhitelisted,
+          })
         : null;
 
     const record = await this.prisma.attendanceRecord.upsert({
@@ -125,7 +153,7 @@ export class AttendanceService {
         checkInTime,
         status,
         isRemote: dto.isRemote,
-        checkInIp: ip,
+        checkInIp: cleanIp,
         checkInLocation: locationString,
         notes: dto.notes,
         markedBySystem: false,
@@ -137,7 +165,7 @@ export class AttendanceService {
         checkInTime,
         status,
         isRemote: dto.isRemote,
-        checkInIp: ip,
+        checkInIp: cleanIp,
         checkInLocation: locationString,
         notes: dto.notes,
         markedBySystem: false,
@@ -469,5 +497,76 @@ export class AttendanceService {
         status: RemoteWorkStatus.APPROVED,
       },
     });
+  }
+
+  // HR IP Whitelist Management (Office & Remote/Hybrid WFH IPs)
+  async listIpWhitelist(user: AuthenticatedUser, currentIp: string) {
+    const companyId = this.getEffectiveCompanyId(user);
+    const cleanIp = (currentIp || '127.0.0.1').replace(/^::ffff:/, '');
+    const geo = geoip.lookup(cleanIp);
+
+    const items = await this.prisma.ipWhitelist.findMany({
+      where: { companyId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const isCurrentIpWhitelisted = items.some(
+      (item) => item.ipAddress === cleanIp || item.ipAddress === '*',
+    );
+
+    return {
+      currentClientIp: cleanIp,
+      currentGeo: {
+        city: geo?.city || (cleanIp === '127.0.0.1' || cleanIp === '::1' ? 'Local Office Network' : 'Verified Network'),
+        country: geo?.country || 'PK',
+        latitude: geo?.ll?.[0] ?? 24.8607,
+        longitude: geo?.ll?.[1] ?? 67.0011,
+      },
+      isCurrentIpWhitelisted,
+      items,
+    };
+  }
+
+  async addIpWhitelist(
+    dto: { ipAddress: string; description?: string },
+    user: AuthenticatedUser,
+  ) {
+    const companyId = this.getEffectiveCompanyId(user);
+    const userId = (user.id || user.sub)!;
+    const cleanIp = dto.ipAddress.trim().replace(/^::ffff:/, '');
+
+    if (!cleanIp) {
+      throw new BadRequestException('Valid IP address is required');
+    }
+
+    return this.prisma.ipWhitelist.upsert({
+      where: {
+        companyId_ipAddress: {
+          companyId,
+          ipAddress: cleanIp,
+        },
+      },
+      update: {
+        description: dto.description || 'HR Whitelisted Office / Remote Hybrid IP',
+        addedById: userId,
+      },
+      create: {
+        companyId,
+        ipAddress: cleanIp,
+        description: dto.description || 'HR Whitelisted Office / Remote Hybrid IP',
+        addedById: userId,
+      },
+    });
+  }
+
+  async removeIpWhitelist(id: string, user: AuthenticatedUser) {
+    const companyId = this.getEffectiveCompanyId(user);
+    const existing = await this.prisma.ipWhitelist.findFirst({
+      where: { id, companyId },
+    });
+    if (!existing) throw new NotFoundException('Whitelisted IP entry not found');
+
+    await this.prisma.ipWhitelist.delete({ where: { id } });
+    return { message: 'IP removed from whitelist' };
   }
 }

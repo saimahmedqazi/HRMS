@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
 
 export class LoginDto {
   @ApiProperty({ example: 'admin@acme.com' })
@@ -16,4 +16,14 @@ export class LoginDto {
   @IsString()
   @IsOptional()
   twoFactorCode?: string;
+
+  @ApiPropertyOptional({ example: 24.8607 })
+  @IsNumber()
+  @IsOptional()
+  latitude?: number;
+
+  @ApiPropertyOptional({ example: 67.0011 })
+  @IsNumber()
+  @IsOptional()
+  longitude?: number;
 }
