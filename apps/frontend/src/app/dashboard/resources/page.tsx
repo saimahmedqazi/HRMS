@@ -156,7 +156,11 @@ export default function ResourcesDashboardPage() {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
                 {requests.map((req: any) => {
                   const emp = req.requestedBy;
-                  const canApprove = req.status === 'PENDING' && isManager;
+                  const isSelfRequest = Boolean(emp?.userId && emp.userId === user?.id);
+                  const canApprove =
+                    req.status === 'PENDING' &&
+                    isManager &&
+                    (isOpsOrAdmin || !isSelfRequest);
                   const canFulfill = req.status === 'STEP_1_APPROVED' && isOpsOrAdmin;
 
                   return (

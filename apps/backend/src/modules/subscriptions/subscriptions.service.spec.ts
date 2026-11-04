@@ -23,6 +23,7 @@ describe('SubscriptionsService', () => {
       },
       company: {
         findUnique: jest.fn().mockResolvedValue({ id: mockCompanyId, name: 'Acme Inc' }),
+        update: jest.fn().mockResolvedValue({ id: mockCompanyId, subscriptionTier: SubscriptionTier.PREMIUM }),
       },
       user: {
         findFirst: jest.fn().mockResolvedValue({ id: 'user-admin', email: 'admin@acme.com' }),
@@ -98,6 +99,10 @@ describe('SubscriptionsService', () => {
           tier: SubscriptionTier.PREMIUM,
           status: SubscriptionStatus.ACTIVE,
         }),
+      });
+      expect(prisma.company.update).toHaveBeenCalledWith({
+        where: { id: mockCompanyId },
+        data: { subscriptionTier: SubscriptionTier.PREMIUM },
       });
     });
 

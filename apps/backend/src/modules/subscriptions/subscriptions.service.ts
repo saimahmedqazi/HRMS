@@ -231,6 +231,12 @@ export class SubscriptionsService {
               suspendedAt: null,
             },
           });
+          if (typeof (this.prisma.company as any)?.update === 'function') {
+            await this.prisma.company.update({
+              where: { id: companyId },
+              data: { subscriptionTier: SubscriptionTier.PREMIUM },
+            });
+          }
           this.logger.log(`Company ${companyId} upgraded to PREMIUM tier.`);
         }
         break;

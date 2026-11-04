@@ -39,23 +39,24 @@ export default function LeaveApprovalsPage() {
   // Filter requests that require action
   const pendingRequests = requests.filter((r) => {
     if (r.status !== 'PENDING') return false;
+    const isAdminOrHr =
+      user?.role === 'SUPER_ADMIN' ||
+      user?.role === 'COMPANY_ADMIN' ||
+      user?.role === 'HR_MANAGER';
+    const isSelf = Boolean(r.employee?.userId && r.employee.userId === user?.id);
+    if (!isAdminOrHr && isSelf) return false;
     // Step 1 pending and user is step 1 approver or manager/admin
     if (r.step1Status === 'PENDING') {
       return (
         r.step1ApproverId === user?.id ||
-        user?.role === 'COMPANY_ADMIN' ||
-        user?.role === 'HR_MANAGER' ||
+        isAdminOrHr ||
         user?.role === 'DEPARTMENT_MANAGER' ||
         user?.role === 'TEAM_LEAD'
       );
     }
     // Step 2 pending and user is step 2 approver or HR/Admin
     if (r.step2Status === 'PENDING') {
-      return (
-        r.step2ApproverId === user?.id ||
-        user?.role === 'COMPANY_ADMIN' ||
-        user?.role === 'HR_MANAGER'
-      );
+      return r.step2ApproverId === user?.id || isAdminOrHr;
     }
     return false;
   });
@@ -149,18 +150,21 @@ export default function LeaveApprovalsPage() {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
                 {displayedRequests.map((req: any) => {
                   const emp = req.employee;
+                  const isAdminOrHr =
+                    user?.role === 'SUPER_ADMIN' ||
+                    user?.role === 'COMPANY_ADMIN' ||
+                    user?.role === 'HR_MANAGER';
+                  const isSelf = Boolean(emp?.userId && emp.userId === user?.id);
                   const canAct =
                     req.status === 'PENDING' &&
+                    (isAdminOrHr || !isSelf) &&
                     ((req.step1Status === 'PENDING' &&
                       (req.step1ApproverId === user?.id ||
-                        user?.role === 'COMPANY_ADMIN' ||
-                        user?.role === 'HR_MANAGER' ||
+                        isAdminOrHr ||
                         user?.role === 'DEPARTMENT_MANAGER' ||
                         user?.role === 'TEAM_LEAD')) ||
                       (req.step2Status === 'PENDING' &&
-                        (req.step2ApproverId === user?.id ||
-                          user?.role === 'COMPANY_ADMIN' ||
-                          user?.role === 'HR_MANAGER')));
+                        (req.step2ApproverId === user?.id || isAdminOrHr)));
 
                   return (
                     <tr

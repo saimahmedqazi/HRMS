@@ -128,7 +128,16 @@ SECURITY & PRIVACY RULES:
     } else if (query.includes('sick') || query.includes('doctor') || query.includes('prescription')) {
       reply = `You have 14 days of Sick Leave allocated annually. Important: To request Sick Leave, uploading an official medical doctor prescription or certificate (PDF/JPG/PNG) is strictly mandatory during submission.`;
     } else if (query.includes('balance') || query.includes('how many days')) {
-      reply = `Here is your current leave balance:\n• Casual Leave: ${casualBalance ? casualBalance.allocated - casualBalance.used : 10} days available\n• Sick Leave: ${sickBalance ? sickBalance.allocated - sickBalance.used : 14} days available\n• Annual Leave: ${annualBalance ? annualBalance.allocated - annualBalance.used : 14} days available`;
+      const availCasual = casualBalance
+        ? casualBalance.allocated + (casualBalance.carried || 0) - casualBalance.used - (casualBalance.pending || 0)
+        : 10;
+      const availSick = sickBalance
+        ? sickBalance.allocated + (sickBalance.carried || 0) - sickBalance.used - (sickBalance.pending || 0)
+        : 14;
+      const availAnnual = annualBalance
+        ? annualBalance.allocated + (annualBalance.carried || 0) - annualBalance.used - (annualBalance.pending || 0)
+        : 14;
+      reply = `Here is your current leave balance:\n• Casual Leave: ${availCasual} days available\n• Sick Leave: ${availSick} days available\n• Annual Leave: ${availAnnual} days available`;
     } else if (query.includes('break') || query.includes('timer') || query.includes('alert')) {
       reply = `The ZenHR Work Timer tracks your active time and breaks. If your cumulative break time exceeds 60 minutes in a single shift, a real-time overstay notification is broadcast to your Team Lead and Department Manager.`;
     } else if (

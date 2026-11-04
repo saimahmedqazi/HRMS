@@ -66,9 +66,8 @@ export class BulkImportService {
     const seenEmails = new Set<string>();
     const seenCodes = new Set<string>();
 
-    // Fetch existing users and codes for duplicate checking
+    // Fetch existing users globally (User.email is @unique across platform) and company employee codes
     const existingUsers = await this.prisma.user.findMany({
-      where: { companyId },
       select: { email: true },
     });
     const existingEmails = new Set(existingUsers.map((u) => u.email.toLowerCase()));
@@ -241,6 +240,7 @@ export class BulkImportService {
               passwordHash: defaultPasswordHash,
               role: UserRole.EMPLOYEE,
               dataScope: DataScope.SELF,
+              isEmailVerified: true,
             },
           });
 

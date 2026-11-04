@@ -261,7 +261,7 @@ export class AnalyticsService {
       where: { companyId, deletedAt: null },
       include: {
         _count: {
-          select: { employees: true },
+          select: { employees: { where: { deletedAt: null } } },
         },
       },
     });
