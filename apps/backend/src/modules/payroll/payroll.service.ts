@@ -363,7 +363,12 @@ export class PayrollService {
     if (filter?.month) where.month = filter.month;
     if (filter?.year) where.year = filter.year;
 
-    if (user.role === UserRole.EMPLOYEE) {
+    const isPayrollAdmin =
+      user.role === UserRole.COMPANY_ADMIN ||
+      user.role === UserRole.HR_MANAGER ||
+      user.role === UserRole.SUPER_ADMIN;
+
+    if (!isPayrollAdmin) {
       const emp = await this.prisma.employee.findFirst({
         where: { companyId, userId: user.id },
       });
@@ -411,7 +416,12 @@ export class PayrollService {
       throw new NotFoundException('Payslip not found.');
     }
 
-    if (user.role === UserRole.EMPLOYEE && payslip.employee.userId !== user.id) {
+    const isPayrollAdmin =
+      user.role === UserRole.COMPANY_ADMIN ||
+      user.role === UserRole.HR_MANAGER ||
+      user.role === UserRole.SUPER_ADMIN;
+
+    if (!isPayrollAdmin && payslip.employee.userId !== user.id) {
       throw new ForbiddenException('You cannot access another employee payslip.');
     }
 

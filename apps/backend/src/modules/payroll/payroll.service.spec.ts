@@ -158,4 +158,41 @@ describe('PayrollService', () => {
       expect(summary.individualPayslips).toBeUndefined(); // Zero leakage of individual rows
     });
   });
+
+  describe('getPayslips & getPayslipById (Individual Salary Privacy)', () => {
+    it('should restrict TEAM_LEAD and DEPARTMENT_MANAGER to their own payslips in getPayslips', async () => {
+      prisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-lead-1', userId: 'user-lead-1' });
+      prisma.payslip.findMany.mockResolvedValueOnce([]);
+
+      await service.getPayslips(
+        mockCompanyId,
+        { id: 'user-lead-1', role: UserRole.TEAM_LEAD },
+        { employeeId: 'emp-other-99' },
+      );
+
+      expect(prisma.payslip.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            companyId: mockCompanyId,
+            employeeId: 'emp-lead-1',
+          }),
+        }),
+      );
+    });
+
+    it('should forbid DEPARTMENT_MANAGER from viewing another employee payslip by ID', async () => {
+      prisma.payslip.findFirst.mockResolvedValueOnce({
+        id: 'ps-other',
+        companyId: mockCompanyId,
+        employee: { id: 'emp-other', userId: 'user-other' },
+      });
+
+      await expect(
+        service.getPayslipById(mockCompanyId, 'ps-other', {
+          id: 'user-mgr',
+          role: UserRole.DEPARTMENT_MANAGER,
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
 });
