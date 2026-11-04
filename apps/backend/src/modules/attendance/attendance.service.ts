@@ -313,8 +313,17 @@ export class AttendanceService {
 
     const whereClause: any = {
       companyId,
-      ...(scopeFilter.id ? { employeeId: scopeFilter.id } : {}),
       ...(filter.employeeId ? { employeeId: filter.employeeId } : {}),
+      ...(scopeFilter.id ? { employeeId: scopeFilter.id } : {}),
+      ...(scopeFilter.departmentId || scopeFilter.teamId || filter.departmentId
+        ? {
+            employee: {
+              ...(filter.departmentId ? { departmentId: filter.departmentId } : {}),
+              ...(scopeFilter.departmentId ? { departmentId: scopeFilter.departmentId } : {}),
+              ...(scopeFilter.teamId ? { teamId: scopeFilter.teamId } : {}),
+            },
+          }
+        : {}),
       ...(filter.status ? { status: filter.status } : {}),
       ...(filter.startDate || filter.endDate
         ? {

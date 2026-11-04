@@ -76,11 +76,11 @@ export class EmployeesService {
     const whereClause: any = {
       companyId,
       deletedAt: null,
+      ...(query.departmentId ? { departmentId: query.departmentId } : {}),
+      ...(query.teamId ? { teamId: query.teamId } : {}),
       ...(scopeFilter.departmentId ? { departmentId: scopeFilter.departmentId } : {}),
       ...(scopeFilter.teamId ? { teamId: scopeFilter.teamId } : {}),
       ...(scopeFilter.id ? { id: scopeFilter.id } : {}),
-      ...(query.departmentId ? { departmentId: query.departmentId } : {}),
-      ...(query.teamId ? { teamId: query.teamId } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...(query.search
         ? {

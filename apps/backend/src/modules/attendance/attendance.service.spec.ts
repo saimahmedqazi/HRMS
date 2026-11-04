@@ -212,4 +212,28 @@ describe('AttendanceService', () => {
       expect(mockPrisma.notification.create).toHaveBeenCalled();
     });
   });
+
+  describe('listAttendanceRecords (Data Scope Enforcement)', () => {
+    it('should prevent EMPLOYEE from overriding SELF scope via filter.employeeId', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({
+        id: 'emp-self-1',
+        departmentId: 'dept-1',
+        teamId: 'team-1',
+      });
+      mockPrisma.attendanceRecord.findMany.mockResolvedValueOnce([]);
+
+      await service.listAttendanceRecords(mockEmployeeUser, {
+        employeeId: 'emp-other-999',
+      });
+
+      expect(mockPrisma.attendanceRecord.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            companyId: 'comp-1',
+            employeeId: 'emp-self-1',
+          }),
+        }),
+      );
+    });
+  });
 });
