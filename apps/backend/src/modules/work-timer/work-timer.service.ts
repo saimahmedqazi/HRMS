@@ -210,6 +210,12 @@ export class WorkTimerService {
             { role: UserRole.COMPANY_ADMIN },
             { id: employee.department?.managerId || 'none' },
             { id: employee.team?.leadId || 'none' },
+            ...(employee.department?.managerId
+              ? [{ employee: { id: employee.department.managerId } }]
+              : []),
+            ...(employee.team?.leadId
+              ? [{ employee: { id: employee.team.leadId } }]
+              : []),
           ],
         },
         select: { id: true, email: true },
@@ -274,19 +280,24 @@ export class WorkTimerService {
     const now = new Date();
     // Close any open break if stopped while paused
     const openBreak = timer.breaks.find((b) => b.endedAt === null);
+    let closedBreakDuration = 0;
     if (openBreak) {
+      closedBreakDuration = Math.round((now.getTime() - openBreak.startedAt.getTime()) / 60000);
       await this.prisma.timerBreak.update({
         where: { id: openBreak.id },
         data: {
           endedAt: now,
-          durationMin: Math.round((now.getTime() - openBreak.startedAt.getTime()) / 60000),
+          durationMin: closedBreakDuration,
         },
       });
     }
 
     // Calculate total duration from startedAt to now minus total break duration
     const totalElapsedMinutes = Math.round((now.getTime() - timer.startedAt.getTime()) / 60000);
-    const totalBreakMinutes = timer.breaks.reduce((sum, b) => sum + (b.durationMin || 0), 0);
+    const totalBreakMinutes =
+      timer.breaks
+        .filter((b) => b.endedAt !== null)
+        .reduce((sum, b) => sum + (b.durationMin || 0), 0) + closedBreakDuration;
     const workMinutes = Math.max(0, totalElapsedMinutes - totalBreakMinutes);
 
     const updatedTimer = await this.prisma.workTimerEntry.update({

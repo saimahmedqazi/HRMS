@@ -175,5 +175,33 @@ describe('WorkTimerService', () => {
         }),
       );
     });
+
+    it('should deduct open break duration when stopping a PAUSED timer', async () => {
+      const now = Date.now();
+      const startedAt = new Date(now - 120 * 60000); // 120m ago
+      const openBreakStart = new Date(now - 30 * 60000); // paused 30m ago
+      mockPrisma.company.findUnique.mockResolvedValueOnce({
+        subscriptionTier: SubscriptionTier.PREMIUM,
+      });
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({
+        id: 'emp-1',
+        companyId: 'comp-premium',
+        shifts: [],
+      });
+      mockPrisma.workTimerEntry.findFirst.mockResolvedValueOnce({
+        id: 'timer-1',
+        startedAt,
+        status: TimerStatus.PAUSED,
+        breaks: [{ id: 'b-open', startedAt: openBreakStart, endedAt: null, durationMin: null }],
+      });
+      mockPrisma.timerBreak.update.mockResolvedValueOnce({});
+      mockPrisma.workTimerEntry.update.mockImplementationOnce((args: any) =>
+        Promise.resolve({ id: 'timer-1', ...args.data }),
+      );
+      mockPrisma.attendanceRecord.upsert.mockResolvedValueOnce({});
+
+      const result = await service.stopTimer(mockUser);
+      expect(result.totalMinutes).toBe(90); // 120m elapsed - 30m open break = 90m work
+    });
   });
 });
