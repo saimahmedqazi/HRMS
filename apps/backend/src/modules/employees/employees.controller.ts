@@ -152,6 +152,8 @@ export class EmployeesController {
     UserRole.SUPER_ADMIN,
     UserRole.COMPANY_ADMIN,
     UserRole.HR_MANAGER,
+    UserRole.DEPARTMENT_MANAGER,
+    UserRole.TEAM_LEAD,
     UserRole.EMPLOYEE,
   )
   async addEmergencyContact(
@@ -169,6 +171,8 @@ export class EmployeesController {
     UserRole.SUPER_ADMIN,
     UserRole.COMPANY_ADMIN,
     UserRole.HR_MANAGER,
+    UserRole.DEPARTMENT_MANAGER,
+    UserRole.TEAM_LEAD,
     UserRole.EMPLOYEE,
   )
   async deleteEmergencyContact(
@@ -187,6 +191,8 @@ export class EmployeesController {
     UserRole.SUPER_ADMIN,
     UserRole.COMPANY_ADMIN,
     UserRole.HR_MANAGER,
+    UserRole.DEPARTMENT_MANAGER,
+    UserRole.TEAM_LEAD,
     UserRole.EMPLOYEE,
   )
   async uploadAvatar(
@@ -206,6 +212,8 @@ export class EmployeesController {
     UserRole.SUPER_ADMIN,
     UserRole.COMPANY_ADMIN,
     UserRole.HR_MANAGER,
+    UserRole.DEPARTMENT_MANAGER,
+    UserRole.TEAM_LEAD,
     UserRole.EMPLOYEE,
   )
   async uploadDocument(

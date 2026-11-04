@@ -29,7 +29,7 @@ export class DesignationsService {
       where: { companyId },
       include: {
         _count: {
-          select: { employees: true },
+          select: { employees: { where: { deletedAt: null } } },
         },
       },
       orderBy: { name: 'asc' },
@@ -43,7 +43,7 @@ export class DesignationsService {
       where: { id, companyId },
       include: {
         _count: {
-          select: { employees: true },
+          select: { employees: { where: { deletedAt: null } } },
         },
       },
     });

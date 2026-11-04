@@ -37,8 +37,8 @@ export class DepartmentsService {
         },
         _count: {
           select: {
-            employees: true,
-            teams: true,
+            employees: { where: { deletedAt: null } },
+            teams: { where: { deletedAt: null } },
           },
         },
       },
@@ -62,7 +62,7 @@ export class DepartmentsService {
             id: true,
             name: true,
             leadId: true,
-            _count: { select: { employees: true } },
+            _count: { select: { employees: { where: { deletedAt: null } } } },
           },
         },
         employees: {
@@ -79,8 +79,8 @@ export class DepartmentsService {
         },
         _count: {
           select: {
-            employees: true,
-            teams: true,
+            employees: { where: { deletedAt: null } },
+            teams: { where: { deletedAt: null } },
           },
         },
       },
@@ -191,9 +191,18 @@ export class DepartmentsService {
       );
     }
 
+    if (department._count.teams > 0) {
+      throw new BadRequestException(
+        `Cannot delete department with ${department._count.teams} active team(s). Please delete or reassign them first.`,
+      );
+    }
+
     return this.prisma.department.update({
       where: { id },
-      data: { deletedAt: new Date() },
+      data: {
+        deletedAt: new Date(),
+        ...(department.name ? { name: `${department.name}_deleted_${Date.now()}` } : {}),
+      },
     });
   }
 }

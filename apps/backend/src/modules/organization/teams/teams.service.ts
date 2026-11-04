@@ -34,7 +34,7 @@ export class TeamsService {
       include: {
         department: { select: { id: true, name: true } },
         _count: {
-          select: { employees: true },
+          select: { employees: { where: { deletedAt: null } } },
         },
       },
       orderBy: { name: 'asc' },
@@ -61,7 +61,7 @@ export class TeamsService {
           },
         },
         _count: {
-          select: { employees: true },
+          select: { employees: { where: { deletedAt: null } } },
         },
       },
     });
@@ -186,7 +186,10 @@ export class TeamsService {
 
     return this.prisma.team.update({
       where: { id },
-      data: { deletedAt: new Date() },
+      data: {
+        deletedAt: new Date(),
+        ...(team.name ? { name: `${team.name}_deleted_${Date.now()}` } : {}),
+      },
     });
   }
 }

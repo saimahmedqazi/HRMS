@@ -87,9 +87,19 @@ describe('DepartmentsService', () => {
       await expect(service.deleteDepartment('dept-1', mockUser)).rejects.toThrow(BadRequestException);
     });
 
+    it('should throw BadRequestException if department still has active teams', async () => {
+      mockPrisma.department.findFirst.mockResolvedValueOnce({
+        id: 'dept-1',
+        _count: { employees: 0, teams: 2 },
+      });
+
+      await expect(service.deleteDepartment('dept-1', mockUser)).rejects.toThrow(BadRequestException);
+    });
+
     it('should soft delete department when no active employees are assigned', async () => {
       mockPrisma.department.findFirst.mockResolvedValueOnce({
         id: 'dept-empty',
+        name: 'Legacy Dept',
         _count: { employees: 0, teams: 0 },
       });
       mockPrisma.department.update.mockResolvedValueOnce({ id: 'dept-empty', deletedAt: new Date() });
@@ -99,7 +109,10 @@ describe('DepartmentsService', () => {
       expect(mockPrisma.department.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'dept-empty' },
-          data: expect.objectContaining({ deletedAt: expect.any(Date) }),
+          data: expect.objectContaining({
+            deletedAt: expect.any(Date),
+            name: expect.stringContaining('Legacy Dept_deleted_'),
+          }),
         }),
       );
     });

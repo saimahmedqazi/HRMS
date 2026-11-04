@@ -287,6 +287,22 @@ describe('EmployeesService', () => {
         service.updateEmployee('emp-1', { reportingManagerId: 'emp-1' }, mockAdminUser),
       ).rejects.toThrow(BadRequestException);
     });
+
+    it('should restrict TEAM_LEAD from updating another employee profile or sensitive fields', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({
+        id: 'emp-other',
+        userId: 'user-other',
+        companyId: 'comp-1',
+      });
+
+      await expect(
+        service.updateEmployee(
+          'emp-other',
+          { salary: 999999 },
+          { id: 'user-lead', email: 'lead@acme.com', role: UserRole.TEAM_LEAD, companyId: 'comp-1' },
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
   });
 
   describe('uploadAvatar', () => {

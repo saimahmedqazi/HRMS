@@ -372,12 +372,17 @@ export class EmployeesService {
     });
     if (!employee) throw new NotFoundException('Employee not found');
 
-    // Self update restrictions
-    if (user.role === UserRole.EMPLOYEE) {
+    const isHrOrAdmin =
+      user.role === UserRole.SUPER_ADMIN ||
+      user.role === UserRole.COMPANY_ADMIN ||
+      user.role === UserRole.HR_MANAGER;
+
+    // Self update restrictions for non-HR/Admin roles
+    if (!isHrOrAdmin) {
       if (employee.userId !== userId) {
         throw new ForbiddenException('You can only update your own profile');
       }
-      // Employees can only update personal contact info and avatar
+      // Non-HR/Admin roles can only update personal contact info and avatar
       return this.prisma.employee.update({
         where: { id },
         data: {
@@ -388,6 +393,28 @@ export class EmployeesService {
           profilePictureUrl: dto.profilePictureUrl,
         },
       });
+    }
+
+    // Validate department, designation, team belong to company when provided
+    if (dto.departmentId) {
+      const dept = await this.prisma.department.findFirst({
+        where: { id: dto.departmentId, companyId, deletedAt: null },
+      });
+      if (!dept) throw new BadRequestException('Invalid department ID for this organization');
+    }
+
+    if (dto.designationId) {
+      const desig = await this.prisma.designation.findFirst({
+        where: { id: dto.designationId, companyId },
+      });
+      if (!desig) throw new BadRequestException('Invalid designation ID for this organization');
+    }
+
+    if (dto.teamId) {
+      const team = await this.prisma.team.findFirst({
+        where: { id: dto.teamId, companyId, deletedAt: null },
+      });
+      if (!team) throw new BadRequestException('Invalid team ID for this organization');
     }
 
     // Validate reporting manager doesn't create circular reference
@@ -568,7 +595,12 @@ export class EmployeesService {
     });
     if (!employee) throw new NotFoundException('Employee not found');
 
-    if (user.role === UserRole.EMPLOYEE && employee.userId !== userId) {
+    const isHrOrAdmin =
+      user.role === UserRole.SUPER_ADMIN ||
+      user.role === UserRole.COMPANY_ADMIN ||
+      user.role === UserRole.HR_MANAGER;
+
+    if (!isHrOrAdmin && employee.userId !== userId) {
       throw new ForbiddenException('You can only manage your own emergency contacts');
     }
 
@@ -597,7 +629,12 @@ export class EmployeesService {
     });
     if (!employee) throw new NotFoundException('Employee not found');
 
-    if (user.role === UserRole.EMPLOYEE && employee.userId !== userId) {
+    const isHrOrAdmin =
+      user.role === UserRole.SUPER_ADMIN ||
+      user.role === UserRole.COMPANY_ADMIN ||
+      user.role === UserRole.HR_MANAGER;
+
+    if (!isHrOrAdmin && employee.userId !== userId) {
       throw new ForbiddenException('You can only manage your own emergency contacts');
     }
 
@@ -625,7 +662,12 @@ export class EmployeesService {
     });
     if (!employee) throw new NotFoundException('Employee not found');
 
-    if (user.role === UserRole.EMPLOYEE && employee.userId !== userId) {
+    const isHrOrAdmin =
+      user.role === UserRole.SUPER_ADMIN ||
+      user.role === UserRole.COMPANY_ADMIN ||
+      user.role === UserRole.HR_MANAGER;
+
+    if (!isHrOrAdmin && employee.userId !== userId) {
       throw new ForbiddenException('You can only upload your own profile picture');
     }
 
@@ -661,7 +703,12 @@ export class EmployeesService {
     });
     if (!employee) throw new NotFoundException('Employee not found');
 
-    if (user.role === UserRole.EMPLOYEE && employee.userId !== userId) {
+    const isHrOrAdmin =
+      user.role === UserRole.SUPER_ADMIN ||
+      user.role === UserRole.COMPANY_ADMIN ||
+      user.role === UserRole.HR_MANAGER;
+
+    if (!isHrOrAdmin && employee.userId !== userId) {
       throw new ForbiddenException('You can only upload your own documents');
     }
 
