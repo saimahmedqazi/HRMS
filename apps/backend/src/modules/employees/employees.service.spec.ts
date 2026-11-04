@@ -231,6 +231,44 @@ describe('EmployeesService', () => {
         }),
       );
     });
+
+    it('should notify reportingManager using reportingManager.userId rather than employee id', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({
+        id: 'emp-1',
+        employeeCode: 'EMP-001',
+        firstName: 'Arthur',
+        lastName: 'Pendelton',
+        status: EmployeeStatus.ACTIVE,
+        userId: 'user-1',
+        user: { email: 'arthur@acme.com' },
+        reportingManager: {
+          id: 'emp-mgr-99',
+          userId: 'user-mgr-99',
+          user: { email: 'mgr@acme.com' },
+        },
+      });
+      mockPrisma.employee.update.mockResolvedValueOnce({
+        id: 'emp-1',
+        status: EmployeeStatus.SUSPENDED,
+      });
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+      mockPrisma.notification.create.mockResolvedValue({});
+      mockPrisma.user.update.mockResolvedValueOnce({});
+
+      await service.updateStatus(
+        'emp-1',
+        { status: EmployeeStatus.SUSPENDED, reason: 'Policy violation' },
+        mockAdminUser,
+      );
+
+      expect(mockPrisma.notification.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId: 'user-mgr-99',
+          }),
+        }),
+      );
+    });
   });
 
   describe('updateEmployee', () => {

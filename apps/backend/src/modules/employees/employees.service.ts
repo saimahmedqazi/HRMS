@@ -428,7 +428,7 @@ export class EmployeesService {
       where: { id, companyId, deletedAt: null },
       include: {
         user: true,
-        reportingManager: { select: { id: true, user: { select: { email: true } } } },
+        reportingManager: { select: { id: true, userId: true, user: { select: { email: true } } } },
       },
     });
 
@@ -479,11 +479,11 @@ export class EmployeesService {
     });
 
     // In-app notification to reporting manager if one exists
-    if (employee.reportingManager && employee.reportingManager.user) {
+    if (employee.reportingManager && employee.reportingManager.userId) {
       await this.prisma.notification.create({
         data: {
           companyId,
-          userId: employee.reportingManager.id,
+          userId: employee.reportingManager.userId,
           type: NotificationType.STATUS_CHANGED,
           title: `Reportee Status Update: ${employee.firstName} ${employee.lastName}`,
           body: `${employee.firstName} ${employee.lastName}'s status changed to ${newStatus}.`,
