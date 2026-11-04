@@ -99,7 +99,7 @@ export class LeaveController {
     @CurrentUser() user: any,
     @Param('id') id: string,
   ) {
-    return this.leaveService.getLeaveRequestById(user.companyId, id);
+    return this.leaveService.getLeaveRequestById(user.companyId, id, user);
   }
 
   @Post('requests/:id/step1')

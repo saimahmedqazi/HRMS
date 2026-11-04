@@ -296,7 +296,11 @@ export class LeaveService {
       ceoUser?.id,
     );
 
-    // 9. Execute transaction: create request + update balance pending days
+    const isAutoApproved =
+      approvers.step1Status === ApprovalStatus.SKIPPED &&
+      approvers.step2Status === ApprovalStatus.SKIPPED;
+
+    // 9. Execute transaction: create request + update balance pending/used days
     const leaveRequest = await this.prisma.$transaction(async (tx) => {
       const created = await tx.leaveRequest.create({
         data: {
@@ -308,17 +312,24 @@ export class LeaveService {
           totalDays,
           reason: dto.reason,
           medicalCertUrl,
-          status: LeaveStatus.PENDING,
+          status: isAutoApproved ? LeaveStatus.APPROVED : LeaveStatus.PENDING,
           step1ApproverId: approvers.step1ApproverId,
           step1Status: approvers.step1Status,
           step2ApproverId: approvers.step2ApproverId,
           step2Status: approvers.step2Status,
+          ...(isAutoApproved
+            ? {
+                finalStatus: ApprovalStatus.APPROVED,
+                finalApproverId: userId,
+                finalApprovedAt: new Date(),
+              }
+            : {}),
         },
         include: {
           leaveTypeSetting: true,
           employee: {
             include: {
-              user: true,
+              user: { select: { id: true, email: true, role: true } },
             },
           },
         },
@@ -326,9 +337,9 @@ export class LeaveService {
 
       await tx.leaveBalance.update({
         where: { id: balance.id },
-        data: {
-          pending: { increment: totalDays },
-        },
+        data: isAutoApproved
+          ? { used: { increment: totalDays } }
+          : { pending: { increment: totalDays } },
       });
 
       // In-app notification for Step 1 approver
@@ -388,7 +399,7 @@ export class LeaveService {
         leaveTypeSetting: true,
         employee: {
           include: {
-            user: true,
+            user: { select: { id: true, email: true, role: true } },
             department: true,
             team: true,
           },
@@ -401,14 +412,18 @@ export class LeaveService {
   /**
    * Get single leave request details.
    */
-  async getLeaveRequestById(companyId: string, id: string) {
+  async getLeaveRequestById(
+    companyId: string,
+    id: string,
+    user?: { id: string; role: UserRole },
+  ) {
     const request = await this.prisma.leaveRequest.findFirst({
       where: { id, companyId },
       include: {
         leaveTypeSetting: true,
         employee: {
           include: {
-            user: true,
+            user: { select: { id: true, email: true, role: true } },
             department: true,
             team: true,
           },
@@ -418,6 +433,14 @@ export class LeaveService {
 
     if (!request) {
       throw new NotFoundException('Leave request not found.');
+    }
+
+    if (
+      user?.role === UserRole.EMPLOYEE &&
+      request.employee?.userId &&
+      request.employee.userId !== user.id
+    ) {
+      throw new ForbiddenException('You can only view your own leave requests.');
     }
 
     return request;
@@ -578,7 +601,8 @@ export class LeaveService {
 
     if (
       request.status !== LeaveStatus.PENDING ||
-      request.step1Status !== ApprovalStatus.APPROVED ||
+      (request.step1Status !== ApprovalStatus.APPROVED &&
+        request.step1Status !== ApprovalStatus.SKIPPED) ||
       request.step2Status !== ApprovalStatus.PENDING
     ) {
       throw new BadRequestException('Step 2 approval is not pending for this request.');

@@ -467,7 +467,11 @@ export class PayrollService {
     year: number,
     user: { id: string; role: UserRole },
   ): Promise<{ buffer: Buffer; filename: string }> {
-    if (user.role !== UserRole.COMPANY_ADMIN && user.role !== UserRole.HR_MANAGER) {
+    if (
+      user.role !== UserRole.COMPANY_ADMIN &&
+      user.role !== UserRole.HR_MANAGER &&
+      user.role !== UserRole.SUPER_ADMIN
+    ) {
       throw new ForbiddenException('Only HR Managers and Company Admins can export bulk payslips.');
     }
 

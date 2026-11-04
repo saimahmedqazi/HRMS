@@ -373,4 +373,22 @@ describe('LeaveService', () => {
       expect(result.status).toBe(LeaveStatus.CANCELLED);
     });
   });
+
+  describe('getLeaveRequestById', () => {
+    it('should forbid an EMPLOYEE from viewing another employee leave request', async () => {
+      prisma.leaveRequest.findFirst.mockResolvedValue({
+        id: 'req-other',
+        companyId: mockCompanyId,
+        employeeId: 'emp-other',
+        employee: { userId: 'user-other' },
+      });
+
+      await expect(
+        service.getLeaveRequestById(mockCompanyId, 'req-other', {
+          id: mockUserId,
+          role: UserRole.EMPLOYEE,
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
 });

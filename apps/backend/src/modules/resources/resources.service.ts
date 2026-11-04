@@ -59,7 +59,7 @@ export class ResourcesService {
       include: {
         requestedBy: {
           include: {
-            user: true,
+            user: { select: { id: true, email: true, role: true } },
             department: true,
           },
         },
@@ -145,10 +145,19 @@ export class ResourcesService {
       userRole === UserRole.COMPANY_ADMIN ||
       userRole === UserRole.HR_MANAGER ||
       userRole === UserRole.DEPARTMENT_MANAGER ||
+      userRole === UserRole.TEAM_LEAD ||
       request.step1ApproverId === userId;
 
     if (!isAuthorized) {
       throw new ForbiddenException('Not authorized to approve this resource request.');
+    }
+
+    if (
+      (userRole === UserRole.DEPARTMENT_MANAGER || userRole === UserRole.TEAM_LEAD) &&
+      request.requestedBy?.userId &&
+      request.requestedBy.userId === userId
+    ) {
+      throw new ForbiddenException('You cannot approve your own resource request.');
     }
 
     const targetCompanyId = companyId || request.companyId;

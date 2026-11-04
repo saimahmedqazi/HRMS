@@ -427,6 +427,10 @@ export class AttendanceService {
     const companyId = this.getEffectiveCompanyId(user);
     const userId = (user.id || user.sub)!;
 
+    if (new Date(dto.endDate) < new Date(dto.startDate)) {
+      throw new BadRequestException('End date cannot be earlier than start date');
+    }
+
     const employee = await this.prisma.employee.findFirst({
       where: { userId, companyId, deletedAt: null },
     });
@@ -479,6 +483,9 @@ export class AttendanceService {
       where: { id, companyId },
     });
     if (!permission) throw new NotFoundException('Permission request not found');
+    if (permission.status && permission.status !== RemoteWorkStatus.PENDING) {
+      throw new BadRequestException('Permission request is no longer pending');
+    }
 
     return this.prisma.remoteWorkPermission.update({
       where: { id },
@@ -497,6 +504,9 @@ export class AttendanceService {
       where: { id, companyId },
     });
     if (!permission) throw new NotFoundException('Permission request not found');
+    if (permission.status && permission.status !== RemoteWorkStatus.PENDING) {
+      throw new BadRequestException('Permission request is no longer pending');
+    }
 
     return this.prisma.remoteWorkPermission.update({
       where: { id },

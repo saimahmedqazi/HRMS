@@ -137,6 +137,28 @@ describe('ResourcesService', () => {
 
       expect(result.status).toBe(ResourceRequestStatus.REJECTED);
     });
+
+    it('should prevent a DEPARTMENT_MANAGER from self-approving their own resource request', async () => {
+      const mockReq = {
+        id: 'res-self',
+        companyId: mockCompanyId,
+        status: ResourceRequestStatus.PENDING,
+        resourceType: 'Laptop',
+        step1ApproverId: 'mgr-user-id',
+        requestedBy: { userId: 'mgr-user-id' },
+      };
+      prisma.resourceRequest.findFirst.mockResolvedValue(mockReq);
+
+      await expect(
+        service.approveResourceRequest(
+          mockCompanyId,
+          'res-self',
+          'mgr-user-id',
+          UserRole.DEPARTMENT_MANAGER,
+          { decision: 'APPROVE', notes: 'Self approved' },
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
   });
 
   describe('fulfillResourceRequest', () => {
