@@ -83,9 +83,19 @@ export class AuthController {
   async verify2faLogin(
     @Body('tempToken') tempToken: string,
     @Body('code') code: string,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const result = await this.authService.verify2faLogin(tempToken, code);
+    const rawIp =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+      (req.headers['x-real-ip'] as string)?.trim() ||
+      req.ip ||
+      req.socket.remoteAddress ||
+      '127.0.0.1';
+    const ip = rawIp.replace(/^::ffff:/, '');
+    const userAgent = req.headers['user-agent'] || 'Unknown';
+
+    const result = await this.authService.verify2faLogin(tempToken, code, ip, userAgent);
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
     return { user: result.user };
   }

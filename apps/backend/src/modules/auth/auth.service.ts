@@ -152,8 +152,12 @@ export class AuthService {
       include: { company: true, employee: true },
     });
 
-    if (!user) {
+    if (!user || user.deletedAt) {
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    if (user.company && user.company.status === CompanyStatus.SUSPENDED) {
+      throw new UnauthorizedException('Your organization account is currently suspended.');
     }
 
     // Check account lockout
@@ -273,7 +277,12 @@ export class AuthService {
     };
   }
 
-  async verify2faLogin(tempToken: string, code: string): Promise<TokenResponse> {
+  async verify2faLogin(
+    tempToken: string,
+    code: string,
+    ip = '127.0.0.1',
+    userAgent = 'Unknown',
+  ): Promise<TokenResponse> {
     let payload: { sub: string; is2faTemp?: boolean };
     try {
       payload = this.jwtService.verify(tempToken, {
@@ -292,7 +301,7 @@ export class AuthService {
       include: { company: true, employee: true },
     });
 
-    if (!user || !user.twoFaSecret) {
+    if (!user || user.deletedAt || !user.twoFaSecret) {
       throw new UnauthorizedException('User not found or 2FA not enabled');
     }
 
@@ -307,6 +316,31 @@ export class AuthService {
         throw new UnauthorizedException('Invalid two-factor code');
       }
     }
+
+    const cleanIp = (ip || '127.0.0.1').replace(/^::ffff:/, '');
+    const geo = geoip.lookup(cleanIp);
+    const lat = geo?.ll?.[0] ?? 24.8607;
+    const lng = geo?.ll?.[1] ?? 67.0011;
+    const resolvedCity =
+      geo?.city ||
+      (cleanIp === '127.0.0.1' || cleanIp === '::1'
+        ? 'Local Office Network'
+        : 'Verified Network');
+    const resolvedCountryCode = geo?.country || 'PK';
+    const countryWithCoords = `${resolvedCountryCode} | ${Number(lat).toFixed(4)}, ${Number(lng).toFixed(4)}`;
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        lastLoginAt: new Date(),
+        lastLoginIp: cleanIp,
+        lastLoginUserAgent: userAgent.slice(0, 255),
+        lastLoginCity: resolvedCity,
+        lastLoginCountry: countryWithCoords,
+      },
+    });
 
     const tokens = await this.generateTokens(user.id, user.email, user.role, user.companyId);
     await this.storeRefreshTokenHash(user.id, tokens.refreshToken);
@@ -340,7 +374,7 @@ export class AuthService {
       where: { id: payload.sub },
     });
 
-    if (!user || !user.refreshTokenHash) {
+    if (!user || user.deletedAt || !user.refreshTokenHash || (user.lockedUntil && user.lockedUntil > new Date())) {
       throw new UnauthorizedException('Session expired');
     }
 
@@ -413,13 +447,18 @@ export class AuthService {
         passwordResetToken: null,
         passwordResetExpiry: null,
         refreshTokenHash: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
       },
     });
   }
 
   async verifyEmail(token: string): Promise<void> {
     const user = await this.prisma.user.findFirst({
-      where: { emailVerifyToken: token },
+      where: {
+        emailVerifyToken: token,
+        OR: [{ emailVerifyExpiry: null }, { emailVerifyExpiry: { gt: new Date() } }],
+      },
     });
 
     if (!user) {
@@ -431,6 +470,7 @@ export class AuthService {
       data: {
         isEmailVerified: true,
         emailVerifyToken: null,
+        emailVerifyExpiry: null,
       },
     });
   }

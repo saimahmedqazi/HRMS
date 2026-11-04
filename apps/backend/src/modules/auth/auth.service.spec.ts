@@ -219,6 +219,23 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('accessToken');
       expect((result as any).user.email).toBe('ok@test.com');
     });
+
+    it('should reject login if tenant company is SUSPENDED', async () => {
+      const passwordHash = await bcrypt.hash('CorrectPassword123', 10);
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-susp',
+        email: 'susp@test.com',
+        passwordHash,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        companyId: 'comp-susp',
+        company: { name: 'Suspended Corp', status: 'SUSPENDED' },
+      });
+
+      await expect(
+        service.login({ email: 'susp@test.com', password: 'CorrectPassword123' }, '127.0.0.1', 'agent'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
   });
 
   describe('logout', () => {
