@@ -6,7 +6,7 @@ import { DataScopeService } from '../../common/services/data-scope.service';
 import { MailService } from '../../common/mail/mail.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
-import { ConflictException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { ConflictException, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserRole, EmployeeStatus, AuditAction } from '@prisma/client';
 
 describe('EmployeesService', () => {
@@ -55,6 +55,11 @@ describe('EmployeesService', () => {
     employeeDocument: {
       create: jest.fn(),
       findMany: jest.fn(),
+      findFirst: jest.fn(),
+      delete: jest.fn(),
+    },
+    emergencyContact: {
+      create: jest.fn(),
       findFirst: jest.fn(),
       delete: jest.fn(),
     },
@@ -307,6 +312,22 @@ describe('EmployeesService', () => {
       const result = await service.uploadAvatar('emp-1', mockFile, mockAdminUser);
       expect(result.profilePictureUrl).toContain('avatar-1.png');
       expect(mockStorageService.uploadFile).toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteEmergencyContact', () => {
+    it('should reject deleting an emergency contact that does not belong to the employee', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({
+        id: 'emp-1',
+        companyId: 'comp-1',
+        userId: 'user-1',
+      });
+      mockPrisma.emergencyContact.findFirst.mockResolvedValueOnce(null);
+
+      await expect(
+        service.deleteEmergencyContact('emp-1', 'foreign-contact-id', mockAdminUser),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrisma.emergencyContact.delete).not.toHaveBeenCalled();
     });
   });
 });

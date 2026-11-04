@@ -601,6 +601,11 @@ export class EmployeesService {
       throw new ForbiddenException('You can only manage your own emergency contacts');
     }
 
+    const contact = await this.prisma.emergencyContact.findFirst({
+      where: { id: contactId, employeeId },
+    });
+    if (!contact) throw new NotFoundException('Emergency contact not found');
+
     return this.prisma.emergencyContact.delete({
       where: { id: contactId },
     });
