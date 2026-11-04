@@ -38,7 +38,11 @@ export class RolesGuard implements CanActivate {
       throw new ForbiddenException('Authentication required');
     }
 
-    const hasRole = requiredRoles.includes(user.role as UserRole);
+    const hasRole =
+      requiredRoles.includes(user.role as UserRole) ||
+      (user.role === UserRole.SUPER_ADMIN &&
+        Boolean(user.supportModeCompanyId) &&
+        requiredRoles.includes(UserRole.COMPANY_ADMIN));
 
     if (!hasRole) {
       throw new ForbiddenException(

@@ -31,7 +31,7 @@ export class CompaniesController {
   }
 
   @Patch('me')
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
   @ApiOperation({ summary: 'Update tenant company profile and settings' })
   async updateMyCompany(
     @CurrentUser() user: AuthenticatedUser,

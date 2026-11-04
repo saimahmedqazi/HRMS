@@ -63,4 +63,17 @@ describe('RolesGuard', () => {
     const context = createMockContext(undefined);
     expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
   });
+
+  it('should allow SUPER_ADMIN in active Support Mode to access COMPANY_ADMIN routes', () => {
+    jest.spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce([UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER]);
+
+    const context = createMockContext({
+      id: 'sa-1',
+      role: UserRole.SUPER_ADMIN,
+      supportModeCompanyId: 'comp-1',
+    });
+    expect(guard.canActivate(context)).toBe(true);
+  });
 });
