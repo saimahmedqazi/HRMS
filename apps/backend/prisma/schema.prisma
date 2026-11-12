@@ -196,6 +196,7 @@ model Company {
   resourceRequests    ResourceRequest[]
   subscriptions       Subscription[]
   notifications       Notification[]
+  bulkImportJobs       BulkImportJob[]
   auditLogs           AuditLog[]
   supportModeSessions SupportModeSession[]
   ipWhitelist         IpWhitelist[]
@@ -216,6 +217,7 @@ model User {
   passwordResetToken    String?
   passwordResetExpiry   DateTime?
   refreshTokenHash      String?
+  sessionVersion        Int       @default(0)
   failedLoginAttempts   Int       @default(0)
   lockedUntil           DateTime?
   lastLoginAt           DateTime?
@@ -239,6 +241,7 @@ model User {
   auditLogs             AuditLog[]
   supportModeSessions   SupportModeSession[]
   notifications         Notification[]
+  bulkImportJobs        BulkImportJob[]
 
   @@unique([companyId, id])
   @@index([companyId])
@@ -380,6 +383,38 @@ model Employee {
   @@index([teamId])
   @@index([reportingManagerId])
   @@map("employees")
+}
+
+enum BulkImportStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model BulkImportJob {
+  id                   String           @id @default(cuid())
+  companyId            String
+  submittedById        String
+  supportModeSessionId String?
+  status               BulkImportStatus @default(QUEUED)
+  preparedRows         Json?
+  totalRows            Int              @default(0)
+  cursor               Int              @default(0)
+  importedCount        Int              @default(0)
+  errors               Json             @default("[]")
+  failureReason        String?
+  createdAt            DateTime         @default(now())
+  finishedAt           DateTime?
+
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  submittedBy        User                @relation(fields: [submittedById], references: [id], onDelete: Cascade)
+  supportModeSession SupportModeSession? @relation(fields: [supportModeSessionId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([finishedAt])
+  @@index([companyId, submittedById])
+  @@map("bulk_import_jobs")
 }
 
 model EmergencyContact {
@@ -884,6 +919,7 @@ model SupportModeSession {
 
   superAdmin   User      @relation(fields: [superAdminId], references: [id])
   company      Company   @relation(fields: [companyId], references: [id])
+  bulkImportJobs BulkImportJob[]
 
   @@index([superAdminId])
   @@index([companyId])

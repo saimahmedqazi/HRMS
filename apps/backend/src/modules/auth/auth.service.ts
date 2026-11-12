@@ -24,7 +24,7 @@ import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { isInactiveAccount } from './account-state';
 import { decryptTotpSecret, encryptTotpSecret, isLegacyTotpSecret, parseTotpEncryptionKey } from './totp-secret';
-import { CompanyStatus, UserRole, DataScope, LeaveType, EmployeeStatus } from '@prisma/client';
+import { CompanyStatus, UserRole, DataScope, LeaveType, EmployeeStatus, Prisma } from '@prisma/client';
 
 export interface TokenResponse {
   accessToken: string;
@@ -133,8 +133,8 @@ export class AuthService {
       return { company, user };
     });
 
-    const tokens = await this.generateTokens(result.user.id, result.user.email, result.user.role, result.company.id);
-    await this.storeRefreshTokenHash(result.user.id, tokens.refreshToken);
+    const tokens = await this.generateTokens(result.user);
+    await this.storeRefreshTokenHash(result.user, tokens.refreshToken);
 
     return {
       accessToken: tokens.accessToken,
@@ -198,7 +198,7 @@ export class AuthService {
       if (!dto.twoFactorCode) {
         // Issue short-lived temp token (5 min) for 2FA verification step
         const tempToken = this.jwtService.sign(
-          { sub: user.id, is2faTemp: true },
+          { sub: user.id, is2faTemp: true, sessionVersion: user.sessionVersion },
           {
             secret: this.configService.getOrThrow<string>('app.jwt.accessSecret'),
             expiresIn: '5m',
@@ -224,7 +224,7 @@ export class AuthService {
     const { lastLoginIp, lastLoginCity, lastLoginCountry } = getLoginNetworkLocation(ip);
 
     const authenticated = await this.prisma.user.updateMany({
-      where: { id: user.id, deletedAt: null, OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] },
+      where: { id: user.id, sessionVersion: user.sessionVersion, deletedAt: null, OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] },
       data: {
         failedLoginAttempts: 0,
         lockedUntil: null,
@@ -239,8 +239,8 @@ export class AuthService {
       throw new UnauthorizedException('Account is temporarily unavailable for sign-in.');
     }
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role, user.companyId);
-    await this.storeRefreshTokenHash(user.id, tokens.refreshToken);
+    const tokens = await this.generateTokens(user);
+    await this.storeRefreshTokenHash(user, tokens.refreshToken);
 
     return {
       accessToken: tokens.accessToken,
@@ -263,7 +263,7 @@ export class AuthService {
     ip: string | null = null,
     userAgent = 'Unknown',
   ): Promise<TokenResponse> {
-    let payload: { sub: string; is2faTemp?: boolean };
+    let payload: { sub: string; is2faTemp?: boolean; sessionVersion?: number };
     try {
       payload = this.jwtService.verify(tempToken, {
         secret: this.configService.getOrThrow<string>('app.jwt.accessSecret'),
@@ -281,7 +281,8 @@ export class AuthService {
       include: { company: true, employee: true },
     });
 
-    if (!user || isInactiveAccount(user) || !user.twoFaEnabled || !user.twoFaSecret ||
+    if (!user || isInactiveAccount(user) || user.passwordHash === PASSWORD_SETUP_REQUIRED ||
+        (payload.sessionVersion ?? 0) !== user.sessionVersion || !user.twoFaEnabled || !user.twoFaSecret ||
         (user.lockedUntil && user.lockedUntil > new Date())) {
       throw new UnauthorizedException('User not found or 2FA not enabled');
     }
@@ -301,7 +302,7 @@ export class AuthService {
     const { lastLoginIp, lastLoginCity, lastLoginCountry } = getLoginNetworkLocation(ip);
 
     const authenticated = await this.prisma.user.updateMany({
-      where: { id: user.id, deletedAt: null, OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] },
+      where: { id: user.id, sessionVersion: user.sessionVersion, deletedAt: null, OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] },
       data: {
         failedLoginAttempts: 0,
         lockedUntil: null,
@@ -316,8 +317,8 @@ export class AuthService {
       throw new UnauthorizedException('Account is temporarily unavailable for sign-in.');
     }
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role, user.companyId);
-    await this.storeRefreshTokenHash(user.id, tokens.refreshToken);
+    const tokens = await this.generateTokens(user);
+    await this.storeRefreshTokenHash(user, tokens.refreshToken);
 
     return {
       accessToken: tokens.accessToken,
@@ -335,7 +336,7 @@ export class AuthService {
   }
 
   async refreshToken(oldRefreshToken: string): Promise<{ accessToken: string; refreshToken: string }> {
-    let payload: { sub: string };
+    let payload: { sub: string; sessionVersion?: number };
     try {
       payload = this.jwtService.verify(oldRefreshToken, {
         secret: this.configService.getOrThrow<string>('app.jwt.refreshSecret'),
@@ -349,14 +350,15 @@ export class AuthService {
       include: { company: { select: { status: true } }, employee: { select: { status: true, deletedAt: true } } },
     });
 
-    if (!user || isInactiveAccount(user) || user.refreshTokenHash !== this.hashRefreshToken(oldRefreshToken) ||
+    if (!user || isInactiveAccount(user) || user.passwordHash === PASSWORD_SETUP_REQUIRED ||
+        (payload.sessionVersion ?? 0) !== user.sessionVersion || user.refreshTokenHash !== this.hashRefreshToken(oldRefreshToken) ||
         (user.lockedUntil && user.lockedUntil > new Date())) {
       throw new UnauthorizedException('Session expired');
     }
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role, user.companyId);
+    const tokens = await this.generateTokens(user);
     const rotated = await this.prisma.user.updateMany({
-      where: { id: user.id, refreshTokenHash: user.refreshTokenHash, deletedAt: null },
+      where: { id: user.id, sessionVersion: user.sessionVersion, refreshTokenHash: user.refreshTokenHash, deletedAt: null },
       data: { refreshTokenHash: this.hashRefreshToken(tokens.refreshToken) },
     });
     if (rotated.count !== 1) {
@@ -426,6 +428,7 @@ export class AuthService {
         passwordResetToken: null,
         passwordResetExpiry: null,
         refreshTokenHash: null,
+        sessionVersion: { increment: 1 },
         failedLoginAttempts: 0,
         lockedUntil: null,
       },
@@ -665,11 +668,7 @@ export class AuthService {
   }
 
   private async generateTokens(
-    userId: string,
-    email: string,
-    role: UserRole,
-    companyId: string | null,
-    supportModeCompanyId?: string,
+    user: { id: string; email: string; role: UserRole; companyId: string | null; sessionVersion: number },
   ): Promise<{ accessToken: string; refreshToken: string }> {
     const accessSecret = this.configService.getOrThrow<string>('app.jwt.accessSecret');
     const refreshSecret = this.configService.getOrThrow<string>('app.jwt.refreshSecret');
@@ -677,11 +676,11 @@ export class AuthService {
     const refreshExpiresIn = this.configService.get<string>('app.jwt.refreshExpiresIn', '7d');
 
     const payload = {
-      sub: userId,
-      email,
-      role,
-      companyId,
-      ...(supportModeCompanyId ? { supportModeCompanyId } : {}),
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      companyId: user.companyId,
+      sessionVersion: user.sessionVersion,
     };
 
     const [accessToken, refreshToken] = await Promise.all([
@@ -690,7 +689,7 @@ export class AuthService {
         expiresIn: accessExpiresIn,
       }),
       this.jwtService.signAsync(
-        { sub: userId, jti: crypto.randomUUID() },
+        { sub: user.id, sessionVersion: user.sessionVersion, jti: crypto.randomUUID() },
         {
           secret: refreshSecret,
           expiresIn: refreshExpiresIn,
@@ -701,11 +700,18 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  private async storeRefreshTokenHash(userId: string, refreshToken: string): Promise<void> {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { refreshTokenHash: this.hashRefreshToken(refreshToken) },
-    });
+  private async storeRefreshTokenHash(user: { id: string; sessionVersion: number }, refreshToken: string): Promise<void> {
+    try {
+      await this.prisma.user.update({
+        where: { id: user.id, sessionVersion: user.sessionVersion, deletedAt: null },
+        data: { refreshTokenHash: this.hashRefreshToken(refreshToken) },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        throw new UnauthorizedException('Session expired');
+      }
+      throw error;
+    }
   }
 
   private hashRefreshToken(token: string): string {

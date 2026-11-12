@@ -68,6 +68,7 @@ export class AttendanceGateway implements OnGatewayConnection, OnGatewayDisconne
       const expiration = setTimeout(() => client.disconnect(), expiresIn);
       expiration.unref();
       client.once('disconnect', () => clearTimeout(expiration));
+      client.data.attendanceSession = payload;
 
       // Join tenant room and user room
       if (user.companyId) {
@@ -96,15 +97,42 @@ export class AttendanceGateway implements OnGatewayConnection, OnGatewayDisconne
     this.logger.debug(`Client disconnected: ${client.id}`);
   }
 
-  broadcastBreakAlert(companyId: string, recipientIds: string[]) {
-    if (!this.server || !recipientIds.length) return;
+  async broadcastBreakAlert(companyId: string, recipientIds: string[]) {
+    if (!recipientIds.length) return;
     // Clients reload notification details through the authenticated HTTP API.
-    this.server.to(recipientIds.map((id) => `attendance_${companyId}_${id}`)).emit('break_alert');
+    await this.emitToCurrentSessions(recipientIds.map((id) => `attendance_${companyId}_${id}`), 'break_alert');
   }
 
   // Emits unauthorized remote check-in exception to HR room
-  broadcastAttendanceException(companyId: string, payload: AttendanceExceptionPayload) {
+  async broadcastAttendanceException(companyId: string, payload: AttendanceExceptionPayload) {
+    await this.emitToCurrentSessions(`hr_${companyId}`, 'attendance_exception', payload);
+  }
+
+  private async emitToCurrentSessions(
+    rooms: string | string[],
+    event: 'break_alert' | 'attendance_exception',
+    ...args: [] | [AttendanceExceptionPayload]
+  ) {
     if (!this.server) return;
-    this.server.to(`hr_${companyId}`).emit('attendance_exception', payload);
+    try {
+      const sockets = await this.server.in(rooms).fetchSockets();
+      await Promise.all(sockets.map(async (socket) => {
+        const session: JwtPayload | undefined = socket.data.attendanceSession;
+        if (!session?.exp || session.exp * 1000 <= Date.now()) {
+          socket.disconnect();
+          return;
+        }
+
+        try {
+          await this.jwtStrategy.validate(session);
+        } catch {
+          socket.disconnect();
+          return;
+        }
+        socket.emit(event, ...args);
+      }));
+    } catch {
+      this.logger.warn(`Could not deliver ${event} to attendance sessions.`);
+    }
   }
 }

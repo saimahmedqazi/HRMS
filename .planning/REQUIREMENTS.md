@@ -57,8 +57,8 @@
 - [ ] **PAY-03**: Department Manager can view own payslip plus a limited read-only summary of department payroll, while team payroll remains hidden from Team Leads.
 - [ ] **PAY-04**: Employees and Team Leads can view and download only their own payslips and salary revision history.
 - [ ] **BULK-01**: HR Manager can upload Excel (`.xlsx`) files for bulk employee onboarding with validation preview.
-- [ ] **BULK-02**: System processes bulk employee imports asynchronously via BullMQ worker to prevent HTTP request timeouts.
-- [ ] **BULK-03**: System generates downloadable error reports for failed rows in bulk imports while committing valid records.
+- [x] **BULK-02**: System processes bulk employee imports asynchronously via BullMQ worker to prevent HTTP request timeouts.
+- [x] **BULK-03**: System generates downloadable error reports for failed rows in bulk imports while committing valid records.
 
 ### Subscriptions, Stripe Billing & File Storage
 
@@ -148,8 +148,8 @@
 | PAY-03 | Phase 5 | Pending |
 | PAY-04 | Phase 5 | Pending |
 | BULK-01 | Phase 5 | Pending |
-| BULK-02 | Phase 5 | Pending |
-| BULK-03 | Phase 5 | Pending |
+| BULK-02 | Phase 5 | Verified locally with PostgreSQL and Redis |
+| BULK-03 | Phase 5 | Verified locally |
 | BILL-01 | Phase 6 | Pending |
 | BILL-02 | Phase 6 | Pending |
 | BILL-03 | Phase 6 | Pending |

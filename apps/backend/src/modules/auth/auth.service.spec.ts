@@ -256,7 +256,7 @@ describe('AuthService', () => {
     it('counts a failed second factor toward the same account lockout', async () => {
       mockJwtService.verify.mockReturnValueOnce({ sub: 'user-2fa', is2faTemp: true });
       mockPrisma.user.findUnique.mockResolvedValueOnce({
-        id: 'user-2fa', twoFaEnabled: true, twoFaSecret: 'JBSWY3DPEHPK3PXP', twoFaBackupCodes: [],
+        id: 'user-2fa', sessionVersion: 0, twoFaEnabled: true, twoFaSecret: 'JBSWY3DPEHPK3PXP', twoFaBackupCodes: [],
       });
       mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
 
@@ -264,6 +264,17 @@ describe('AuthService', () => {
       expect(mockPrisma.user.updateMany).toHaveBeenCalledWith(expect.objectContaining({
         data: { failedLoginAttempts: { increment: 1 } },
       }));
+      expect(mockJwtService.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('rejects a two-factor challenge issued before credential revocation', async () => {
+      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-2fa', is2faTemp: true, sessionVersion: 1 });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-2fa', sessionVersion: 2, twoFaEnabled: true, twoFaSecret: 'JBSWY3DPEHPK3PXP',
+      });
+
+      await expect(service.verify2faLogin('fixture-token', '123456')).rejects.toThrow(UnauthorizedException);
+      expect(mockPrisma.user.updateMany).not.toHaveBeenCalled();
       expect(mockJwtService.signAsync).not.toHaveBeenCalled();
     });
 
@@ -323,17 +334,18 @@ describe('AuthService', () => {
         email: 'fixture@example.test',
         companyId: 'tenant-1',
         role: UserRole.EMPLOYEE,
+        sessionVersion: 0,
         refreshTokenHash: fingerprint,
       });
       mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 });
 
       await expect(service.refreshToken(token)).resolves.toHaveProperty('refreshToken');
       expect(mockPrisma.user.updateMany).toHaveBeenCalledWith({
-        where: { id: 'user-1', refreshTokenHash: fingerprint, deletedAt: null },
+        where: { id: 'user-1', sessionVersion: 0, refreshTokenHash: fingerprint, deletedAt: null },
         data: { refreshTokenHash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) },
       });
       expect(mockJwtService.signAsync).toHaveBeenCalledWith(
-        { sub: 'user-1', jti: expect.any(String) },
+        { sub: 'user-1', sessionVersion: 0, jti: expect.any(String) },
         expect.objectContaining({ secret: 'test-refresh-secret' }),
       );
     });

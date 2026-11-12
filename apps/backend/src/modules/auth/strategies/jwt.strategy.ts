@@ -7,6 +7,7 @@ import { UserRole } from '@prisma/client';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { isInactiveAccount } from '../account-state';
+import { PASSWORD_SETUP_REQUIRED } from '../../../common/utils/password-policy';
 
 export interface JwtPayload {
   sub: string;
@@ -15,6 +16,7 @@ export interface JwtPayload {
   companyId: string | null;
   supportModeCompanyId?: string | null;
   sessionId?: string;
+  sessionVersion?: number;
   is2faTemp?: boolean;
   iat?: number;
   exp?: number;
@@ -51,6 +53,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         companyId: true,
         role: true,
         deletedAt: true,
+        sessionVersion: true,
+        passwordHash: true,
         company: { select: { status: true } },
         employee: { select: { status: true, deletedAt: true } },
       },
@@ -58,6 +62,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
 
     if (!user || isInactiveAccount(user)) {
       throw new UnauthorizedException('User account or company inactive or suspended');
+    }
+    if (user.passwordHash === PASSWORD_SETUP_REQUIRED || (payload.sessionVersion ?? 0) !== user.sessionVersion) {
+      throw new UnauthorizedException('Session expired');
     }
 
     const platformRole = user.role === UserRole.SUPER_ADMIN || user.role === UserRole.OPERATION_MANAGER;
@@ -92,6 +99,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       role: user.role,
       companyId: payload.supportModeCompanyId || user.companyId,
       supportModeCompanyId: payload.supportModeCompanyId,
+      ...(payload.supportModeCompanyId && { supportModeSessionId: payload.sessionId }),
+      sessionVersion: user.sessionVersion,
       iat: payload.iat,
       exp: payload.exp,
     };

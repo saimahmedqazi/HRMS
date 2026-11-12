@@ -8,6 +8,8 @@ export interface AuthenticatedUser {
   role: string;
   companyId?: string | null;
   supportModeCompanyId?: string | null;
+  supportModeSessionId?: string;
+  sessionVersion?: number;
   iat?: number;
   exp?: number;
 }

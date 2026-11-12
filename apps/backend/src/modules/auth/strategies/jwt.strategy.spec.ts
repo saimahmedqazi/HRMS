@@ -10,6 +10,7 @@ describe('access session validation', () => {
     companyId: 'tenant-1',
     role: UserRole.EMPLOYEE,
     deletedAt: null,
+    sessionVersion: 0,
     company: { status: CompanyStatus.ACTIVE },
     employee: { status: EmployeeStatus.ACTIVE, deletedAt: null },
   };
@@ -60,6 +61,13 @@ describe('access session validation', () => {
     await expect(strategy.validate(payload)).rejects.toThrow('permissions have changed');
   });
 
+  it('rejects previous access sessions and accepts the new version', async () => {
+    prisma.user.findUnique.mockResolvedValue({ ...user, sessionVersion: 1 });
+
+    await expect(strategy.validate(payload)).rejects.toThrow('Session expired');
+    await expect(strategy.validate({ ...payload, sessionVersion: 1 })).resolves.toMatchObject({ sessionVersion: 1 });
+  });
+
   it('requires an active Support Mode record for the selected tenant', async () => {
     prisma.user.findUnique.mockResolvedValue({
       ...user, companyId: null, company: null, employee: null, role: UserRole.SUPER_ADMIN,
@@ -76,6 +84,7 @@ describe('access session validation', () => {
     await expect(strategy.validate(support)).resolves.toMatchObject({
       companyId: user.companyId,
       supportModeCompanyId: user.companyId,
+      supportModeSessionId: 'session-1',
     });
     expect(prisma.supportModeSession.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: {

@@ -118,7 +118,7 @@ export class WorkTimerService {
 
   private async deliverBreakAlert(companyId: string, alert: Awaited<ReturnType<WorkTimerService['recordBreakAlert']>>) {
     if (!alert) return;
-    this.gateway.broadcastBreakAlert(companyId, alert.recipients.map(({ id }) => id));
+    await this.gateway.broadcastBreakAlert(companyId, alert.recipients.map(({ id }) => id));
     const deliveries = await Promise.allSettled(alert.recipients.map(({ email }) =>
       this.mailService.sendMail({ to: email, subject: alert.title, text: alert.body }),
     ));

@@ -16,6 +16,7 @@ async function bootstrap(): Promise<void> {
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT', 4000);
+  const bindHost = configService.get<string>('API_BIND_HOST')?.trim();
   const frontendUrl = configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
   const apiPrefix = configService.get<string>('API_PREFIX', 'api/v1');
   const trustedProxyRanges = parseTrustedProxyRanges(configService.get<string>('TRUSTED_PROXY_CIDRS'));
@@ -94,7 +95,9 @@ async function bootstrap(): Promise<void> {
     },
   });
 
-  await app.listen(port);
+  app.enableShutdownHooks();
+  if (bindHost) await app.listen(port, bindHost);
+  else await app.listen(port);
   logger.log(`🚀 ZenHR API running on http://localhost:${port}/${apiPrefix}`);
   logger.log(`📚 Swagger docs at http://localhost:${port}/api/docs`);
 }

@@ -75,3 +75,7 @@ Progress: [██████████] 100%
 | 261112-t7i | Preserve optional organization links while enforcing tenant ownership | 2026-11-12 | — | Verified locally | [Plan and verification](quick/261112-t7i-preserve-optional-organization-links-whi/) |
 | 261112-tfv | Scope notification reads and read receipts to account company | 2026-11-12 | — | Verified locally | [Plan and verification](quick/261112-tfv-scope-notification-reads-and-read-receip/) |
 | 261112-tj5 | Remove shared bulk import credentials and restore the template download | 2026-11-12 | — | Verified locally | [Plan and verification](quick/261112-tj5-remove-shared-bulk-import-credentials-an/) |
+| 261112-tx9 | Revoke issued sessions on password reset and retire historical import credentials | 2026-11-12 | — | Verified locally | [Plan and verification](quick/261112-tx9-revoke-issued-sessions-on-password-reset/) |
+| 261112-u6o | Report failed bulk import rows and preserve worksheet row numbers | 2026-11-12 | — | Verified locally | [Plan and verification](quick/261112-u6o-report-failed-bulk-import-rows-and-prese/) |
+| 261112-ugl | Process employee imports in a background worker | 2026-11-13 | — | Worker verified locally | [Plan and verification](quick/261112-ugl-run-employee-imports-as-durable-bullmq-j/) |
+| 261113-2st | Document client GitHub download and local test handoff | 2026-11-13 | — | Demo seed verified locally | [Plan and verification](quick/261113-2st-document-client-github-download-and-loca/) |

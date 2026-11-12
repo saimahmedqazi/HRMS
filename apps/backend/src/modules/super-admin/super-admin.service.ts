@@ -175,6 +175,7 @@ export class SuperAdminService {
         companyId: null,
         supportModeCompanyId: companyId,
         sessionId: session.id,
+        sessionVersion: adminUser.sessionVersion,
       },
       {
         secret: accessSecret,
@@ -230,6 +231,7 @@ export class SuperAdminService {
         email: adminUser.email,
         role: adminUser.role,
         companyId: null,
+        sessionVersion: adminUser.sessionVersion,
       },
       {
         secret: accessSecret,

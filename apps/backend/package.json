@@ -21,7 +21,8 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "ts-node prisma/seed.ts",
     "auth:encrypt-totp": "node dist/src/scripts/encrypt-totp.js",
-    "auth:bootstrap-admin": "node dist/src/scripts/bootstrap-admin.js"
+    "auth:bootstrap-admin": "node dist/src/scripts/bootstrap-admin.js",
+    "auth:revoke-legacy-import-sessions": "node dist/src/scripts/revoke-legacy-import-sessions.js"
   },
   "dependencies": {
     "@google/genai": "^2.31.0",
@@ -41,6 +42,7 @@
     "@types/pdfkit": "^0.17.7",
     "bcrypt": "^6.0.0",
     "bull": "^4.16.3",
+    "bullmq": "5.81.5",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "cloudinary": "^2.11.0",

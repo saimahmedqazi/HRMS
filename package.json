@@ -17,8 +17,8 @@
     "prisma:generate": "npm run prisma:generate --workspace=apps/backend",
     "prisma:migrate": "npm run prisma:migrate --workspace=apps/backend",
     "prisma:studio": "npm run prisma:studio --workspace=apps/backend",
-    "docker:up": "docker-compose up -d",
-    "docker:down": "docker-compose down",
+    "docker:up": "docker compose up -d --wait",
+    "docker:down": "docker compose down",
     "test:backend": "npm --prefix apps/backend test",
     "test:e2e": "playwright test"
   },

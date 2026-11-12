@@ -33,8 +33,9 @@ test('the dashboard renews an expired access session using the refresh cookie', 
   expect((await context.cookies()).some((cookie) => cookie.name === 'access_token' && cookie.httpOnly)).toBe(true);
 });
 
-test('a password reset link opens the reset form in a new session and changes the password', async ({ page, context }) => {
+test('a password reset link changes the password and revokes previous sessions', async ({ page, context, browser, baseURL }) => {
   const email = await registerFixture(page);
+  const oldCookies = await context.cookies();
   await context.clearCookies();
   await page.goto('/forgot-password');
   await page.getByLabel('Registered Work Email').fill(email);
@@ -65,4 +66,14 @@ test('a password reset link opens the reset form in a new session and changes th
   await page.locator('input[type=password]').fill('ChangedFixturePassword@123');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
+  expect((await page.request.get('/api/v1/auth/me')).status()).toBe(200);
+
+  const oldSession = await browser.newContext({ baseURL });
+  try {
+    await oldSession.addCookies(oldCookies);
+    expect((await oldSession.request.get('/api/v1/auth/me')).status()).toBe(401);
+    expect((await oldSession.request.post('/api/v1/auth/refresh')).status()).toBe(401);
+  } finally {
+    await oldSession.close();
+  }
 });

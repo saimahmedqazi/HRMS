@@ -32,7 +32,6 @@ describe('BulkImportService', () => {
       leaveBalance: {
         createMany: jest.fn().mockResolvedValue({ count: 3 }),
       },
-      $transaction: jest.fn((callback) => callback(prisma)),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -107,19 +106,34 @@ describe('BulkImportService', () => {
     });
   });
 
-  describe('executeImport', () => {
-    it('returns a generic row error without database diagnostics', async () => {
-      const buffer = createMockExcelBuffer([{
-        firstName: 'Alice', lastName: 'Smith', email: 'alice@zenhr.com', employeeCode: 'EMP-101', hireDate: '2026-01-15',
-      }]);
-      prisma.$transaction.mockRejectedValueOnce(new Error('Database diagnostic should not be returned'));
+  describe('prepared import rows', () => {
+    it('reports an invalid salary and preserves a zero salary in valid rows', async () => {
+      const common = { firstName: 'Alice', lastName: 'Smith', hireDate: '2026-01-15' };
+      const buffer = createMockExcelBuffer([
+        { ...common, email: 'zero@example.test', employeeCode: 'EMP-101', baseSalary: 0 },
+        { ...common, email: 'invalid@example.test', employeeCode: 'EMP-102', baseSalary: 'invalid' },
+      ]);
 
-      const result = await service.executeImport(mockCompanyId, { buffer } as Express.Multer.File);
+      const result = await service.prepareImport(mockCompanyId, buffer);
 
-      expect(result.errors).toEqual([{ row: 2, field: 'general', message: 'Could not import this row. Check the employee details and try again.' }]);
+      expect(result.validRows).toHaveLength(1);
+      expect(result.errors).toMatchObject([{ row: 3, field: 'baseSalary' }]);
+      await service.importEmployee(prisma, mockCompanyId, result.validRows[0].employee);
+      expect(prisma.employee.create).toHaveBeenCalledWith({ data: expect.objectContaining({ baseSalary: 0 }) });
     });
 
-    it('should import valid employees transactionally', async () => {
+    it('prepares a report when validation finds no valid rows', async () => {
+      const buffer = createMockExcelBuffer([{
+        firstName: '', lastName: 'Smith', email: 'alice@zenhr.com', employeeCode: 'EMP-101', hireDate: '2026-01-15',
+      }]);
+
+      await expect(service.prepareImport(mockCompanyId, buffer)).resolves.toEqual({
+        totalRows: 1, validRows: [],
+        errors: [{ row: 2, field: 'firstName', message: 'First name is required' }],
+      });
+    });
+
+    it('writes the employee and leave balances using the supplied transaction', async () => {
       const rows = [
         {
           firstName: 'Alice',
@@ -134,11 +148,8 @@ describe('BulkImportService', () => {
       ];
 
       const buffer = createMockExcelBuffer(rows);
-      const mockFile: any = { buffer, originalname: 'employees.xlsx' };
-
-      const result = await service.executeImport(mockCompanyId, mockFile);
-
-      expect(result.importedCount).toBe(1);
+      const result = await service.prepareImport(mockCompanyId, buffer);
+      await service.importEmployee(prisma, mockCompanyId, result.validRows[0].employee);
       expect(prisma.user.create).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({ passwordHash: PASSWORD_SETUP_REQUIRED }),
       }));

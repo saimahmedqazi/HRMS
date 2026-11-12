@@ -166,7 +166,7 @@ export class AttendanceService {
         timestamp: new Date().toISOString(),
       };
 
-      this.gateway.broadcastAttendanceException(companyId, payload);
+      await this.gateway.broadcastAttendanceException(companyId, payload);
 
       // Create in-app notification for HR
       const hrUsers = await this.prisma.user.findMany({

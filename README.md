@@ -16,32 +16,7 @@ zenhr/
 
 ## Quick Start
 
-### Prerequisites
-- Node.js 24 LTS
-- Docker & Docker Compose
-- npm >= 10
-
-### Setup
-
-```bash
-# Start databases
-npm run docker:up
-
-# Install all dependencies
-npm ci
-
-# Generate Prisma client
-npm run prisma:generate
-
-# Run database migrations
-npm run prisma:migrate
-
-# Start backend (port 4000)
-npm run dev:backend
-
-# Start frontend (port 3000)
-npm run dev:frontend
-```
+Use the [client handoff](CLIENT_HANDOFF.md) to download the repository, run it locally, sign in with demo accounts, and test the main workflows.
 
 ### Environment Variables
 
@@ -73,6 +48,8 @@ For an existing database created with `prisma db push`, complete the baseline be
 
 Provision PostgreSQL with the checked-in migrations. The optional workforce foreign keys use PostgreSQL's column-specific `ON DELETE SET NULL` to preserve `companyId` when an assignment is removed. Prisma's schema-only `db push` cannot create that delete behavior.
 
+For installations that ran the old bulk importer, run `npm run auth:revoke-legacy-import-sessions --workspace=apps/backend` after deploying the updated API. Set the intended `DATABASE_URL` and provide the retired password through `ZENHR_RETIRED_IMPORT_PASSWORD` in the deployment's secret environment. The command reports counts in dry-run mode. Rerun with `-- --apply` to move matching accounts to password setup and revoke their prior sessions. Employees can then use **Forgot password?** to set their own password.
+
 On a new installation, set `DATABASE_URL`, `SUPER_ADMIN_EMAIL`, and `SUPER_ADMIN_PASSWORD` in the environment used for initial setup. After building the backend and applying migrations, run `npm run auth:bootstrap-admin --workspace=apps/backend`. Use a unique generated password. The command creates one verified platform administrator and leaves existing accounts intact. Remove the provisioning password from the environment after setup.
 
 The demo seed contains public fixture credentials and requires an explicit loopback `DATABASE_URL` in development or test mode. For an existing installation, review any accounts created by an earlier demo seed and rotate or disable them before public access.
@@ -80,6 +57,8 @@ The demo seed contains public fixture credentials and requires an explicit loopb
 ### Browser tests
 
 Start the API and frontend against disposable, seeded PostgreSQL. Set `ZENHR_E2E_DATABASE_URL` to the same disposable loopback PostgreSQL URL before running `npm run test:e2e`. Database-backed specs use this explicit connection for fixture cleanup. Set `PLAYWRIGHT_BASE_URL` if the test frontend runs on a port other than 3000.
+
+Set `REDIS_URL` on the API to enable background employee imports. The Render Blueprint supplies this URL. For local end-to-end tests, point the API at a disposable Redis instance alongside PostgreSQL. Import reports remain available from the job link for 24 hours after completion.
 
 ## Tech Stack
 
