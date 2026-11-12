@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { getAttendanceDay, previousAttendanceDate } from '../../common/utils/attendance-date';
+import { activeShiftWhere, overnightShiftEnd } from '../../common/utils/attendance-shift';
 import { AttendanceStatus, LeaveStatus } from '@prisma/client';
 
 @Injectable()
@@ -9,26 +11,43 @@ export class AttendanceCronService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  // Runs nightly at 23:59 UTC
-  @Cron(CronExpression.EVERY_DAY_AT_11PM)
+  // Run at the first hourly tick after each tenant's shift cutoff.
+  @Cron(CronExpression.EVERY_HOUR)
   async handleNightlyAbsenceJob() {
-    this.logger.log('Starting nightly automated absence marking job...');
-
     const now = new Date();
-    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-    // Day of week: JS 0=Sun, 1=Mon ... 6=Sat. ZenHR shift convention: 1=Mon ... 7=Sun
-    const jsDay = now.getUTCDay();
-    const shiftDay = jsDay === 0 ? 7 : jsDay;
 
     const companies = await this.prisma.company.findMany({
       where: { status: 'ACTIVE' },
-      select: { id: true, name: true },
+      select: {
+        id: true,
+        timezone: true,
+        shifts: {
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          select: { startTime: true, endTime: true, workDays: true, breakDuration: true, isDefault: true },
+        },
+      },
     });
 
     let totalMarkedAbsent = 0;
     let totalMarkedOnLeave = 0;
 
     for (const company of companies) {
+      const local = getAttendanceDay(now, company.timezone);
+      const previousTick = getAttendanceDay(new Date(now.getTime() - 3600000), company.timezone);
+      const minutes = local.hour * 60 + local.minute;
+      const previousMinutes = previousTick.date.getTime() === local.date.getTime()
+        ? previousTick.hour * 60 + previousTick.minute
+        : -1;
+      const isDue = (cutoff: number) => previousMinutes < cutoff && cutoff <= minutes;
+      if (!isDue(0) && !company.shifts.some((shift) => {
+        const end = overnightShiftEnd(shift);
+        return end !== null && isDue(end);
+      })) continue;
+
+      const date = previousAttendanceDate(local.date);
+      const shiftDay = date.getUTCDay() || 7;
+      const defaultShift = company.shifts.find((shift) => shift.isDefault);
+
       // Find all active employees in this company
       const employees = await this.prisma.employee.findMany({
         where: {
@@ -38,38 +57,24 @@ export class AttendanceCronService {
         },
         include: {
           shifts: {
-            where: {
-              effectiveFrom: { lte: now },
-              OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
-            },
+            where: activeShiftWhere(now, company.id),
+            orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
+            take: 1,
             include: { shift: true },
           },
         },
       });
 
       for (const emp of employees) {
-        // Verify employee was scheduled to work today
-        const activeShift = emp.shifts[0]?.shift;
-        const isScheduledToday = activeShift ? activeShift.workDays.includes(shiftDay) : shiftDay <= 5;
+        const activeShift = emp.shifts[0]?.shift ?? defaultShift;
+        const scheduled = activeShift ? activeShift.workDays.includes(shiftDay) : shiftDay <= 5;
+        if (!scheduled || !isDue(overnightShiftEnd(activeShift) ?? 0)) continue;
 
-        if (!isScheduledToday) {
-          continue; // Weekend or off-day for this employee
-        }
-
-        // Check if attendance already recorded (check-in, remote, or previous entry)
+        const key = { companyId: company.id, employeeId: emp.id, date };
         const record = await this.prisma.attendanceRecord.findUnique({
-          where: {
-            companyId_employeeId_date: {
-              companyId: company.id,
-              employeeId: emp.id,
-              date: today,
-            },
-          },
+          where: { companyId_employeeId_date: key },
         });
-
-        if (record && record.checkInTime) {
-          continue; // Employee attended work
-        }
+        if (record?.checkInTime || record?.status === AttendanceStatus.HOLIDAY || record?.status === AttendanceStatus.WEEKEND) continue;
 
         // Check if employee has approved leave covering today
         const approvedLeave = await this.prisma.leaveRequest.findFirst({
@@ -77,66 +82,51 @@ export class AttendanceCronService {
             companyId: company.id,
             employeeId: emp.id,
             status: LeaveStatus.APPROVED,
-            startDate: { lte: today },
-            endDate: { gte: today },
+            startDate: { lte: date },
+            endDate: { gte: date },
           },
         });
 
-        if (approvedLeave) {
-          await this.prisma.attendanceRecord.upsert({
+        if (!approvedLeave) {
+          const remotePermission = await this.prisma.remoteWorkPermission.findFirst({
             where: {
-              companyId_employeeId_date: {
-                companyId: company.id,
-                employeeId: emp.id,
-                date: today,
-              },
-            },
-            update: {
-              status: AttendanceStatus.ON_LEAVE,
-              markedBySystem: true,
-              notes: 'Automatically marked ON_LEAVE from approved leave schedule',
-            },
-            create: {
               companyId: company.id,
               employeeId: emp.id,
-              date: today,
-              status: AttendanceStatus.ON_LEAVE,
-              markedBySystem: true,
-              notes: 'Automatically marked ON_LEAVE from approved leave schedule',
+              status: 'APPROVED',
+              startDate: { lte: date },
+              endDate: { gte: date },
             },
+            select: { id: true },
           });
-          totalMarkedOnLeave++;
-        } else {
-          // Employee did not check in and is not on approved leave -> mark ABSENT
-          await this.prisma.attendanceRecord.upsert({
-            where: {
-              companyId_employeeId_date: {
-                companyId: company.id,
-                employeeId: emp.id,
-                date: today,
-              },
-            },
-            update: {
-              status: AttendanceStatus.ABSENT,
-              markedBySystem: true,
-              notes: 'Automatically marked ABSENT by nightly cron — no check-in recorded',
-            },
-            create: {
-              companyId: company.id,
-              employeeId: emp.id,
-              date: today,
-              status: AttendanceStatus.ABSENT,
-              markedBySystem: true,
-              notes: 'Automatically marked ABSENT by nightly cron — no check-in recorded',
-            },
-          });
-          totalMarkedAbsent++;
+          if (remotePermission) continue;
         }
+
+        const data = {
+          status: approvedLeave ? AttendanceStatus.ON_LEAVE : AttendanceStatus.ABSENT,
+          markedBySystem: true,
+          notes: approvedLeave
+            ? 'Automatically marked ON_LEAVE from approved leave schedule'
+            : 'Automatically marked ABSENT after shift cutoff without a check-in',
+        };
+        const updated = await this.prisma.attendanceRecord.updateMany({
+          where: {
+            ...key,
+            checkInTime: null,
+            status: { notIn: [AttendanceStatus.HOLIDAY, AttendanceStatus.WEEKEND] },
+          },
+          data,
+        });
+        const count = updated.count || (await this.prisma.attendanceRecord.createMany({
+          data: { ...key, ...data },
+          skipDuplicates: true,
+        })).count;
+        if (approvedLeave) totalMarkedOnLeave += count;
+        else totalMarkedAbsent += count;
       }
     }
 
-    this.logger.log(
-      `Nightly absence job completed: ${totalMarkedAbsent} marked absent, ${totalMarkedOnLeave} marked on leave.`,
-    );
+    if (totalMarkedAbsent || totalMarkedOnLeave) {
+      this.logger.log(`Marked ${totalMarkedAbsent} absent and ${totalMarkedOnLeave} on leave.`);
+    }
   }
 }

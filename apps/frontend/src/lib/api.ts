@@ -1,4 +1,32 @@
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+export const API_PREFIX = '/api/v1';
+
+const publicAuthRoutes = new Set([
+  '/auth/login',
+  '/auth/login/2fa',
+  '/auth/register',
+  '/auth/refresh',
+  '/auth/forgot-password',
+  '/auth/reset-password',
+  '/auth/verify-email',
+]);
+
+let refreshInFlight: Promise<boolean> | undefined;
+let sessionVersion = 0;
+
+function refreshSession(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = fetch(`${API_PREFIX}/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include',
+    }).then((response) => {
+      if (response.ok) sessionVersion += 1;
+      return response.ok;
+    }).finally(() => {
+      refreshInFlight = undefined;
+    });
+  }
+  return refreshInFlight;
+}
 
 export interface ApiResponse<T = unknown> {
   success: boolean;
@@ -22,7 +50,8 @@ export async function apiRequest<T = unknown>(
   endpoint: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const url = `${API_BASE_URL}/api/v1${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+  const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = `${API_PREFIX}${path}`;
 
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
 
@@ -34,14 +63,20 @@ export async function apiRequest<T = unknown>(
     defaultHeaders['Content-Type'] = 'application/json';
   }
 
-  const response = await fetch(url, {
+  const requestOptions: RequestInit = {
     ...options,
     headers: {
       ...defaultHeaders,
       ...(options.headers as Record<string, string>),
     },
     credentials: 'include', // Automatically send and receive httpOnly cookies
-  });
+  };
+  const initialSessionVersion = sessionVersion;
+  let response = await fetch(url, requestOptions);
+  if (response.status === 401 && !publicAuthRoutes.has(path.split('?')[0])) {
+    const refreshed = initialSessionVersion !== sessionVersion || await refreshSession();
+    if (refreshed) response = await fetch(url, requestOptions);
+  }
 
   const json = await response.json().catch(() => null);
 

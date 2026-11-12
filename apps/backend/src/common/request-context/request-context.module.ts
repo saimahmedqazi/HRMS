@@ -10,7 +10,7 @@ import { RequestContextMiddleware } from './request-context.middleware';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('app.jwt.accessSecret'),
+        secret: config.getOrThrow<string>('app.jwt.accessSecret'),
       }),
     }),
   ],

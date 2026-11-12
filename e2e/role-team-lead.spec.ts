@@ -113,11 +113,22 @@ test.describe('Role 6: Team Lead Comprehensive Test Suite (10 Tests)', () => {
     await page.screenshot({ path: path.join(screenshotsDir, 'tl-09-profile-telemetry.png'), fullPage: true });
   });
 
-  test('TL-10: Strict RBAC Isolation: Inability to access Executive Payroll or Settings', async ({ page }) => {
+  test('TL-10: Executive payroll and HR exceptions are restricted and personal settings are available', async ({ page }) => {
+    const payroll = await page.request.get('/api/v1/payroll/structures');
+    expect(payroll.status()).toBe(403);
+
     await page.goto('/dashboard/payroll');
-    const isRestricted = (await page.locator('text=Access Denied, text=Unauthorized, h1:has-text("Squad Command"), h1:has-text("Dashboard")').first().isVisible({ timeout: 5000 })) ||
-      page.url().includes('/dashboard');
-    expect(isRestricted).toBeTruthy();
+    await expect(page.getByRole('heading', { name: 'Access Denied' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Execute Payroll Run' })).toHaveCount(0);
+
+    await page.goto('/dashboard/attendance/exceptions');
+    await expect(page.getByRole('heading', { name: 'Access Denied' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'HR Exceptions Queue' })).toHaveCount(0);
+
+    await page.goto('/dashboard/settings');
+    await expect(page.getByRole('checkbox', { name: 'Allow device location at check-in' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Organization Profile' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Leave Policies' })).toHaveCount(0);
 
     await page.screenshot({ path: path.join(screenshotsDir, 'tl-10-rbac-isolation.png') });
   });

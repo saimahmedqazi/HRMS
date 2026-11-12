@@ -1,18 +1,21 @@
 import { test, expect } from '@playwright/test';
-import { PrismaClient } from '@prisma/client';
+import { openFixtureDatabase } from './fixture-database';
 
 test.describe('Resource Requisitions & Gemini AI Assistant Lifecycle', () => {
-  const prisma = new PrismaClient();
-
   test.beforeAll(async () => {
+    const prisma = openFixtureDatabase();
     // Clean up test resource request if it exists
     await prisma.resourceRequest.deleteMany({
-      where: { resourceType: 'Ergonomic Mechanical Keyboard' },
+      where: {
+        resourceType: 'Ergonomic Mechanical Keyboard',
+        company: { slug: 'acme-corp' },
+        requestedBy: { user: { email: 'employee@acme.com' } },
+      },
     });
     await prisma.$disconnect();
   });
 
-  test('Employee creates Resource Request -> Ops Manager Approves & Fulfills -> Interactive Gemini AI Policy Chat', async ({ page }) => {
+  test('Employee creates Resource Request -> HR Manager Approves & Fulfills -> Interactive Gemini AI Policy Chat', async ({ page }) => {
     // 1. Employee submits Resource Request
     await page.context().clearCookies();
     await page.goto('/login');
@@ -46,10 +49,10 @@ test.describe('Resource Requisitions & Gemini AI Assistant Lifecycle', () => {
     await page.locator('button[title="Sign out"]').click();
     await page.waitForURL('**/login', { timeout: 15000 });
 
-    // 2. Operation Manager Approves & Fulfills
+    // 2. Tenant HR Manager approves and fulfills the request
     await page.context().clearCookies();
     await page.goto('/login');
-    await page.fill('input[type="email"]', 'ops@zenhr.com');
+    await page.fill('input[type="email"]', 'hr@acme.com');
     await page.fill('input[type="password"]', 'Password@123');
     await page.click('button[type="submit"]');
     await page.waitForURL('**/dashboard', { timeout: 15000 });
@@ -57,30 +60,30 @@ test.describe('Resource Requisitions & Gemini AI Assistant Lifecycle', () => {
     await page.click('a[href="/dashboard/resources"]');
     await page.waitForURL('**/dashboard/resources');
 
-    const opsReqRow = page.locator('tr:has-text("Ergonomic Mechanical Keyboard")').first();
-    await expect(opsReqRow).toBeVisible({ timeout: 10000 });
+    const hrReqRow = page.getByRole('row').filter({ hasText: 'Ergonomic Mechanical Keyboard' });
+    await expect(hrReqRow).toBeVisible({ timeout: 10000 });
 
     // Click Approve
-    await opsReqRow.locator('button:has-text("Approve")').click();
+    await hrReqRow.getByRole('button', { name: 'Approve', exact: true }).click();
     await expect(page.locator('h3:has-text("Approve Resource Request")')).toBeVisible();
-    await page.fill('textarea', 'Approved by Operations: Standard peripheral allocation.');
+    await page.fill('textarea', 'Approved by HR for standard peripheral allocation.');
     await page.click('button:has-text("Confirm APPROVE")');
 
     // Wait for approval to update in table
     await expect(page.locator('h3:has-text("Approve Resource Request")')).not.toBeVisible();
-    await expect(opsReqRow.locator('text=APPROVED')).toBeVisible({ timeout: 10000 });
+    await expect(hrReqRow.locator('text=APPROVED')).toBeVisible({ timeout: 10000 });
 
     // Click Fulfill
-    await opsReqRow.locator('button:has-text("Fulfill")').click();
+    await hrReqRow.getByRole('button', { name: 'Fulfill', exact: true }).click();
     await expect(page.locator('h3:has-text("Fulfill Resource Request")')).toBeVisible();
     await page.fill('textarea', 'Asset #KB-102 dispatched via internal courier.');
     await page.click('button:has-text("Confirm Fulfillment")');
 
     // Wait for fulfillment to update in table
     await expect(page.locator('h3:has-text("Fulfill Resource Request")')).not.toBeVisible();
-    await expect(opsReqRow.locator('text=FULFILLED')).toBeVisible({ timeout: 10000 });
+    await expect(hrReqRow.locator('text=FULFILLED')).toBeVisible({ timeout: 10000 });
 
-    // Sign out Ops
+    // Sign out HR
     await page.locator('button[title="Sign out"]').click();
     await page.waitForURL('**/login', { timeout: 15000 });
 

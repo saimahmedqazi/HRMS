@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
 export interface UpdateCompanySettingsDto {
@@ -42,6 +42,17 @@ export class CompaniesService {
   async updateMyCompany(companyId: string, dto: UpdateCompanySettingsDto) {
     const company = await this.prisma.company.findUnique({ where: { id: companyId } });
     if (!company) throw new NotFoundException('Company not found');
+
+    if (dto.timezone !== undefined) {
+      if (typeof dto.timezone !== 'string' || !dto.timezone.trim()) {
+        throw new BadRequestException('Enter a valid time zone, such as Asia/Karachi.');
+      }
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: dto.timezone });
+      } catch {
+        throw new BadRequestException('Enter a valid time zone, such as Asia/Karachi.');
+      }
+    }
 
     const safeData: Record<string, any> = {};
     const allowedFields: (keyof UpdateCompanySettingsDto)[] = [

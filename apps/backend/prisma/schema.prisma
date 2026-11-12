@@ -52,6 +52,11 @@ enum CompanyStatus {
   INACTIVE
 }
 
+enum CompanySuspensionReason {
+  NON_PAYMENT
+  MANUAL
+}
+
 enum EmployeeStatus {
   ACTIVE
   ON_PROBATION
@@ -166,6 +171,7 @@ model Company {
   industry         String?
   size             String?
   status           CompanyStatus      @default(ACTIVE)
+  suspensionReason CompanySuspensionReason?
   timezone         String             @default("UTC")
   locale           String             @default("en")
   subscriptionTier SubscriptionTier   @default(BASIC)
@@ -234,6 +240,7 @@ model User {
   supportModeSessions   SupportModeSession[]
   notifications         Notification[]
 
+  @@unique([companyId, id])
   @@index([companyId])
   @@index([email])
   @@map("users")
@@ -254,11 +261,14 @@ model Department {
   deletedAt   DateTime?
 
   company     Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employees   Employee[]
+  employees   Employee[] @relation("EmployeeDepartment")
+  manager     Employee?  @relation("DepartmentManager", fields: [companyId, managerId], references: [companyId, id], onDelete: SetNull, onUpdate: Restrict)
   teams       Team[]
 
+  @@unique([companyId, id])
   @@unique([companyId, name])
   @@index([companyId])
+  @@index([managerId])
   @@map("departments")
 }
 
@@ -273,6 +283,7 @@ model Designation {
   company     Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employees   Employee[]
 
+  @@unique([companyId, id])
   @@unique([companyId, name])
   @@index([companyId])
   @@map("designations")
@@ -290,12 +301,15 @@ model Team {
   deletedAt    DateTime?
 
   company      Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  department   Department @relation(fields: [departmentId], references: [id])
-  employees    Employee[]
+  department   Department @relation(fields: [companyId, departmentId], references: [companyId, id], onUpdate: Restrict)
+  employees    Employee[] @relation("EmployeeTeam")
+  lead         Employee? @relation("TeamLead", fields: [companyId, leadId], references: [companyId, id], onDelete: SetNull, onUpdate: Restrict)
 
+  @@unique([companyId, id])
   @@unique([companyId, name])
   @@index([companyId])
   @@index([departmentId])
+  @@index([leadId])
   @@map("teams")
 }
 
@@ -334,12 +348,15 @@ model Employee {
 
   // Relations
   company             Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user                User           @relation(fields: [userId], references: [id])
-  department          Department?    @relation(fields: [departmentId], references: [id])
-  designation         Designation?   @relation(fields: [designationId], references: [id])
-  team                Team?          @relation(fields: [teamId], references: [id])
-  reportingManager    Employee?      @relation("ReportingLine", fields: [reportingManagerId], references: [id])
+  user                User           @relation(fields: [companyId, userId], references: [companyId, id], onUpdate: Restrict)
+  // The SQL migration clears only the optional ID when a referenced record is deleted.
+  department          Department?    @relation("EmployeeDepartment", fields: [companyId, departmentId], references: [companyId, id], onDelete: SetNull, onUpdate: Restrict)
+  designation         Designation?   @relation(fields: [companyId, designationId], references: [companyId, id], onDelete: SetNull, onUpdate: Restrict)
+  team                Team?          @relation("EmployeeTeam", fields: [companyId, teamId], references: [companyId, id], onDelete: SetNull, onUpdate: Restrict)
+  reportingManager    Employee?      @relation("ReportingLine", fields: [companyId, reportingManagerId], references: [companyId, id], onDelete: SetNull, onUpdate: Restrict)
   subordinates        Employee[]     @relation("ReportingLine")
+  managedDepartments  Department[]   @relation("DepartmentManager")
+  ledTeams            Team[]         @relation("TeamLead")
   emergencyContacts   EmergencyContact[]
   documents           EmployeeDocument[]
   educations          EmployeeEducation[]
@@ -354,9 +371,12 @@ model Employee {
   resourceRequests    ResourceRequest[]
   shifts              EmployeeShift[]
 
+  @@unique([companyId, id])
+  @@unique([companyId, userId])
   @@unique([companyId, employeeCode])
   @@index([companyId])
   @@index([departmentId])
+  @@index([designationId])
   @@index([teamId])
   @@index([reportingManagerId])
   @@map("employees")
@@ -387,7 +407,7 @@ model EmployeeDocument {
   fileUrl     String
   uploadedAt  DateTime @default(now())
 
-  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee    Employee @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([companyId])
   @@map("employee_documents")
@@ -457,21 +477,25 @@ model Shift {
   company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employeeShifts EmployeeShift[]
 
+  @@unique([companyId, id])
   @@index([companyId])
   @@map("shifts")
 }
 
 model EmployeeShift {
   id          String   @id @default(cuid())
+  companyId   String
   employeeId  String
   shiftId     String
   effectiveFrom DateTime
   effectiveTo   DateTime?
   createdAt   DateTime @default(now())
 
-  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  shift       Shift    @relation(fields: [shiftId], references: [id])
+  employee    Employee @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Cascade, onUpdate: Restrict)
+  shift       Shift    @relation(fields: [companyId, shiftId], references: [companyId, id], onUpdate: Restrict)
 
+  @@index([companyId, employeeId, effectiveFrom])
+  @@index([companyId, shiftId])
   @@map("employee_shifts")
 }
 
@@ -494,7 +518,7 @@ model AttendanceRecord {
   updatedAt       DateTime         @updatedAt
 
   company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employee        Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee        Employee         @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Cascade, onUpdate: Restrict)
 
   @@unique([companyId, employeeId, date])
   @@index([companyId])
@@ -509,19 +533,23 @@ model WorkTimerEntry {
   employeeId     String
   date           DateTime    @db.Date
   startedAt      DateTime
+  activeSessionStartedAt DateTime?
   stoppedAt      DateTime?
   totalMinutes   Int         @default(0)
+  workedSeconds  Int?
+  breakAlertedAt DateTime?
   status         TimerStatus @default(RUNNING)
   breaks         TimerBreak[]
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
   company        Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employee       Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee       Employee    @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([companyId])
   @@index([employeeId])
   @@index([date])
+  @@index([status, breakAlertedAt])
   @@map("work_timer_entries")
 }
 
@@ -556,7 +584,7 @@ model RemoteWorkPermission {
   updatedAt    DateTime         @updatedAt
 
   company      Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employee     Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee     Employee         @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([companyId])
   @@index([employeeId])
@@ -597,6 +625,7 @@ model LeaveTypeSetting {
   company                 Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   leaveRequests           LeaveRequest[]
 
+  @@unique([companyId, id])
   @@unique([companyId, leaveType])
   @@index([companyId])
   @@map("leave_type_settings")
@@ -631,8 +660,8 @@ model LeaveRequest {
   updatedAt          DateTime    @updatedAt
 
   company            Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employee           Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  leaveTypeSetting   LeaveTypeSetting @relation(fields: [leaveTypeSettingId], references: [id])
+  employee           Employee         @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Cascade, onUpdate: Restrict)
+  leaveTypeSetting   LeaveTypeSetting @relation(fields: [companyId, leaveTypeSettingId], references: [companyId, id], onUpdate: Restrict)
 
   @@index([companyId])
   @@index([employeeId])
@@ -654,7 +683,7 @@ model LeaveBalance {
   updatedAt   DateTime  @updatedAt
 
   company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee    Employee @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Cascade, onUpdate: Restrict)
 
   @@unique([companyId, employeeId, leaveType, year])
   @@index([companyId])
@@ -689,7 +718,7 @@ model ResourceRequest {
   updatedAt        DateTime              @updatedAt
 
   company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  requestedBy      Employee @relation(fields: [requestedById], references: [id], onDelete: Cascade)
+  requestedBy      Employee @relation(fields: [companyId, requestedById], references: [companyId, id], onDelete: Cascade, onUpdate: Restrict)
 
   @@index([companyId])
   @@index([requestedById])
@@ -715,6 +744,7 @@ model PayrollStructure {
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   payslips        Payslip[]
 
+  @@unique([companyId, id])
   @@index([companyId])
   @@map("payroll_structures")
 }
@@ -741,12 +771,13 @@ model Payslip {
   updatedAt         DateTime         @updatedAt
 
   company           Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employee          Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  payrollStructure  PayrollStructure? @relation(fields: [payrollStructureId], references: [id])
+  employee          Employee         @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Cascade, onUpdate: Restrict)
+  payrollStructure  PayrollStructure? @relation(fields: [companyId, payrollStructureId], references: [companyId, id], onDelete: SetNull, onUpdate: Restrict)
 
   @@unique([companyId, employeeId, month, year])
   @@index([companyId])
   @@index([employeeId])
+  @@index([payrollStructureId])
   @@map("payslips")
 }
 
@@ -778,6 +809,13 @@ model Subscription {
   @@index([companyId])
   @@index([stripeCustomerId])
   @@map("subscriptions")
+}
+
+model StripeWebhookReceipt {
+  id         String   @id
+  receivedAt DateTime @default(now())
+
+  @@map("stripe_webhook_receipts")
 }
 
 // ============================================================

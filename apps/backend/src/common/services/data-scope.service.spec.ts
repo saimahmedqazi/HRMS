@@ -70,6 +70,15 @@ describe('DataScopeService', () => {
       expect(filter).toEqual({ companyId: 'company-123', teamId: 'team-backend' });
     });
 
+    it('keeps a lead without a team scoped to their own profile', () => {
+      const user = { role: UserRole.TEAM_LEAD, companyId: 'company-123' };
+      expect(service.applyScope(user, { employeeId: 'lead-1' })).toEqual({
+        companyId: 'company-123',
+        id: 'lead-1',
+      });
+      expect(service.applyScope(user)).toEqual({ companyId: 'company-123', id: { in: [] } });
+    });
+
     it('should return id filter for SELF scope (Employee)', () => {
       const user: AuthenticatedUser = {
         id: 'user-5',

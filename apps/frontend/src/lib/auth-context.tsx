@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from './api';
+import { api, ApiError } from './api';
 
 export type UserRole =
   | 'SUPER_ADMIN'
@@ -20,14 +20,14 @@ export interface UserProfile {
   firstName: string;
   lastName: string;
   avatarUrl?: string;
-  lastLoginAt?: string;
-  lastLoginIp?: string;
-  lastLoginCity?: string;
-  lastLoginCountry?: string;
-  lastLoginLatitude?: number;
-  lastLoginLongitude?: number;
-  lastLoginUserAgent?: string;
-  lastLoginLocation?: string;
+  lastLoginAt?: string | null;
+  lastLoginIp?: string | null;
+  lastLoginCity?: string | null;
+  lastLoginCountry?: string | null;
+  lastLoginLatitude?: number | null;
+  lastLoginLongitude?: number | null;
+  lastLoginUserAgent?: string | null;
+  lastLoginLocation?: string | null;
   twoFaEnabled?: boolean;
   dataScope?: string;
   companyId?: string | null;
@@ -51,6 +51,7 @@ export interface UserProfile {
     employeeNumber: string;
     hireDate: string;
     status: string;
+    locationConsent: boolean;
     department?: { id: string; name: string };
     designation?: { id: string; title: string };
     team?: { id: string; name: string };
@@ -63,7 +64,7 @@ interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   logout: () => Promise<void>;
-  refetchUser: () => void;
+  refetchUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -72,14 +73,15 @@ const AuthContext = createContext<AuthContextType>({
   isLoading: true,
   isAuthenticated: false,
   logout: async () => {},
-  refetchUser: () => {},
+  refetchUser: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
 
   const {
-    data: user,
+    data: cachedUser,
+    error: sessionError,
     isLoading: userLoading,
     refetch: refetchUser,
   } = useQuery({
@@ -87,6 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     queryFn: () => api.get<UserProfile>('/auth/me'),
     retry: false,
   });
+  const user = sessionError instanceof ApiError && sessionError.status === 401 ? null : cachedUser;
 
   const { data: moduleData } = useQuery({
     queryKey: ['auth', 'modules'],
@@ -96,10 +99,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logoutMutation = useMutation({
     mutationFn: () => api.post('/auth/logout'),
-    onSuccess: () => {
+    onSuccess: async () => {
+      await queryClient.cancelQueries({ queryKey: ['auth'] });
       queryClient.setQueryData(['auth', 'me'], null);
       queryClient.setQueryData(['auth', 'modules'], null);
-      window.location.href = '/login';
+      queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'auth' });
     },
   });
 
@@ -113,9 +117,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logout: async () => {
           await logoutMutation.mutateAsync();
         },
-        refetchUser: () => {
-          refetchUser();
-          queryClient.invalidateQueries({ queryKey: ['auth', 'modules'] });
+        refetchUser: async () => {
+          await refetchUser();
+          await queryClient.invalidateQueries({ queryKey: ['auth', 'modules'] });
         },
       }}
     >

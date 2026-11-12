@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, API_PREFIX } from '@/lib/api';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   CheckCircle2,
@@ -200,7 +200,7 @@ export default function LeaveApprovalsPage() {
                       <td className="px-4 py-3">
                         {req.medicalCertUrl ? (
                           <a
-                            href={req.medicalCertUrl}
+                            href={`${API_PREFIX}/leave/requests/${req.id}/prescription/download`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 dark:bg-emerald-950/50 dark:text-emerald-400 rounded-md hover:bg-emerald-100"
@@ -282,7 +282,7 @@ export default function LeaveApprovalsPage() {
                 <div className="flex justify-between items-center pt-1 border-t border-gray-200 dark:border-gray-700">
                   <span className="text-gray-500">Medical Doc:</span>
                   <a
-                    href={selectedRequest.medicalCertUrl}
+                    href={`${API_PREFIX}/leave/requests/${selectedRequest.id}/prescription/download`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-primary-600 hover:underline flex items-center gap-1 font-medium"

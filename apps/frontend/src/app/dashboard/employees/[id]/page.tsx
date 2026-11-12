@@ -3,7 +3,7 @@
 import React, { useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, API_BASE_URL } from '@/lib/api';
+import { api, API_PREFIX } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
@@ -24,6 +24,7 @@ import {
   Globe,
   Clock,
   ExternalLink,
+  Edit3,
 } from 'lucide-react';
 
 export default function EmployeeDetailPage() {
@@ -55,6 +56,18 @@ export default function EmployeeDetailPage() {
   const [docType, setDocType] = useState('CONTRACT');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
+  // Personal demographics modal
+  const [showDemoModal, setShowDemoModal] = useState(false);
+  const [demoDob, setDemoDob] = useState('');
+  const [demoGender, setDemoGender] = useState('');
+  const [demoNationality, setDemoNationality] = useState('');
+  const [demoPhone, setDemoPhone] = useState('');
+  const [demoAddress, setDemoAddress] = useState('');
+  const [demoCity, setDemoCity] = useState('');
+  const [demoCountry, setDemoCountry] = useState('');
+  const [demoSaved, setDemoSaved] = useState(false);
+  const initialDemoValues = useRef<Record<string, string>>({});
+
   // Fetch employee details
   const { data, isLoading } = useQuery({
     queryKey: ['employee', id],
@@ -63,6 +76,48 @@ export default function EmployeeDetailPage() {
   });
 
   const emp = data;
+  const isOwnProfile = Boolean(user?.employee?.id && user.employee.id === emp?.id);
+
+  const openDemoModal = () => {
+    if (!emp) return;
+    updateDemoMutation.reset();
+    setDemoSaved(false);
+    const personal = {
+      dateOfBirth: emp.dateOfBirth ? new Date(emp.dateOfBirth).toISOString().slice(0, 10) : '',
+      gender: emp.gender || '',
+      nationality: emp.nationality || '',
+      phone: emp.phone || '',
+      address: emp.address || '',
+      city: emp.city || '',
+      country: emp.country || '',
+    };
+    initialDemoValues.current = personal;
+    setDemoDob(personal.dateOfBirth);
+    setDemoGender(personal.gender);
+    setDemoNationality(personal.nationality);
+    setDemoPhone(personal.phone);
+    setDemoAddress(personal.address);
+    setDemoCity(personal.city);
+    setDemoCountry(personal.country);
+    setShowDemoModal(true);
+  };
+
+  const demoChanges = Object.fromEntries(Object.entries({
+    dateOfBirth: demoDob, gender: demoGender, nationality: demoNationality, phone: demoPhone,
+    address: demoAddress, city: demoCity, country: demoCountry,
+  }).map(([field, value]) => [field, value.trim()] as const)
+    .filter(([field, value]) => value !== (initialDemoValues.current[field] ?? '').trim())
+    .map(([field, value]) => [field, value || null]));
+  const hasDemoChanges = Object.keys(demoChanges).length > 0;
+
+  const updateDemoMutation = useMutation({
+    mutationFn: () => api.patch(`/employees/${id}`, demoChanges),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['employee', id] });
+      setShowDemoModal(false);
+      setDemoSaved(true);
+    },
+  });
 
   // Status mutation
   const statusMutation = useMutation({
@@ -92,6 +147,11 @@ export default function EmployeeDetailPage() {
       setContactName('');
       setContactRel('');
       setContactPhone('');
+      alert('Emergency contact added successfully.');
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || err?.message || 'Failed to add contact. You may not have permission.';
+      alert(msg);
     },
   });
 
@@ -100,6 +160,21 @@ export default function EmployeeDetailPage() {
       api.delete(`/employees/${id}/emergency-contacts/${contactId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['employee', id] });
+      alert('Emergency contact deleted.');
+    },
+    onError: (err: any) => {
+      alert(err?.response?.data?.message || err?.message || 'Failed to delete emergency contact.');
+    },
+  });
+
+  const deleteDocMutation = useMutation({
+    mutationFn: (docId: string) => api.delete(`/employees/${id}/documents/${docId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['employee', id] });
+      alert('Document deleted successfully.');
+    },
+    onError: (err: any) => {
+      alert(err?.response?.data?.message || err?.message || 'Failed to delete document.');
     },
   });
 
@@ -112,13 +187,11 @@ export default function EmployeeDetailPage() {
     formData.append('file', file);
 
     try {
-      await fetch(`${API_BASE_URL}/api/v1/employees/${id}/avatar`, {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-      });
+      await api.post(`/employees/${id}/avatar`, formData);
       queryClient.invalidateQueries({ queryKey: ['employee', id] });
-    } catch (err) {
+      alert('Profile avatar updated successfully.');
+    } catch (err: any) {
+      alert(err.message || 'Avatar upload failed');
       console.error('Avatar upload failed', err);
     }
   };
@@ -133,16 +206,14 @@ export default function EmployeeDetailPage() {
     formData.append('type', docType);
 
     try {
-      await fetch(`${API_BASE_URL}/api/v1/employees/${id}/documents`, {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-      });
+      await api.post(`/employees/${id}/documents`, formData);
       queryClient.invalidateQueries({ queryKey: ['employee', id] });
       setShowDocModal(false);
       setSelectedFile(null);
       setDocName('');
-    } catch (err) {
+      alert('Document uploaded successfully.');
+    } catch (err: any) {
+      alert(err.message || 'Document upload failed');
       console.error('Document upload failed', err);
     }
   };
@@ -155,26 +226,16 @@ export default function EmployeeDetailPage() {
     return <p className="text-sm text-zinc-500">Employee profile not found.</p>;
   }
 
-  // Parse login telemetry from emp.user or current user
-  const loginIp = emp.user?.lastLoginIp || user?.lastLoginIp || '127.0.0.1';
-  const loginAt = emp.user?.lastLoginAt || user?.lastLoginAt || null;
-  const loginCity = emp.user?.lastLoginCity || user?.lastLoginCity || 'Local Office Network';
-  const rawCountry = emp.user?.lastLoginCountry || user?.lastLoginCountry || 'PK';
-  let loginCountry = rawCountry;
-  let loginLat = user?.lastLoginLatitude ?? 24.8607;
-  let loginLng = user?.lastLoginLongitude ?? 67.0011;
-
-  if (typeof rawCountry === 'string' && rawCountry.includes('|')) {
-    const [cCode, coordsPart] = rawCountry.split('|').map((s: string) => s.trim());
-    loginCountry = cCode || 'PK';
-    const [latStr, lngStr] = (coordsPart || '').split(',').map((s: string) => s.trim());
-    const pLat = parseFloat(latStr);
-    const pLng = parseFloat(lngStr);
-    if (!Number.isNaN(pLat) && !Number.isNaN(pLng)) {
-      loginLat = pLat;
-      loginLng = pLng;
-    }
-  }
+  const loginIp = emp.user?.lastLoginIp ?? 'Unavailable';
+  const loginAt = emp.user?.lastLoginAt;
+  const loginTime = loginAt ? new Date(loginAt).toLocaleString('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }) : 'Unavailable';
+  const loginPlace = emp.user?.lastLoginLocation;
+  const loginLat = emp.user?.lastLoginLatitude;
+  const loginLng = emp.user?.lastLoginLongitude;
+  const loginCoordinates = loginLat != null && loginLng != null ? `${loginLat}, ${loginLng}` : null;
 
   return (
     <div className="space-y-6">
@@ -240,8 +301,17 @@ export default function EmployeeDetailPage() {
             </div>
           </div>
 
-          {canUpdateStatus && (
-            <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {isOwnProfile && (
+              <button
+                type="button"
+                onClick={openDemoModal}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500"
+              >
+                <Edit3 className="h-3.5 w-3.5" /> Edit Personal Information
+              </button>
+            )}
+            {canUpdateStatus && (
               <button
                 onClick={() => {
                   setNewStatus(emp.status);
@@ -251,10 +321,16 @@ export default function EmployeeDetailPage() {
               >
                 Update Status
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
+
+      {demoSaved && (
+        <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+          Personal information saved.
+        </p>
+      )}
 
       {/* Tabs */}
       <div className="border-b border-zinc-200 dark:border-zinc-800">
@@ -340,12 +416,23 @@ export default function EmployeeDetailPage() {
 
           {/* Personal Demographic Card */}
           <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-            <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">Personal Demographics</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">Personal Demographics</h3>
+              {!isOwnProfile && canUpdateStatus && (
+                <button
+                  type="button"
+                  onClick={openDemoModal}
+                  className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  <Edit3 className="h-3.5 w-3.5 text-indigo-600" /> Edit Demographics
+                </button>
+              )}
+            </div>
             <dl className="mt-4 divide-y divide-zinc-100 text-xs dark:divide-zinc-800">
               <div className="flex justify-between py-2.5">
                 <dt className="text-zinc-500">Date of Birth</dt>
                 <dd className="font-medium text-zinc-900 dark:text-zinc-100">
-                  {emp.dateOfBirth ? new Date(emp.dateOfBirth).toLocaleDateString() : '—'}
+                  {emp.dateOfBirth ? new Date(emp.dateOfBirth).toLocaleDateString(undefined, { timeZone: 'UTC' }) : '—'}
                 </dd>
               </div>
               <div className="flex justify-between py-2.5">
@@ -372,9 +459,6 @@ export default function EmployeeDetailPage() {
                 <MapPin className="h-4 w-4 text-indigo-600" />
                 Last Login IP & Geolocation Telemetry
               </h3>
-              <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
-                AUDITED LOGIN LOCATION
-              </span>
             </div>
 
             <div className="rounded-xl bg-white dark:bg-zinc-900 p-3.5 border border-indigo-100 dark:border-indigo-900/50 text-xs text-zinc-700 dark:text-zinc-300">
@@ -382,27 +466,8 @@ export default function EmployeeDetailPage() {
               <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
                 {loginIp}
               </span>{' '}
-              at{' '}
-              <span className="font-semibold">
-                {loginCity}, {loginCountry}
-              </span>{' '}
-              (Coordinates:{' '}
-              <span className="font-mono font-semibold">
-                Lat {loginLat}, Long {loginLng}
-              </span>
-              ) on{' '}
-              <span className="font-semibold">
-                {loginAt
-                  ? new Date(loginAt).toLocaleString('en-US', {
-                      dateStyle: 'medium',
-                      timeStyle: 'short',
-                    })
-                  : new Date().toLocaleString('en-US', {
-                      dateStyle: 'medium',
-                      timeStyle: 'short',
-                    })}
-              </span>
-              .
+              {loginPlace && <>near <span className="font-semibold">{loginPlace}</span>{' '}</>}
+              {loginAt && <>on <span className="font-semibold">{loginTime}</span></>}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
@@ -414,25 +479,27 @@ export default function EmployeeDetailPage() {
                   {loginIp}
                 </p>
                 <span className="text-[11px] text-zinc-400">
-                  {loginCity}, {loginCountry}
+                  {loginPlace ?? 'Approximate location unavailable'}
                 </span>
               </div>
 
               <div className="rounded-xl bg-white dark:bg-zinc-900 p-3.5 border border-zinc-200 dark:border-zinc-800">
                 <span className="text-[10px] uppercase font-semibold text-zinc-400 flex items-center gap-1.5">
-                  <MapPin className="h-3.5 w-3.5 text-emerald-500" /> Latitude & Longitude
+                  <MapPin className="h-3.5 w-3.5 text-emerald-500" /> Approximate Latitude & Longitude
                 </span>
                 <p className="font-mono text-sm font-bold text-zinc-900 dark:text-zinc-100 mt-1">
-                  {loginLat}, {loginLng}
+                  {loginCoordinates ?? 'Unavailable'}
                 </p>
-                <a
-                  href={`https://www.google.com/maps?q=${loginLat},${loginLng}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[11px] font-medium text-indigo-600 hover:underline inline-flex items-center gap-1 mt-0.5"
-                >
-                  View Exact Pin on Maps <ExternalLink className="h-3 w-3" />
-                </a>
+                {loginCoordinates && (
+                  <a
+                    href={`https://www.google.com/maps?q=${encodeURIComponent(loginCoordinates)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] font-medium text-indigo-600 hover:underline inline-flex items-center gap-1 mt-0.5"
+                  >
+                    Open Map <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
               </div>
 
               <div className="rounded-xl bg-white dark:bg-zinc-900 p-3.5 border border-zinc-200 dark:border-zinc-800">
@@ -440,15 +507,10 @@ export default function EmployeeDetailPage() {
                   <Clock className="h-3.5 w-3.5 text-amber-500" /> Login Date & Time
                 </span>
                 <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100 mt-1">
-                  {loginAt
-                    ? new Date(loginAt).toLocaleString('en-US', {
-                        dateStyle: 'medium',
-                        timeStyle: 'short',
-                      })
-                    : 'Current Active Session'}
+                  {loginTime}
                 </p>
                 <span className="text-[11px] text-zinc-400 truncate block">
-                  {emp.user?.lastLoginUserAgent || 'Authenticated Browser Session'}
+                  {emp.user?.lastLoginUserAgent ?? 'Browser unavailable'}
                 </span>
               </div>
             </div>
@@ -529,14 +591,28 @@ export default function EmployeeDetailPage() {
                       </p>
                     </div>
                   </div>
-                  <a
-                    href={d.fileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
-                  >
-                    View
-                  </a>
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={`${API_PREFIX}/employees/${id}/documents/${d.id}/download`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      View
+                    </a>
+                    <button
+                      onClick={() => {
+                        if (confirm(`Are you sure you want to delete ${d.name}?`)) {
+                          deleteDocMutation.mutate(d.id);
+                        }
+                      }}
+                      disabled={deleteDocMutation.isPending}
+                      className="text-zinc-400 hover:text-red-500 transition-colors p-1"
+                      title="Delete document"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
               ))
             )}
@@ -744,6 +820,179 @@ export default function EmployeeDetailPage() {
                 Upload to Cloud Storage
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Personal Demographics Modal */}
+      {showDemoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="employee-personal-info-title"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && !updateDemoMutation.isPending) setShowDemoModal(false);
+            }}
+            className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl dark:bg-zinc-900"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800">
+              <h2 id="employee-personal-info-title" className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                <Edit3 className="h-5 w-5 text-indigo-600" /> Edit Personal Information
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowDemoModal(false)}
+                aria-label="Close personal information editor"
+                disabled={updateDemoMutation.isPending}
+                className="text-zinc-400 hover:text-zinc-600 text-lg leading-none"
+              >
+                &times;
+              </button>
+            </div>
+
+            {isOwnProfile && (
+              <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+                Contact HR to update your official name, work email, or employment details.
+              </p>
+            )}
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (hasDemoChanges && !updateDemoMutation.isPending) updateDemoMutation.mutate();
+              }}
+              className="mt-4 space-y-4"
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="personal-date-of-birth" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    Date of Birth
+                  </label>
+                  <input
+                    id="personal-date-of-birth"
+                    type="date"
+                    value={demoDob}
+                    max={new Date().toISOString().slice(0, 10)}
+                    onChange={(e) => setDemoDob(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="personal-gender" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    Gender
+                  </label>
+                  <select
+                    id="personal-gender"
+                    value={demoGender}
+                    onChange={(e) => setDemoGender(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
+                  >
+                    <option value="">Select Gender</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Non-Binary">Non-Binary</option>
+                    <option value="Prefer not to say">Prefer not to say</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="personal-nationality" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    Nationality
+                  </label>
+                  <input
+                    id="personal-nationality"
+                    type="text"
+                    value={demoNationality}
+                    onChange={(e) => setDemoNationality(e.target.value)}
+                    placeholder="e.g. American, Pakistani, Canadian"
+                    className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="personal-phone" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    Phone Number
+                  </label>
+                  <input
+                    id="personal-phone"
+                    type="tel"
+                    value={demoPhone}
+                    onChange={(e) => setDemoPhone(e.target.value)}
+                    placeholder="+1-555-0123"
+                    className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="personal-address" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                  Street Address
+                </label>
+                <input
+                  id="personal-address"
+                  type="text"
+                  value={demoAddress}
+                  onChange={(e) => setDemoAddress(e.target.value)}
+                  placeholder="e.g. 123 Tech Boulevard, Apt 4B"
+                  className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="personal-city" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    City
+                  </label>
+                  <input
+                    id="personal-city"
+                    type="text"
+                    value={demoCity}
+                    onChange={(e) => setDemoCity(e.target.value)}
+                    placeholder="e.g. San Francisco or Karachi"
+                    className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="personal-country" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    Country
+                  </label>
+                  <input
+                    id="personal-country"
+                    type="text"
+                    value={demoCountry}
+                    onChange={(e) => setDemoCountry(e.target.value)}
+                    placeholder="e.g. United States or Pakistan"
+                    className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
+                  />
+                </div>
+              </div>
+
+              {updateDemoMutation.error && (
+                <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-950 dark:text-rose-300">
+                  {updateDemoMutation.error.message}
+                </p>
+              )}
+
+              <div className="mt-6 flex justify-end gap-2 pt-3 border-t border-zinc-200 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setShowDemoModal(false)}
+                  disabled={updateDemoMutation.isPending}
+                  className="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updateDemoMutation.isPending || !hasDemoChanges}
+                  className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  {updateDemoMutation.isPending ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

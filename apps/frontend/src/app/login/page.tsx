@@ -24,23 +24,10 @@ export default function LoginPage() {
   const [tempToken, setTempToken] = useState<string | null>(null);
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [coords, setCoords] = useState<{ latitude?: number; longitude?: number }>({});
+  const [isReady, setIsReady] = useState(false);
 
   React.useEffect(() => {
-    if (typeof window !== 'undefined' && 'geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setCoords({
-            latitude: Number(pos.coords.latitude.toFixed(6)),
-            longitude: Number(pos.coords.longitude.toFixed(6)),
-          });
-        },
-        () => {
-          // Non-blocking: backend falls back to IP geolocation
-        },
-        { timeout: 3000, maximumAge: 60000 },
-      );
-    }
+    setIsReady(true);
   }, []);
 
   const {
@@ -58,11 +45,7 @@ export default function LoginPage() {
     try {
       const response = await api.post<
         { user: unknown } | { requires2fa: true; tempToken: string }
-      >('/auth/login', {
-        ...data,
-        ...(coords.latitude !== undefined ? { latitude: coords.latitude } : {}),
-        ...(coords.longitude !== undefined ? { longitude: coords.longitude } : {}),
-      });
+      >('/auth/login', data);
 
       if ('requires2fa' in response && response.requires2fa) {
         setRequires2fa(true);
@@ -70,7 +53,7 @@ export default function LoginPage() {
         return;
       }
 
-      refetchUser();
+      await refetchUser();
       router.push('/dashboard');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Invalid credentials';
@@ -82,17 +65,18 @@ export default function LoginPage() {
 
   const handle2faSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!tempToken || !twoFactorCode) return;
+    const code = twoFactorCode.trim().toLowerCase();
+    if (!tempToken || !code) return;
 
     setError(null);
     setIsSubmitting(true);
     try {
       await api.post('/auth/login/2fa', {
         tempToken,
-        code: twoFactorCode,
+        code,
       });
 
-      refetchUser();
+      await refetchUser();
       router.push('/dashboard');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Invalid two-factor code';
@@ -124,13 +108,14 @@ export default function LoginPage() {
         )}
 
         {!requires2fa ? (
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          <form method="post" onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
                 Work Email
               </label>
               <input
                 {...register('email')}
+                disabled={!isReady}
                 type="email"
                 placeholder="name@company.com"
                 className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
@@ -154,6 +139,7 @@ export default function LoginPage() {
               </div>
               <input
                 {...register('password')}
+                disabled={!isReady}
                 type="password"
                 placeholder="••••••••"
                 className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
@@ -165,24 +151,26 @@ export default function LoginPage() {
 
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={!isReady || isSubmitting}
               className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-semibold text-white shadow-md transition hover:bg-blue-700 disabled:opacity-50"
             >
               {isSubmitting ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
         ) : (
-          <form onSubmit={handle2faSubmit} className="space-y-4">
+          <form method="post" onSubmit={handle2faSubmit} className="space-y-4">
             <div className="rounded-lg bg-blue-50 p-3 text-xs text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
-              Two-Factor Authentication is enabled on your account. Please enter the code from your Authenticator app.
+              Enter a code from your authenticator app or use a saved backup code.
             </div>
 
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
+              <label htmlFor="two-factor-code" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
                 Verification Code
               </label>
               <input
+                id="two-factor-code"
                 type="text"
+                autoComplete="one-time-code"
                 maxLength={8}
                 value={twoFactorCode}
                 onChange={(e) => setTwoFactorCode(e.target.value)}

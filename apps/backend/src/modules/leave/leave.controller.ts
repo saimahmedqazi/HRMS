@@ -7,11 +7,13 @@ import {
   Body,
   Param,
   Query,
+  Res,
   UseGuards,
   UseInterceptors,
   UploadedFile,
   BadRequestException,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
@@ -65,12 +67,13 @@ export class LeaveController {
       user.companyId,
       targetEmpId,
       year ? parseInt(year, 10) : undefined,
+      user,
     );
   }
 
   @Post('requests')
   @ApiConsumes('multipart/form-data', 'application/json')
-  @UseInterceptors(FileInterceptor('prescription'))
+  @UseInterceptors(FileInterceptor('prescription', { limits: { fileSize: 10 * 1024 * 1024 } }))
   @ApiOperation({ summary: 'Submit a new leave request (with optional or required prescription)' })
   async createLeaveRequest(
     @CurrentUser() user: any,
@@ -157,5 +160,16 @@ export class LeaveController {
     @Param('id') id: string,
   ) {
     return this.leaveService.getPrescriptionDownload(user.companyId, id, user);
+  }
+
+  @Get('requests/:id/prescription/download')
+  @ApiOperation({ summary: 'Open a prescription the current user can access' })
+  async downloadPrescription(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Res() response: Response,
+  ) {
+    const { medicalCertUrl } = await this.leaveService.getPrescriptionDownload(user.companyId, id, user);
+    response.set('Cache-Control', 'private, no-store').set('Referrer-Policy', 'no-referrer').redirect(medicalCertUrl);
   }
 }

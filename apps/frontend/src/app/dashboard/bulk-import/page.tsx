@@ -71,7 +71,7 @@ export default function BulkImportDashboardPage() {
           </p>
         </div>
         <a
-          href="/templates/workforce-import-sample.xlsx"
+          href="/api/v1/employees/bulk/template"
           download
           className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 shadow-sm"
         >
@@ -99,7 +99,7 @@ export default function BulkImportDashboardPage() {
               </h3>
               <p className="text-xs text-emerald-800 dark:text-emerald-300 mt-1">
                 Successfully onboarded <strong>{importResult.importedCount}</strong> new employee accounts.
-                Default credentials, probationary shifts, and annual leave balances have been initialized.
+                Imported employees can set their password using <strong>Forgot password?</strong> on the sign-in page.
               </p>
             </div>
           </div>

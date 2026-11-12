@@ -3,10 +3,15 @@ import {
   Get,
   Post,
   Body,
+  Headers,
+  HttpCode,
+  RawBodyRequest,
+  Req,
   UseGuards,
-  Query,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
@@ -56,8 +61,13 @@ export class SubscriptionsController {
 
   @Public()
   @Post('webhook')
+  @SkipThrottle({ short: true, long: true })
+  @HttpCode(200)
   @ApiOperation({ summary: 'Handle Stripe webhook notifications' })
-  async handleWebhook(@Body() event: any) {
-    return this.subscriptionsService.handleWebhookEvent(event);
+  async handleWebhook(
+    @Req() request: RawBodyRequest<Request>,
+    @Headers('stripe-signature') signature?: string,
+  ) {
+    return this.subscriptionsService.handleWebhook(request.rawBody, signature);
   }
 }

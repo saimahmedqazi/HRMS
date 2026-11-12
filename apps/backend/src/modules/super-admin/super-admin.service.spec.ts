@@ -3,7 +3,7 @@ import { SuperAdminService } from './super-admin.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { CompanyStatus, UserRole, AuditAction } from '@prisma/client';
+import { CompanyStatus, CompanySuspensionReason, UserRole, AuditAction } from '@prisma/client';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 
 describe('SuperAdminService', () => {
@@ -11,6 +11,7 @@ describe('SuperAdminService', () => {
   let prisma: PrismaService;
 
   const mockPrisma = {
+    $transaction: jest.fn(),
     company: {
       findMany: jest.fn(),
       findUnique: jest.fn(),
@@ -36,8 +37,11 @@ describe('SuperAdminService', () => {
   const mockConfigService = {
     get: jest.fn((key: string, defaultValue?: unknown) => {
       if (key === 'app.security.supportModeDurationHours') return 1;
-      if (key === 'app.jwt.accessSecret') return 'test-access-secret';
       return defaultValue;
+    }),
+    getOrThrow: jest.fn((key: string) => {
+      if (key === 'app.jwt.accessSecret') return 'test-access-secret';
+      throw new Error(`Missing test configuration: ${key}`);
     }),
   };
 
@@ -61,6 +65,7 @@ describe('SuperAdminService', () => {
     service = module.get<SuperAdminService>(SuperAdminService);
     prisma = module.get<PrismaService>(PrismaService);
     jest.clearAllMocks();
+    mockPrisma.$transaction.mockImplementation((callback) => callback(mockPrisma));
   });
 
   describe('updateCompanyStatus', () => {
@@ -82,6 +87,10 @@ describe('SuperAdminService', () => {
       );
 
       expect(result.status).toBe(CompanyStatus.SUSPENDED);
+      expect(mockPrisma.company.update).toHaveBeenCalledWith({
+        where: { id: 'comp-1' },
+        data: { status: CompanyStatus.SUSPENDED, suspensionReason: CompanySuspensionReason.MANUAL },
+      });
       expect(mockPrisma.auditLog.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           userId: 'super-admin-1',

@@ -1,6 +1,17 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
 import { AttendanceStatus, EmployeeStatus, SubscriptionTier, UserRole } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { getCompanyAttendanceTime } from '@common/utils/attendance-date';
+import { findCurrentPunch, findCurrentTimer, resolveEmployeeAttendanceDay } from '@common/utils/attendance-shift';
+
+function summarizeAttendance(records: { status: AttendanceStatus }[]) {
+  return {
+    present: records.filter(({ status }) => status === AttendanceStatus.PRESENT).length,
+    remote: records.filter(({ status }) => status === AttendanceStatus.PRESENT_REMOTE).length,
+    absent: records.filter(({ status }) => status === AttendanceStatus.ABSENT).length,
+    exceptions: records.filter(({ status }) => status === AttendanceStatus.ABSENT_PENDING_REVIEW).length,
+  };
+}
 
 @Injectable()
 export class AnalyticsService {
@@ -105,10 +116,10 @@ export class AnalyticsService {
       return this.getSuperAdminMetrics();
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const now = new Date();
+    const local = await getCompanyAttendanceTime(this.prisma, companyId, now);
+    const today = local.date;
+    const attendanceDate = today.toISOString().slice(0, 10);
 
     // 1. Employee-level personal overview
     if (user.role === UserRole.EMPLOYEE) {
@@ -116,20 +127,19 @@ export class AnalyticsService {
         where: { companyId, userId: user.id },
       });
 
-      const todayAttendance = emp
-        ? await this.prisma.attendanceRecord.findFirst({
-            where: { companyId, employeeId: emp.id, date: today },
-          })
-        : null;
+      let todayAttendance = null;
+      let todayTimer = null;
+      if (emp) {
+        const scope = { companyId, employeeId: emp.id };
+        const dates = await resolveEmployeeAttendanceDay(this.prisma, scope, now, local);
+        todayAttendance = await findCurrentPunch(this.prisma, scope, dates);
+        const date = todayAttendance?.checkInTime && !todayAttendance.checkOutTime
+          ? todayAttendance.date
+          : dates.date;
+        todayTimer = await findCurrentTimer(this.prisma, scope, { ...dates, date });
+      }
 
-      const todayTimer = emp
-        ? await this.prisma.workTimerEntry.findFirst({
-            where: { companyId, employeeId: emp.id, date: today },
-            include: { breaks: true },
-          })
-        : null;
-
-      const currentYear = new Date().getFullYear();
+      const currentYear = today.getUTCFullYear();
       const balances = emp
         ? await this.prisma.leaveBalance.findMany({
             where: { companyId, employeeId: emp.id, year: currentYear },
@@ -145,8 +155,15 @@ export class AnalyticsService {
 
       return {
         role: UserRole.EMPLOYEE,
+        attendanceDate,
+        todaySummary: summarizeAttendance(todayAttendance ? [todayAttendance] : []),
         todayAttendance: todayAttendance
-          ? { status: todayAttendance.status, checkIn: todayAttendance.checkInTime, checkOut: todayAttendance.checkOutTime }
+          ? {
+              date: todayAttendance.date,
+              status: todayAttendance.status,
+              checkIn: todayAttendance.checkInTime,
+              checkOut: todayAttendance.checkOutTime,
+            }
           : null,
         todayTimer: todayTimer
           ? { status: todayTimer.status, totalMinutes: todayTimer.totalMinutes }
@@ -171,7 +188,7 @@ export class AnalyticsService {
         ? await this.prisma.employee.findMany({
             where: { companyId, teamId: leadEmp.teamId, deletedAt: null },
           })
-        : [];
+        : leadEmp ? [leadEmp] : [];
 
       const teamEmpIds = teamMembers.map((m) => m.id);
 
@@ -188,12 +205,13 @@ export class AnalyticsService {
         },
       });
 
+      const todaySummary = summarizeAttendance(todayTeamAttendance);
       return {
         role: UserRole.TEAM_LEAD,
+        attendanceDate,
+        todaySummary,
         teamSize: teamMembers.length,
-        presentToday: todayTeamAttendance.filter(
-          (a) => a.status === AttendanceStatus.PRESENT || a.status === AttendanceStatus.PRESENT_REMOTE,
-        ).length,
+        presentToday: todaySummary.present + todaySummary.remote,
         pendingApprovals: pendingTeamLeaves,
       };
     }
@@ -208,7 +226,7 @@ export class AnalyticsService {
         ? await this.prisma.employee.findMany({
             where: { companyId, departmentId: mgrEmp.departmentId, deletedAt: null },
           })
-        : [];
+        : mgrEmp ? [mgrEmp] : [];
 
       const deptEmpIds = deptEmployees.map((e) => e.id);
 
@@ -225,12 +243,13 @@ export class AnalyticsService {
         },
       });
 
+      const todaySummary = summarizeAttendance(deptAttendance);
       return {
         role: UserRole.DEPARTMENT_MANAGER,
+        attendanceDate,
+        todaySummary,
         departmentHeadcount: deptEmployees.length,
-        presentToday: deptAttendance.filter(
-          (a) => a.status === AttendanceStatus.PRESENT || a.status === AttendanceStatus.PRESENT_REMOTE,
-        ).length,
+        presentToday: todaySummary.present + todaySummary.remote,
         pendingApprovals: pendingLeaves,
       };
     }
@@ -245,7 +264,7 @@ export class AnalyticsService {
     });
 
     const todayAttendance = await this.prisma.attendanceRecord.findMany({
-      where: { companyId, date: today },
+      where: { companyId, date: today, employee: { companyId, deletedAt: null } },
     });
 
     const pendingExceptions = await this.prisma.attendanceRecord.count({
@@ -275,12 +294,12 @@ export class AnalyticsService {
     const trend = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date(today);
-      d.setDate(d.getDate() - i);
+      d.setUTCDate(d.getUTCDate() - i);
       const dayRecords = await this.prisma.attendanceRecord.findMany({
         where: { companyId, date: d },
       });
       trend.push({
-        day: d.toLocaleDateString('en-US', { weekday: 'short' }),
+        day: d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
         present: dayRecords.filter((r) => r.status === AttendanceStatus.PRESENT).length,
         remote: dayRecords.filter((r) => r.status === AttendanceStatus.PRESENT_REMOTE).length,
         absent: dayRecords.filter((r) => r.status === AttendanceStatus.ABSENT).length,
@@ -289,15 +308,12 @@ export class AnalyticsService {
 
     return {
       role: user.role,
+      attendanceDate,
       totalEmployees,
       onProbationCount,
       pendingExceptions,
       pendingLeaveApprovals,
-      todaySummary: {
-        present: todayAttendance.filter((r) => r.status === AttendanceStatus.PRESENT).length,
-        remote: todayAttendance.filter((r) => r.status === AttendanceStatus.PRESENT_REMOTE).length,
-        absent: todayAttendance.filter((r) => r.status === AttendanceStatus.ABSENT).length,
-      },
+      todaySummary: summarizeAttendance(todayAttendance),
       departmentDistribution,
       attendanceTrend: trend,
     };

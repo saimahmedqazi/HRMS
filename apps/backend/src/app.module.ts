@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { appConfig } from './common/config/app.config';
@@ -20,8 +21,10 @@ import { BulkImportModule } from './modules/bulk-import/bulk-import.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 import { AiAssistantModule } from './modules/ai-assistant/ai-assistant.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { RequestContextModule } from './common/request-context/request-context.module';
 import { MailModule } from './common/mail/mail.module';
+import { RequestThrottlerGuard } from './common/guards/request-throttler.guard';
 
 @Module({
   imports: [
@@ -74,6 +77,8 @@ import { MailModule } from './common/mail/mail.module';
     SubscriptionsModule,
     AiAssistantModule,
     AnalyticsModule,
+    NotificationsModule,
   ],
+  providers: [{ provide: APP_GUARD, useClass: RequestThrottlerGuard }],
 })
 export class AppModule {}

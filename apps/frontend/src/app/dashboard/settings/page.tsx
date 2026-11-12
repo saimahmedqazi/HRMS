@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { useAuth } from '@/lib/auth-context';
+import { useAuth, type UserProfile } from '@/lib/auth-context';
 import {
   Building2,
   ShieldCheck,
@@ -22,10 +22,14 @@ export default function SettingsPage() {
   const isPlatformRole =
     (user?.role === 'SUPER_ADMIN' || user?.role === 'OPERATION_MANAGER') &&
     !user?.supportModeCompanyId;
+  const canManageLeave = hasCompany && (user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER');
+  const canManageCompany = canManageLeave || (hasCompany && user?.role === 'SUPER_ADMIN');
 
-  const [activeTab, setActiveTab] = useState<'platform' | 'company' | 'leave' | 'security'>(
-    hasCompany ? 'company' : 'platform',
-  );
+  const tabs = { platform: isPlatformRole, company: canManageCompany, leave: canManageLeave, security: true };
+  const [selectedTab, setActiveTab] = useState<keyof typeof tabs | null>(null);
+  const activeTab = selectedTab && tabs[selectedTab]
+    ? selectedTab
+    : isPlatformRole ? 'platform' : canManageCompany ? 'company' : 'security';
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -33,7 +37,7 @@ export default function SettingsPage() {
   const { data: companyData } = useQuery({
     queryKey: ['company-me'],
     queryFn: () => api.get<any>('/companies/me'),
-    enabled: hasCompany,
+    enabled: canManageCompany,
   });
 
   const [companyName, setCompanyName] = useState('');
@@ -61,14 +65,6 @@ export default function SettingsPage() {
       setCompanyTimezone(companyData.timezone || 'UTC');
     }
   }, [companyData]);
-
-  useEffect(() => {
-    if (hasCompany && activeTab === 'platform') {
-      setActiveTab('company');
-    } else if (!hasCompany && (activeTab === 'company' || activeTab === 'leave')) {
-      setActiveTab('platform');
-    }
-  }, [hasCompany, activeTab]);
 
   const updateCompanyMutation = useMutation({
     mutationFn: () => {
@@ -98,7 +94,7 @@ export default function SettingsPage() {
   const { data: leaveTypes = [] } = useQuery({
     queryKey: ['leave-types'],
     queryFn: () => api.get<any[]>('/leave/types'),
-    enabled: hasCompany,
+    enabled: canManageLeave,
   });
 
   const updateLeaveTypeMutation = useMutation({
@@ -114,12 +110,31 @@ export default function SettingsPage() {
     },
   });
 
+  const updateLocationConsent = useMutation({
+    mutationFn: (locationConsent: boolean) =>
+      api.patch<{ locationConsent: boolean }>('/auth/me/location-consent', { locationConsent }),
+    onMutate: () => queryClient.cancelQueries({ queryKey: ['auth', 'me'] }),
+    onSuccess: ({ locationConsent }) => {
+      queryClient.setQueryData<UserProfile>(['auth', 'me'], (current) => current?.employee
+        ? { ...current, employee: { ...current.employee, locationConsent } }
+        : current);
+      setStatusMessage('Attendance location preference saved.');
+      setErrorMessage(null);
+    },
+    onError: (error) => {
+      setStatusMessage(null);
+      setErrorMessage(error.message || 'Failed to save attendance location preference.');
+    },
+  });
+
   // 2FA Setup State
   const [qrData, setQrData] = useState<{ secret: string; qrCodeDataUrl: string } | null>(null);
   const [totpCode, setTotpCode] = useState('');
   const [disablePassword, setDisablePassword] = useState('');
+  const [backupCodes, setBackupCodes] = useState<string[]>([]);
 
   const generate2faMutation = useMutation({
+    gcTime: 0,
     mutationFn: () => api.post<{ secret: string; qrCodeDataUrl: string }>('/auth/2fa/generate'),
     onSuccess: (data) => {
       setQrData(data);
@@ -130,13 +145,16 @@ export default function SettingsPage() {
   });
 
   const enable2faMutation = useMutation({
-    mutationFn: () => api.post('/auth/2fa/enable', { code: totpCode }),
-    onSuccess: () => {
+    gcTime: 0,
+    mutationFn: () => api.post<{ backupCodes: string[] }>('/auth/2fa/enable', { code: totpCode }),
+    onSuccess: async ({ backupCodes: issuedCodes }) => {
+      setBackupCodes(issuedCodes);
       setQrData(null);
       setTotpCode('');
-      refetchUser();
+      generate2faMutation.reset();
       setStatusMessage('Two-Factor Authentication (2FA) is now active on your account.');
       setErrorMessage(null);
+      await refetchUser();
     },
     onError: (err: any) => setErrorMessage(err.message || 'Invalid verification code.'),
   });
@@ -193,8 +211,7 @@ export default function SettingsPage() {
               Platform Governance
             </button>
           )}
-          {hasCompany && (
-            <>
+          {canManageCompany && (
               <button
                 onClick={() => setActiveTab('company')}
                 className={`flex items-center gap-2 border-b-2 py-3.5 px-1 text-xs font-semibold uppercase tracking-wider ${
@@ -206,6 +223,8 @@ export default function SettingsPage() {
                 <Building2 className="h-4 w-4" />
                 Organization Profile
               </button>
+          )}
+          {canManageLeave && (
               <button
                 onClick={() => setActiveTab('leave')}
                 className={`flex items-center gap-2 border-b-2 py-3.5 px-1 text-xs font-semibold uppercase tracking-wider ${
@@ -217,7 +236,6 @@ export default function SettingsPage() {
                 <CalendarDays className="h-4 w-4" />
                 Leave Policies
               </button>
-            </>
           )}
           <button
             onClick={() => setActiveTab('security')}
@@ -311,7 +329,7 @@ export default function SettingsPage() {
       )}
 
       {/* Tab 1: Organization Profile */}
-      {activeTab === 'company' && hasCompany && (
+      {activeTab === 'company' && canManageCompany && (
         <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
           <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
             Tenant Organization Details
@@ -414,7 +432,7 @@ export default function SettingsPage() {
       )}
 
       {/* Tab 2: Leave Policies */}
-      {activeTab === 'leave' && hasCompany && (
+      {activeTab === 'leave' && canManageLeave && (
         <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
           <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
             Company Leave Quotas & Compliance Rules
@@ -468,6 +486,30 @@ export default function SettingsPage() {
       )}
 
       {/* Tab 3: Security & 2FA */}
+      {activeTab === 'security' && user?.companyId && user.employee && (
+        <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100">Attendance Privacy</h2>
+          <label className="mt-3 flex items-start gap-3">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 accent-indigo-600"
+              checked={updateLocationConsent.isPending
+                ? Boolean(updateLocationConsent.variables)
+                : Boolean(user.employee.locationConsent)}
+              disabled={updateLocationConsent.isPending}
+              onChange={(event) => updateLocationConsent.mutate(event.target.checked)}
+              aria-labelledby="attendance-location-label"
+              aria-describedby="attendance-location-help"
+            />
+            <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+              <span id="attendance-location-label">Allow device location at check-in</span>
+              <span id="attendance-location-help" className="mt-1 block text-xs font-normal text-zinc-500">
+                Share your device location when you punch in. You can turn this off anytime.
+              </span>
+            </span>
+          </label>
+        </section>
+      )}
       {activeTab === 'security' && (
         <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
           <div className="flex items-center justify-between">
@@ -491,7 +533,37 @@ export default function SettingsPage() {
             </span>
           </div>
 
-          {!user?.twoFaEnabled ? (
+          {backupCodes.length > 0 ? (
+            <section aria-labelledby="backup-codes-heading" className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800 space-y-3">
+              <h3 id="backup-codes-heading" className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                Save your backup codes
+              </h3>
+              <p className="text-xs text-zinc-600 dark:text-zinc-300">
+                Keep these codes somewhere secure. Each code can sign you in once if you lose access to your authenticator.
+                This is the only time they are shown.
+              </p>
+              <ul className="grid grid-cols-2 gap-2 max-w-xs">
+                {backupCodes.map((code) => (
+                  <li key={code}>
+                    <code className="block rounded bg-zinc-100 px-3 py-1.5 text-xs text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100">
+                      {code}
+                    </code>
+                  </li>
+                ))}
+              </ul>
+              <button
+                type="button"
+                disabled={enable2faMutation.isPending}
+                onClick={() => {
+                  setBackupCodes([]);
+                  enable2faMutation.reset();
+                }}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+              >
+                Done
+              </button>
+            </section>
+          ) : !user?.twoFaEnabled ? (
             <div className="pt-2 space-y-4">
               {!qrData ? (
                 <button
@@ -516,15 +588,18 @@ export default function SettingsPage() {
                     />
                   )}
                   <div className="max-w-xs space-y-2">
-                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    <label htmlFor="totp-setup-code" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                       2. Enter 6-digit verification code
                     </label>
                     <div className="flex gap-2">
                       <input
+                        id="totp-setup-code"
                         type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
                         maxLength={6}
                         value={totpCode}
-                        onChange={(e) => setTotpCode(e.target.value)}
+                        onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
                         placeholder="123456"
                         className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800"
                       />
@@ -542,12 +617,14 @@ export default function SettingsPage() {
             </div>
           ) : (
             <div className="pt-2 max-w-sm space-y-3">
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              <label htmlFor="totp-disable-password" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Confirm your password to disable 2FA
               </label>
               <div className="flex gap-2">
                 <input
+                  id="totp-disable-password"
                   type="password"
+                  autoComplete="current-password"
                   value={disablePassword}
                   onChange={(e) => setDisablePassword(e.target.value)}
                   placeholder="Current password"

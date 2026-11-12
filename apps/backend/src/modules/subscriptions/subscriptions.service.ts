@@ -2,12 +2,17 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ServiceUnavailableException,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 const Stripe = require('stripe');
 import type StripeType from 'stripe';
 import {
+  AuditAction,
+  CompanyStatus,
+  CompanySuspensionReason,
+  Prisma,
   SubscriptionTier,
   SubscriptionStatus,
   NotificationType,
@@ -213,103 +218,153 @@ export class SubscriptionsService {
   /**
    * Process incoming Stripe Webhook events.
    */
-  async handleWebhookEvent(event: { type: string; data: { object: any } }) {
-    this.logger.log(`Received Stripe Webhook event: ${event.type}`);
-
-    switch (event.type) {
-      case 'checkout.session.completed': {
-        const session = event.data.object;
-        const companyId = session.metadata?.companyId;
-        if (companyId) {
-          await this.prisma.subscription.update({
-            where: { companyId },
-            data: {
-              tier: SubscriptionTier.PREMIUM,
-              status: SubscriptionStatus.ACTIVE,
-              stripeCustomerId: session.customer,
-              stripeSubscriptionId: session.subscription,
-              suspendedAt: null,
-            },
-          });
-          if (typeof (this.prisma.company as any)?.update === 'function') {
-            await this.prisma.company.update({
-              where: { id: companyId },
-              data: { subscriptionTier: SubscriptionTier.PREMIUM },
-            });
-          }
-          this.logger.log(`Company ${companyId} upgraded to PREMIUM tier.`);
-        }
-        break;
-      }
-
-      case 'invoice.payment_succeeded': {
-        const invoice = event.data.object;
-        const customerId = invoice.customer;
-        if (customerId) {
-          await this.prisma.subscription.updateMany({
-            where: { stripeCustomerId: customerId },
-            data: {
-              status: SubscriptionStatus.ACTIVE,
-              failedPaymentCount: 0,
-              lastFailedReason: null,
-              lastFailedPaymentAt: null,
-            },
-          });
-        }
-        break;
-      }
-
-      case 'invoice.payment_failed': {
-        const invoice = event.data.object;
-        const customerId = invoice.customer;
-        const reason = invoice.last_payment_error?.message || 'Payment method declined.';
-
-        const subs = await this.prisma.subscription.findMany({
-          where: { stripeCustomerId: customerId },
-          include: { company: true },
-        });
-
-        for (const sub of subs) {
-          await this.prisma.subscription.update({
-            where: { id: sub.id },
-            data: {
-              status: SubscriptionStatus.PAST_DUE,
-              failedPaymentCount: { increment: 1 },
-              lastFailedPaymentAt: new Date(),
-              lastFailedReason: reason,
-            },
-          });
-
-          // Notify Company Admin
-          const adminUser = await this.prisma.user.findFirst({
-            where: { companyId: sub.companyId, role: UserRole.COMPANY_ADMIN },
-          });
-
-          if (adminUser) {
-            await this.prisma.notification.create({
-              data: {
-                companyId: sub.companyId,
-                userId: adminUser.id,
-                type: NotificationType.SUBSCRIPTION_EXPIRING,
-                title: 'Subscription Payment Failed',
-                body: `Your ZenHR monthly renewal failed: ${reason}. Please update your card in Billing.`,
-              },
-            });
-
-            await this.mailService.sendMail({
-              to: adminUser.email,
-              subject: 'ZenHR Urgent: Subscription Renewal Failed',
-              html: `<p>Your recent monthly subscription invoice payment failed (${reason}). Please visit your billing portal to update payment credentials.</p>`,
-            });
-          }
-        }
-        break;
-      }
-
-      default:
-        this.logger.debug(`Unhandled event type: ${event.type}`);
+  async handleWebhook(rawBody?: Buffer, signature?: string) {
+    const secret = this.configService.get<string>('app.stripe.webhookSecret');
+    if (!secret) {
+      throw new ServiceUnavailableException('Stripe webhook is not configured.');
+    }
+    if (!rawBody || !signature) {
+      throw new BadRequestException('Stripe webhook signature is required.');
     }
 
+    let event: StripeType.Event;
+    try {
+      event = Stripe.webhooks.constructEvent(rawBody, signature, secret);
+    } catch {
+      throw new BadRequestException('Invalid Stripe webhook signature.');
+    }
+    return this.handleWebhookEvent(event);
+  }
+
+  private async handleWebhookEvent(event: StripeType.Event) {
+    if (
+      event.type !== 'checkout.session.completed' &&
+      event.type !== 'invoice.payment_succeeded' &&
+      event.type !== 'invoice.payment_failed'
+    ) return { received: true };
+
+    const recipients = await this.prisma.$transaction(async (tx) => {
+      const receipt = await tx.stripeWebhookReceipt.createMany({
+        data: { id: event.id },
+        skipDuplicates: true,
+      });
+      if (receipt.count === 0) return [];
+
+      const paid = {
+        status: SubscriptionStatus.ACTIVE,
+        failedPaymentCount: 0,
+        lastFailedReason: null,
+        lastFailedPaymentAt: null,
+        suspendedAt: null,
+      };
+
+      if (event.type === 'checkout.session.completed') {
+        const session = event.data.object;
+        const companyId = session.metadata?.companyId;
+        if (
+          !companyId || session.mode !== 'subscription' || session.payment_status !== 'paid' ||
+          typeof session.customer !== 'string' || typeof session.subscription !== 'string'
+        ) return [];
+
+        await tx.subscription.update({
+          where: { companyId },
+          data: {
+            ...paid,
+            tier: SubscriptionTier.PREMIUM,
+            stripeCustomerId: session.customer,
+            stripeSubscriptionId: session.subscription,
+          },
+        });
+        await tx.company.update({
+          where: { id: companyId },
+          data: { subscriptionTier: SubscriptionTier.PREMIUM },
+        });
+        await this.restoreBillingLockout(tx, companyId);
+        return [];
+      }
+
+      const invoice = event.data.object as StripeType.Invoice & {
+        subscription?: string | StripeType.Subscription | null;
+        last_payment_error?: { message?: string };
+      };
+      const subscription = invoice.parent?.subscription_details?.subscription ?? invoice.subscription;
+      const stripeSubscriptionId = typeof subscription === 'string' ? subscription : subscription?.id;
+      const stripeCustomerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;
+      if (!stripeCustomerId || !stripeSubscriptionId) return [];
+
+      const subscriptions = await tx.subscription.findMany({
+        where: { stripeCustomerId, stripeSubscriptionId },
+        select: { id: true, companyId: true },
+      });
+      const emails: string[] = [];
+      for (const sub of subscriptions) {
+        const where = { id: sub.id, stripeCustomerId, stripeSubscriptionId };
+        if (event.type === 'invoice.payment_succeeded') {
+          const updated = await tx.subscription.updateMany({ where, data: paid });
+          if (updated.count > 0) await this.restoreBillingLockout(tx, sub.companyId);
+          continue;
+        }
+
+        const reason = invoice.last_payment_error?.message || 'Payment method declined.';
+        const updated = await tx.subscription.updateMany({
+          where: { ...where, status: { in: [
+            SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING, SubscriptionStatus.PAST_DUE,
+          ] } },
+          data: {
+            status: SubscriptionStatus.PAST_DUE,
+            failedPaymentCount: { increment: 1 },
+            lastFailedPaymentAt: new Date(event.created * 1000),
+            lastFailedReason: reason,
+          },
+        });
+        if (updated.count === 0) continue;
+
+        const admin = await tx.user.findFirst({
+          where: { companyId: sub.companyId, role: UserRole.COMPANY_ADMIN },
+          select: { id: true, email: true },
+        });
+        if (!admin) continue;
+
+        await tx.notification.create({
+          data: {
+            companyId: sub.companyId,
+            userId: admin.id,
+            type: NotificationType.SUBSCRIPTION_EXPIRING,
+            title: 'Subscription Payment Failed',
+            body: `Your ZenHR monthly renewal failed: ${reason}. Please update your card in Billing.`,
+          },
+        });
+        emails.push(admin.email);
+      }
+      return emails;
+    });
+
+    for (const to of recipients) {
+      await this.mailService.sendMail({
+        to,
+        subject: 'ZenHR Urgent: Subscription Renewal Failed',
+        html: '<p>Your recent monthly subscription invoice payment failed. Please visit your billing portal to update payment credentials.</p>',
+      });
+    }
     return { received: true };
+  }
+
+  private async restoreBillingLockout(tx: Prisma.TransactionClient, companyId: string) {
+    const restored = await tx.company.updateMany({
+      where: { id: companyId, status: CompanyStatus.SUSPENDED, suspensionReason: CompanySuspensionReason.NON_PAYMENT },
+      data: { status: CompanyStatus.ACTIVE, suspensionReason: null },
+    });
+    if (restored.count === 0) return;
+
+    await tx.auditLog.create({
+      data: {
+        companyId,
+        action: AuditAction.STATUS_CHANGE,
+        entity: 'Company',
+        entityId: companyId,
+        oldValues: { status: CompanyStatus.SUSPENDED },
+        newValues: { status: CompanyStatus.ACTIVE, reason: 'Payment received' },
+      },
+    });
   }
 }

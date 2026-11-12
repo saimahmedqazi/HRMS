@@ -73,6 +73,12 @@ test.describe('Super Admin End-to-End Suite', () => {
     await page.waitForURL('**/dashboard', { timeout: 15000 });
     // In Support Mode, the executive dashboard of the impersonated tenant is displayed
     await expect(page.locator('h1')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Attendance', exact: true })).toBeVisible();
+    await expect(page.locator('a[href="/dashboard/payroll"]')).toHaveCount(0);
+    await page.goto('/dashboard/attendance/exceptions');
+    await expect(page.getByRole('heading', { name: 'HR Exceptions Queue' })).toBeVisible();
+    await page.goto('/dashboard/payroll');
+    await expect(page.getByRole('heading', { name: 'Access Denied' })).toBeVisible();
   });
 
   test('Super Admin Billing page displays platform tenant subscriptions', async ({ page }) => {

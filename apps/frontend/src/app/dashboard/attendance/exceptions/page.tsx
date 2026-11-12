@@ -3,25 +3,30 @@
 import React from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
-import { StatusBadge } from '@/components/ui/status-badge';
-import { AlertTriangle, Check, X, ArrowLeft, ShieldAlert, Clock } from 'lucide-react';
+import { api, ApiError } from '@/lib/api';
+import { AlertTriangle, Check, X, ArrowLeft, ShieldAlert } from 'lucide-react';
 
 export default function AttendanceExceptionsPage() {
   const queryClient = useQueryClient();
 
-  const { data: exceptionsData, isLoading } = useQuery({
+  const { data: exceptionsData, error: loadError, isLoading } = useQuery({
     queryKey: ['attendance-exceptions'],
     queryFn: () => api.get<any[]>('/attendance/exceptions'),
   });
 
   const exceptions = exceptionsData || [];
 
+  const refreshAttendance = () => {
+    void queryClient.invalidateQueries({ queryKey: ['attendance-exceptions'] });
+    void queryClient.invalidateQueries({ queryKey: ['attendance-records'] });
+    void queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] });
+  };
   const resolveMutation = useMutation({
     mutationFn: ({ id, action }: { id: string; action: 'APPROVE' | 'REJECT' }) =>
       api.post(`/attendance/exceptions/${id}/resolve`, { action }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['attendance-exceptions'] });
+    onSuccess: refreshAttendance,
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) refreshAttendance();
     },
   });
 
@@ -44,6 +49,12 @@ export default function AttendanceExceptionsPage() {
           </p>
         </div>
       </div>
+
+      {resolveMutation.error && (
+        <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">
+          {resolveMutation.error.message}
+        </p>
+      )}
 
       {/* Exceptions Table */}
       <div className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
@@ -72,6 +83,12 @@ export default function AttendanceExceptionsPage() {
               <tr>
                 <td colSpan={5} className="py-6 text-center text-sm text-zinc-500">
                   Loading exceptions...
+                </td>
+              </tr>
+            ) : loadError ? (
+              <tr>
+                <td colSpan={5} role="alert" className="py-6 text-center text-sm text-rose-600 dark:text-rose-300">
+                  {loadError.message}
                 </td>
               </tr>
             ) : exceptions.length === 0 ? (

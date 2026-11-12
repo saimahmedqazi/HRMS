@@ -1,8 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { ApprovalStatus, ResourceRequestStatus, UserRole } from '@prisma/client';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ApprovalStatus, Prisma, ResourceRequestStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { ResourcesService } from './resources.service';
+import { DataScopeService } from '@common/services/data-scope.service';
 
 describe('ResourcesService', () => {
   let service: ResourcesService;
@@ -27,11 +28,13 @@ describe('ResourcesService', () => {
       notification: {
         create: jest.fn(),
       },
+      $transaction: jest.fn((callback) => callback(prisma)),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ResourcesService,
+        DataScopeService,
         { provide: PrismaService, useValue: prisma },
       ],
     }).compile();
@@ -56,7 +59,7 @@ describe('ResourcesService', () => {
         id: mockEmployeeId,
         firstName: 'Bob',
         lastName: 'Jones',
-        department: { managerId: 'mgr-1' },
+        department: { companyId: mockCompanyId, managerId: 'mgr-1' },
       });
       prisma.employee.findUnique.mockResolvedValue({ id: 'mgr-1', userId: 'mgr-user-id' });
       prisma.resourceRequest.create.mockResolvedValue({
@@ -71,6 +74,10 @@ describe('ResourcesService', () => {
       });
 
       expect(prisma.resourceRequest.create).toHaveBeenCalled();
+      expect(prisma.employee.findUnique).toHaveBeenCalledWith({
+        where: { id: 'mgr-1', companyId: mockCompanyId, deletedAt: null },
+        select: { userId: true },
+      });
       expect(prisma.notification.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -79,6 +86,25 @@ describe('ResourcesService', () => {
         }),
       );
       expect(result.id).toBe('res-1');
+    });
+
+    it.each([mockCompanyId, 'different-company'])('leaves an unavailable manager unassigned for department %s', async (departmentCompanyId) => {
+      prisma.employee.findFirst.mockResolvedValue({
+        id: mockEmployeeId,
+        department: { companyId: departmentCompanyId, managerId: 'unavailable-manager' },
+      });
+      prisma.employee.findUnique.mockResolvedValue(null);
+      prisma.resourceRequest.create.mockResolvedValue({ id: 'res-2' });
+
+      await service.createResourceRequest(mockCompanyId, mockUserId, {
+        resourceType: 'Laptop', description: 'Development workstation',
+      });
+
+      expect(prisma.resourceRequest.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ step1ApproverId: null }),
+      }));
+      expect(prisma.employee.findUnique).toHaveBeenCalledTimes(departmentCompanyId === mockCompanyId ? 1 : 0);
+      expect(prisma.notification.create).not.toHaveBeenCalled();
     });
   });
 
@@ -107,7 +133,9 @@ describe('ResourcesService', () => {
         { decision: 'APPROVE', notes: 'Approved for Q4 budget' },
       );
 
-      expect(prisma.resourceRequest.update).toHaveBeenCalled();
+      expect(prisma.resourceRequest.update).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'res-1', companyId: mockCompanyId, status: ResourceRequestStatus.PENDING },
+      }));
       expect(result.status).toBe(ResourceRequestStatus.STEP_1_APPROVED);
     });
 
@@ -196,8 +224,25 @@ describe('ResourcesService', () => {
         { notes: 'Delivered' },
       );
 
-      expect(prisma.resourceRequest.update).toHaveBeenCalled();
+      expect(prisma.resourceRequest.update).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'res-1', companyId: mockCompanyId, status: ResourceRequestStatus.STEP_1_APPROVED },
+      }));
       expect(result.status).toBe(ResourceRequestStatus.FULFILLED);
+    });
+
+    it('reports a competing decision without creating a second notification', async () => {
+      prisma.resourceRequest.findFirst.mockResolvedValue({
+        id: 'res-1', companyId: mockCompanyId, status: ResourceRequestStatus.STEP_1_APPROVED,
+        resourceType: 'Laptop', requestedBy: { userId: mockUserId },
+      });
+      prisma.resourceRequest.update.mockRejectedValue(new Prisma.PrismaClientKnownRequestError(
+        'Record changed', { code: 'P2025', clientVersion: 'test' },
+      ));
+
+      await expect(service.fulfillResourceRequest(
+        mockCompanyId, 'res-1', 'hr-user-id', UserRole.HR_MANAGER, { notes: 'Delivered' },
+      )).rejects.toThrow(ConflictException);
+      expect(prisma.notification.create).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,0 +1,8 @@
+# Live provider verification for client UAT
+
+| Defect | Severity | Affected files | Reproduction and resolution |
+| --- | --- | --- | --- |
+| D-07 | Major | `storage.service.ts`, employee and leave download controllers | Upload an employee document or sick-leave prescription and open the signed download route. A production-mode local API used live Cloudinary to return the byte-identical synthetic PDFs. A legacy-style raw PDF also downloaded. The API rejected the unauthenticated employee-document request and the Team Lead's request for the reportee's prescription. All three synthetic assets were deleted. |
+| D-12 | Minor | `ai-assistant.service.ts`, `ai-assistant.service.spec.ts`, `.env.example` | Ask “How do I apply to work from home?” with the workspace's Gemini model configured. Gemini 3.8 Flash returned provider errors or exceeded the old five-second wait. The API now tries the configured model first and can use Gemini 3.5 Flash within a shared deadline. It uses a server timeout of at least 10 seconds to meet the provider's requirement while keeping the shorter client wait for the preferred model. A production-mode local API call returned the correct Attendance instructions from live Gemini 3.5 Flash with the existing model override present. |
+
+The final backend build and TypeScript check passed on Node 24.22.3. All 222 Jest tests passed. The full Chromium run on this runtime passed 127 tests before the Gemini change. Both affected Chromium tests passed again after the change. Live provider checks used a separate disposable PostgreSQL fixture and synthetic records. The client deployment and historical assets in its database remain outside the verification performed here.

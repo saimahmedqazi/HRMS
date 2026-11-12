@@ -59,22 +59,13 @@ test.describe('Role 2: Operation Manager Comprehensive Test Suite (10 Tests)', (
     await page.screenshot({ path: path.join(screenshotsDir, 'om-05-resource-requests.png'), fullPage: true });
   });
 
-  test('OM-06: Resource Requisition Details and Applicant Scoping Inspection', async ({ page }) => {
+  test('OM-06: Platform Operations cannot view tenant resource applicants', async ({ page }) => {
     await page.goto('/dashboard/resources');
     await page.waitForURL('**/dashboard/resources');
 
-    // Table should be visible
     await expect(page.locator('text=Resource Requisitions')).toBeVisible();
-
-    // Inspect table columns
-    const table = page.locator('table');
-    await expect(table).toContainText('Applicant');
-    await expect(table).toContainText('Department');
-    await expect(table).toContainText('Resource');
-    await expect(table).toContainText('Status');
-
-    // Verify existing requisitions are listed for Operations Manager oversight
-    await expect(page.locator('text=Ergonomic Mechanical Keyboard')).toBeVisible();
+    await expect(page.getByText('No resource requests submitted', { exact: true })).toBeVisible();
+    await expect(page.getByRole('table')).toHaveCount(0);
 
     await page.screenshot({ path: path.join(screenshotsDir, 'om-06-requisition-details.png') });
   });

@@ -23,6 +23,14 @@ export default function MyProfilePage() {
     );
   }
 
+  const loginTime = user?.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }) : null;
+  const latitude = user?.lastLoginLatitude;
+  const longitude = user?.lastLoginLongitude;
+  const loginCoordinates = latitude != null && longitude != null ? `${latitude}, ${longitude}` : null;
+
   return (
     <div className="max-w-2xl space-y-6">
       <div>
@@ -76,41 +84,20 @@ export default function MyProfilePage() {
             <MapPin className="h-4 w-4 text-indigo-600" />
             Last Login Session & Geolocation Telemetry
           </h3>
-          <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
-            VERIFIED SESSION
-          </span>
+          {loginTime && (
+            <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+              VERIFIED SESSION
+            </span>
+          )}
         </div>
 
         <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed bg-white dark:bg-zinc-900 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
           You logged in from IP{' '}
           <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
-            {user?.lastLoginIp || '127.0.0.1'}
+            {user?.lastLoginIp ?? 'Unavailable'}
           </span>{' '}
-          at{' '}
-          <span className="font-semibold">
-            {user?.lastLoginLocation || 'Local Office Network, PK'}
-          </span>{' '}
-          (Lat:{' '}
-          <span className="font-mono font-semibold">
-            {user?.lastLoginLatitude ?? 24.8607}
-          </span>
-          , Long:{' '}
-          <span className="font-mono font-semibold">
-            {user?.lastLoginLongitude ?? 67.0011}
-          </span>
-          ) on{' '}
-          <span className="font-semibold">
-            {user?.lastLoginAt
-              ? new Date(user.lastLoginAt).toLocaleString('en-US', {
-                  dateStyle: 'medium',
-                  timeStyle: 'short',
-                })
-              : new Date().toLocaleString('en-US', {
-                  dateStyle: 'medium',
-                  timeStyle: 'short',
-                })}
-          </span>
-          .
+          {user?.lastLoginLocation && <>near <span className="font-semibold">{user.lastLoginLocation}</span>{' '}</>}
+          {loginTime && <>on <span className="font-semibold">{loginTime}</span></>}
         </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
@@ -119,25 +106,27 @@ export default function MyProfilePage() {
               <Globe className="h-3 w-3 text-indigo-500" /> Login IP Address
             </span>
             <p className="font-mono font-bold text-zinc-900 dark:text-zinc-100 mt-1">
-              {user?.lastLoginIp || '127.0.0.1'}
+              {user?.lastLoginIp ?? 'Unavailable'}
             </p>
           </div>
 
           <div className="rounded-xl bg-white dark:bg-zinc-900 p-3 border border-zinc-200 dark:border-zinc-800">
             <span className="text-[10px] uppercase font-semibold text-zinc-400 flex items-center gap-1">
-              <MapPin className="h-3 w-3 text-emerald-500" /> Coordinates (Lat / Long)
+              <MapPin className="h-3 w-3 text-emerald-500" /> Approximate Coordinates (Lat / Long)
             </span>
             <p className="font-mono font-bold text-zinc-900 dark:text-zinc-100 mt-1">
-              {user?.lastLoginLatitude ?? 24.8607}, {user?.lastLoginLongitude ?? 67.0011}
+              {loginCoordinates ?? 'Unavailable'}
             </p>
-            <a
-              href={`https://www.google.com/maps?q=${user?.lastLoginLatitude ?? 24.8607},${user?.lastLoginLongitude ?? 67.0011}`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-[10px] text-indigo-600 hover:underline inline-flex items-center gap-1 mt-0.5"
-            >
-              Open Map <ExternalLink className="h-2.5 w-2.5" />
-            </a>
+            {loginCoordinates && (
+              <a
+                href={`https://www.google.com/maps?q=${encodeURIComponent(loginCoordinates)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[10px] text-indigo-600 hover:underline inline-flex items-center gap-1 mt-0.5"
+              >
+                Open Map <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            )}
           </div>
 
           <div className="rounded-xl bg-white dark:bg-zinc-900 p-3 border border-zinc-200 dark:border-zinc-800">
@@ -145,9 +134,7 @@ export default function MyProfilePage() {
               <Clock className="h-3 w-3 text-amber-500" /> Login Timestamp
             </span>
             <p className="font-semibold text-zinc-900 dark:text-zinc-100 mt-1">
-              {user?.lastLoginAt
-                ? new Date(user.lastLoginAt).toLocaleString()
-                : 'Active Session'}
+              {loginTime ?? 'Unavailable'}
             </p>
           </div>
         </div>

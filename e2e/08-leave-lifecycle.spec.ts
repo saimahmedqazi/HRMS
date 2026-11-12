@@ -1,10 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { PrismaClient } from '@prisma/client';
+import { openFixtureDatabase } from './fixture-database';
 
 test.describe('Leave Management & 2-Step Approval Lifecycle', () => {
-  const prisma = new PrismaClient();
-
   test.beforeAll(async () => {
+    const prisma = openFixtureDatabase();
     // Reset leave balances for employee@acme.com so test always has full annual quota
     const empUser = await prisma.user.findUnique({
       where: { email: 'employee@acme.com' },
@@ -24,6 +23,73 @@ test.describe('Leave Management & 2-Step Approval Lifecycle', () => {
     }
     await prisma.$disconnect();
   });
+
+  test('Concurrent leave submissions cannot reserve more than the first-use balance', async ({ page }) => {
+    const prisma = openFixtureDatabase();
+    const year = new Date().getUTCFullYear() + 3;
+    const reasonPrefix = `Concurrent leave fixture ${Date.now()}`;
+    try {
+      const employee = await prisma.employee.findFirstOrThrow({
+        where: { user: { email: 'employee@acme.com' }, company: { slug: 'acme-corp' } },
+        select: { id: true, companyId: true },
+      });
+      const { companyId, id: employeeId } = employee;
+      const leaveType = 'CASUAL';
+      const key = { companyId, employeeId, leaveType, year } as const;
+      const setting = await prisma.leaveTypeSetting.findUniqueOrThrow({
+        where: { companyId_leaveType: { companyId, leaveType } },
+      });
+      expect(setting.annualAllocation).toBe(10);
+      expect(await prisma.leaveBalance.findUnique({
+        where: { companyId_employeeId_leaveType_year: key },
+      })).toBeNull();
+
+      await page.goto('/login');
+      await page.locator('input[type="email"]').fill('employee@acme.com');
+      await page.locator('input[type="password"]').fill('Password@123');
+      await page.locator('button[type="submit"]').click();
+      await page.waitForURL('**/dashboard');
+
+      try {
+        const submitted = await Promise.all(['06', '07'].map((month) =>
+          page.request.post('/api/v1/leave/requests', {
+            data: {
+              leaveTypeSettingId: setting.id,
+              startDate: `${year}-${month}-01`,
+              endDate: `${year}-${month}-10`,
+              reason: `${reasonPrefix} ${month}`,
+            },
+          }),
+        ));
+
+        expect(submitted.map((response) => response.status()).sort()).toEqual([201, 400]);
+        const declined = submitted.find((response) => response.status() === 400)!;
+        expect(await declined.text()).toContain('Requested: 10 days, Available: 0 days.');
+        const requests = await prisma.leaveRequest.findMany({
+          where: { companyId, employeeId, reason: { startsWith: reasonPrefix } },
+        });
+        expect(requests).toHaveLength(1);
+        const balance = await prisma.leaveBalance.findUniqueOrThrow({
+          where: { companyId_employeeId_leaveType_year: key },
+        });
+        expect(balance).toMatchObject({ pending: 10, used: 0 });
+
+        const cancellation = await page.request.post(`/api/v1/leave/requests/${requests[0].id}/cancel`);
+        expect(cancellation.ok()).toBe(true);
+        expect(await prisma.leaveBalance.findUniqueOrThrow({
+          where: { companyId_employeeId_leaveType_year: key },
+        })).toMatchObject({ pending: 0, used: 0 });
+      } finally {
+        await prisma.$transaction([
+          prisma.leaveRequest.deleteMany({ where: { companyId, employeeId, reason: { startsWith: reasonPrefix } } }),
+          prisma.leaveBalance.deleteMany({ where: key }),
+        ]);
+      }
+    } finally {
+      await prisma.$disconnect();
+    }
+  });
+
   test('Probationary Employee is gated from requesting leave with probation notice', async ({ page }) => {
     await page.context().clearCookies();
     await page.goto('/login');

@@ -17,7 +17,7 @@ import { MailModule } from '../../common/mail/mail.module';
       global: true,
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('app.jwt.accessSecret', 'change-in-production'),
+        secret: configService.getOrThrow<string>('app.jwt.accessSecret'),
         signOptions: {
           expiresIn: configService.get<string>('app.jwt.accessExpiresIn', '15m'),
         },
@@ -30,6 +30,6 @@ import { MailModule } from '../../common/mail/mail.module';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
-  exports: [AuthService, JwtModule, PassportModule],
+  exports: [AuthService, JwtModule, PassportModule, JwtStrategy],
 })
 export class AuthModule {}

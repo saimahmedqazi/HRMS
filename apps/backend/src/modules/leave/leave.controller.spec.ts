@@ -55,7 +55,7 @@ describe('LeaveController', () => {
 
       const result = await controller.getLeaveBalances(mockUser, undefined, '2026');
       expect(result).toEqual(mockBalances);
-      expect(mockLeaveService.getLeaveBalances).toHaveBeenCalledWith('company-1', 'emp-1', 2026);
+      expect(mockLeaveService.getLeaveBalances).toHaveBeenCalledWith('company-1', 'emp-1', 2026, mockUser);
     });
   });
 

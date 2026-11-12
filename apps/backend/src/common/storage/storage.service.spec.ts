@@ -2,7 +2,7 @@ import 'multer';
 import { Test, TestingModule } from '@nestjs/testing';
 import { StorageService, DEFAULT_IMAGE_MIMES } from './storage.service';
 import { ConfigService } from '@nestjs/config';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 
 describe('StorageService', () => {
   let service: StorageService;
@@ -64,5 +64,38 @@ describe('StorageService', () => {
     expect(result.url).toMatch(/^https:\/\/res\.cloudinary\.com/);
     expect(result.publicId).toContain('avatars/');
     expect(result.size).toBe(2048);
+  });
+
+  describe('document download URLs', () => {
+    const folder = 'zenhr/companies/tenant-1/documents';
+    const secureStorage = () => new StorageService(new ConfigService({
+      app: { cloudinary: { cloudName: 'qa-assets', apiKey: 'fixture-key', apiSecret: 'fixture-secret' } },
+    }));
+
+    it.each(['upload', 'authenticated'])('signs a raw PDF using its original %s delivery type', (type) => {
+      const storage = secureStorage();
+      const url = new URL(storage.getDownloadUrl(
+        `https://res.cloudinary.com/qa-assets/raw/${type}/v1/${folder}/contract.pdf`,
+        [folder],
+      ));
+      expect(url.origin).toBe('https://api.cloudinary.com');
+      expect(url.pathname).toBe('/v1_1/qa-assets/raw/download');
+      expect(url.searchParams.get('public_id')).toBe(`${folder}/contract.pdf`);
+      expect(url.searchParams.get('type')).toBe(type);
+      expect(url.searchParams.get('signature')).toBeTruthy();
+      expect(Number(url.searchParams.get('expires_at'))).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    });
+
+    it('rejects a stored URL from a different account or tenant folder', () => {
+      const storage = secureStorage();
+      expect(() => storage.getDownloadUrl(
+        'https://res.cloudinary.com/other/raw/upload/v1/zenhr/companies/tenant-1/documents/contract.pdf',
+        [folder],
+      )).toThrow(NotFoundException);
+      expect(() => storage.getDownloadUrl(
+        'https://res.cloudinary.com/qa-assets/raw/upload/v1/zenhr/companies/tenant-2/documents/contract.pdf',
+        [folder],
+      )).toThrow(NotFoundException);
+    });
   });
 });

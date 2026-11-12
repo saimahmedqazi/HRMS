@@ -24,14 +24,25 @@ test.describe('Role 7: Employee Comprehensive Test Suite (10 Tests)', () => {
   });
 
   test('EM-02: Daily Punch Card displays Real-Time Telemetry and Punch Action button', async ({ page }) => {
+    const punchResponse = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === '/api/v1/attendance/today' && response.ok(),
+    );
     await page.click('a[href="/dashboard/my-attendance"]');
     await page.waitForURL('**/dashboard/my-attendance', { timeout: 10000 });
     await expect(page.locator('h1')).toContainText('Attendance & Work Timer');
 
     // Daily Punch card
     await expect(page.getByRole('heading', { name: 'Daily Punch' })).toBeVisible();
-    await expect(page.locator('text=IP:').first()).toBeVisible();
-    await expect(page.locator('text=Lat/Long:').first()).toBeVisible();
+    const { data } = await (await punchResponse).json();
+    if (data?.checkOutTime) {
+      await expect(page.getByText(/Shift completed for today/)).toBeVisible();
+    } else if (data?.checkInTime) {
+      await expect(page.getByRole('button', { name: /Punch Out/ })).toBeVisible();
+    } else {
+      await expect(page.getByRole('button', { name: 'Punch In Now' })).toBeVisible();
+      await expect(page.locator('text=IP:').first()).toBeVisible();
+      await expect(page.locator('text=Lat/Long:').first()).toBeVisible();
+    }
 
     await page.screenshot({ path: path.join(screenshotsDir, 'em-02-daily-punch.png') });
   });
@@ -115,18 +126,30 @@ test.describe('Role 7: Employee Comprehensive Test Suite (10 Tests)', () => {
   });
 
   test('EM-08: My Payslips Statement: Monthly salary breakdown & Download PDF button', async ({ page }) => {
-    await page.click('a[href="/dashboard/my-payslips"]');
-    await page.waitForURL('**/dashboard/my-payslips', { timeout: 10000 });
-    await expect(page.locator('h1')).toContainText('My Payslips');
+    const table = page.getByRole('table');
+    const empty = page.getByText('No payslips issued yet', { exact: true });
+    let releaseRequest!: () => void;
+    const pending = new Promise<void>((resolve) => { releaseRequest = resolve; });
+    await page.route('**/api/v1/payroll/payslips', async (route) => {
+      await pending;
+      await route.continue();
+    });
+    try {
+      await page.click('a[href="/dashboard/my-payslips"]');
+      await expect(page.getByRole('heading', { name: 'My Payslips', exact: true })).toBeVisible();
+      await expect(page.getByRole('status')).toContainText('Loading payslips');
+      await expect(empty).toBeHidden();
+    } finally {
+      releaseRequest();
+    }
 
-    // Verify table structure
-    const table = page.locator('table');
+    await expect(table.or(empty)).toBeVisible();
     if (await table.isVisible()) {
       await expect(table).toContainText('Base Salary');
       await expect(table).toContainText('Net Disbursed');
       await expect(page.locator('a:has-text("PDF")').first()).toBeVisible();
     } else {
-      await expect(page.locator('text=No payslips issued yet')).toBeVisible();
+      await expect(empty).toBeVisible();
     }
 
     await page.screenshot({ path: path.join(screenshotsDir, 'em-08-my-payslips.png'), fullPage: true });

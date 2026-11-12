@@ -3,7 +3,10 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ConfigService } from '@nestjs/config';
 import { Strategy, ExtractJwt } from 'passport-jwt';
 import { Request } from 'express';
+import { UserRole } from '@prisma/client';
+import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { isInactiveAccount } from '../account-state';
 
 export interface JwtPayload {
   sub: string;
@@ -11,6 +14,8 @@ export interface JwtPayload {
   role: string;
   companyId: string | null;
   supportModeCompanyId?: string | null;
+  sessionId?: string;
+  is2faTemp?: boolean;
   iat?: number;
   exp?: number;
 }
@@ -29,26 +34,66 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         },
       ]),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('app.jwt.accessSecret', 'change-in-production'),
+      secretOrKey: configService.getOrThrow<string>('app.jwt.accessSecret'),
     });
   }
 
-  async validate(payload: JwtPayload): Promise<JwtPayload> {
+  async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
+    if (payload.is2faTemp || !payload.sub || !payload.role || !Number.isFinite(payload.exp)) {
+      throw new UnauthorizedException('Invalid access session');
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       select: {
         id: true,
+        email: true,
         companyId: true,
         role: true,
         deletedAt: true,
         company: { select: { status: true } },
+        employee: { select: { status: true, deletedAt: true } },
       },
     });
 
-    if (!user || user.deletedAt || (user.company && user.company.status === 'SUSPENDED')) {
+    if (!user || isInactiveAccount(user)) {
       throw new UnauthorizedException('User account or company inactive or suspended');
     }
 
-    return payload;
+    const platformRole = user.role === UserRole.SUPER_ADMIN || user.role === UserRole.OPERATION_MANAGER;
+    if (user.role !== payload.role || user.companyId !== payload.companyId ||
+        (platformRole ? user.companyId !== null : !user.companyId)) {
+      throw new UnauthorizedException('Account permissions have changed');
+    }
+
+    if (payload.supportModeCompanyId) {
+      if (user.role !== UserRole.SUPER_ADMIN || !payload.sessionId) {
+        throw new UnauthorizedException('Invalid support session');
+      }
+      const session = await this.prisma.supportModeSession.findFirst({
+        where: {
+          id: payload.sessionId,
+          superAdminId: user.id,
+          companyId: payload.supportModeCompanyId,
+          endedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        select: { id: true },
+      });
+      if (!session) {
+        throw new UnauthorizedException('Support session has ended');
+      }
+    }
+
+    return {
+      id: user.id,
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      companyId: payload.supportModeCompanyId || user.companyId,
+      supportModeCompanyId: payload.supportModeCompanyId,
+      iat: payload.iat,
+      exp: payload.exp,
+    };
   }
 }

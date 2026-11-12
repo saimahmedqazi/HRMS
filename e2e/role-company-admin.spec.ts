@@ -109,10 +109,12 @@ test.describe('Role 3: Company Admin (CEO) Comprehensive Test Suite (10 Tests)',
     await expect(page.locator('text=Attendance Analytics Graph (Present vs. Absent)')).toBeVisible();
 
     // Monthly Attendance Calendar Grid
-    await expect(page.getByRole('heading', { name: 'Monthly Attendance Calendar' })).toBeVisible();
-    await expect(page.getByText('Sun', { exact: true })).toBeVisible();
-    await expect(page.getByText('Mon', { exact: true })).toBeVisible();
-    await expect(page.getByText('Sat', { exact: true })).toBeVisible();
+    const calendarHeading = page.getByRole('heading', { name: 'Monthly Attendance Calendar' });
+    await expect(calendarHeading).toBeVisible();
+    const calendar = calendarHeading.locator('xpath=../../..');
+    for (const day of ['Sun', 'Mon', 'Sat']) {
+      await expect(calendar.getByText(day, { exact: true })).toBeVisible();
+    }
 
     await page.screenshot({ path: path.join(screenshotsDir, 'ca-07-attendance-analytics-calendar.png'), fullPage: true });
   });
@@ -142,7 +144,7 @@ test.describe('Role 3: Company Admin (CEO) Comprehensive Test Suite (10 Tests)',
     await expect(page.locator('h1')).toContainText('Billing & Subscription Plans');
 
     // Active Tier Badge
-    await expect(page.locator('text=PREMIUM PLAN')).toBeVisible();
+    await expect(page.getByText('PREMIUM PLAN', { exact: true })).toBeVisible();
 
     // Billing Cycle Start Date & Next Renewal Date
     await expect(page.locator('text=Billing Cycle Start Date')).toBeVisible();

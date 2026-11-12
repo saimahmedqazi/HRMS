@@ -1,12 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import { UserRole, DataScope } from '@prisma/client';
+import { UserRole, DataScope, Prisma } from '@prisma/client';
 import { AuthenticatedUser } from '../decorators/current-user.decorator';
+import { PrismaService } from '../prisma/prisma.service';
 
 export interface DataScopeFilter {
   companyId?: string;
   departmentId?: string;
   teamId?: string;
-  id?: string;          // for SELF scope — matches employeeId
+  id?: string | Prisma.StringFilter;
   userId?: string;      // alternative for SELF scope
 }
 
@@ -85,6 +86,7 @@ export const ROLE_MODULE_MAP: Record<UserRole, string[]> = {
     'payroll-view',
     'resources',
     'ai-assistant',
+    'settings',
     'my-profile',
   ],
   [UserRole.TEAM_LEAD]: [
@@ -94,6 +96,7 @@ export const ROLE_MODULE_MAP: Record<UserRole, string[]> = {
     'leave-approvals',
     'resources',
     'ai-assistant',
+    'settings',
     'my-profile',
   ],
   [UserRole.EMPLOYEE]: [
@@ -104,6 +107,7 @@ export const ROLE_MODULE_MAP: Record<UserRole, string[]> = {
     'work-timer',
     'ai-assistant',
     'resources',
+    'settings',
     'my-profile',
   ],
 };
@@ -115,7 +119,7 @@ export class DataScopeService {
    * Services should merge this into their query's `where` clause.
    */
   applyScope(
-    user: AuthenticatedUser,
+    user: Pick<AuthenticatedUser, 'role' | 'companyId'>,
     employeeContext?: { departmentId?: string; teamId?: string; employeeId?: string },
   ): DataScopeFilter {
     const role = user.role as UserRole;
@@ -136,26 +140,53 @@ export class DataScopeService {
           companyId: user.companyId ?? undefined,
           ...(employeeContext?.departmentId
             ? { departmentId: employeeContext.departmentId }
-            : {}),
+            : { id: employeeContext?.employeeId ?? { in: [] } }),
         };
 
       case DataScope.TEAM:
         // Team Lead — scoped to their team
         return {
           companyId: user.companyId ?? undefined,
-          ...(employeeContext?.teamId ? { teamId: employeeContext.teamId } : {}),
+          ...(employeeContext?.teamId
+            ? { teamId: employeeContext.teamId }
+            : { id: employeeContext?.employeeId ?? { in: [] } }),
         };
 
       case DataScope.SELF:
         // Employee — own records only
         return {
           companyId: user.companyId ?? undefined,
-          ...(employeeContext?.employeeId ? { id: employeeContext.employeeId } : {}),
+          id: employeeContext?.employeeId ?? { in: [] },
         };
 
       default:
         return { companyId: user.companyId ?? undefined };
     }
+  }
+
+  async resolveEmployeeScope(
+    prisma: PrismaService,
+    companyId: string,
+    user: Pick<AuthenticatedUser, 'id' | 'sub' | 'role'>,
+  ): Promise<DataScopeFilter & { companyId: string; deletedAt: null }> {
+    const scope = this.getScope(user.role as UserRole);
+    const userId = user.id || user.sub;
+    const caller = userId && scope !== DataScope.PLATFORM && scope !== DataScope.COMPANY
+      ? await prisma.employee.findFirst({
+          where: { companyId, userId, deletedAt: null },
+          select: { id: true, departmentId: true, teamId: true },
+        })
+      : null;
+
+    return {
+      ...this.applyScope({ role: user.role, companyId }, {
+        departmentId: caller?.departmentId ?? undefined,
+        teamId: caller?.teamId ?? undefined,
+        employeeId: caller?.id,
+      }),
+      companyId,
+      deletedAt: null,
+    };
   }
 
   /**

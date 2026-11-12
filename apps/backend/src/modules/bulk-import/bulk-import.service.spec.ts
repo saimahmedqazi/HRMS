@@ -3,6 +3,7 @@ import { BadRequestException } from '@nestjs/common';
 import * as xlsx from 'xlsx';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { BulkImportService } from './bulk-import.service';
+import { PASSWORD_SETUP_REQUIRED } from '@common/utils/password-policy';
 
 describe('BulkImportService', () => {
   let service: BulkImportService;
@@ -93,6 +94,7 @@ describe('BulkImportService', () => {
 
       const result = await service.previewImport(mockCompanyId, mockFile);
 
+      expect(prisma.user.findMany).toHaveBeenCalledWith({ where: { companyId: mockCompanyId }, select: { email: true } });
       expect(result.totalRows).toBe(3);
       expect(result.validCount).toBe(1);
       expect(result.invalidCount).toBe(2);
@@ -106,6 +108,17 @@ describe('BulkImportService', () => {
   });
 
   describe('executeImport', () => {
+    it('returns a generic row error without database diagnostics', async () => {
+      const buffer = createMockExcelBuffer([{
+        firstName: 'Alice', lastName: 'Smith', email: 'alice@zenhr.com', employeeCode: 'EMP-101', hireDate: '2026-01-15',
+      }]);
+      prisma.$transaction.mockRejectedValueOnce(new Error('Database diagnostic should not be returned'));
+
+      const result = await service.executeImport(mockCompanyId, { buffer } as Express.Multer.File);
+
+      expect(result.errors).toEqual([{ row: 2, field: 'general', message: 'Could not import this row. Check the employee details and try again.' }]);
+    });
+
     it('should import valid employees transactionally', async () => {
       const rows = [
         {
@@ -126,7 +139,9 @@ describe('BulkImportService', () => {
       const result = await service.executeImport(mockCompanyId, mockFile);
 
       expect(result.importedCount).toBe(1);
-      expect(prisma.user.create).toHaveBeenCalled();
+      expect(prisma.user.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ passwordHash: PASSWORD_SETUP_REQUIRED }),
+      }));
       expect(prisma.employee.create).toHaveBeenCalled();
       expect(prisma.leaveBalance.createMany).toHaveBeenCalled();
     });

@@ -3,13 +3,13 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   AuditAction,
   CompanyStatus,
+  CompanySuspensionReason,
   NotificationType,
   SubscriptionStatus,
   UserRole,
 } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { MailService } from '@common/mail/mail.service';
-import { AuditLogService } from '@common/services/audit-log.service';
 
 @Injectable()
 export class SubscriptionCronService {
@@ -18,7 +18,6 @@ export class SubscriptionCronService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
-    private readonly auditLogService: AuditLogService,
   ) {}
 
   /**
@@ -92,37 +91,40 @@ export class SubscriptionCronService {
       include: { company: true },
     });
 
+    let lockedOut = 0;
     for (const sub of delinquentSubs) {
-      this.logger.error(
-        `Locking out company ${sub.company.name} (${sub.companyId}) due to 60+ days of non-payment.`,
-      );
-
-      await this.prisma.$transaction(async (tx) => {
-        // Suspend Subscription
-        await tx.subscription.update({
-          where: { id: sub.id },
+      const locked = await this.prisma.$transaction(async (tx) => {
+        const subscription = await tx.subscription.updateMany({
+          where: {
+            id: sub.id,
+            status: SubscriptionStatus.PAST_DUE,
+            lastFailedPaymentAt: { lte: sixtyDaysAgo },
+          },
           data: {
             status: SubscriptionStatus.SUSPENDED,
             suspendedAt: new Date(),
           },
         });
+        if (subscription.count === 0) return false;
 
-        // Suspend Company
-        await tx.company.update({
-          where: { id: sub.companyId },
+        const company = await tx.company.updateMany({
+          where: { id: sub.companyId, status: CompanyStatus.ACTIVE },
           data: {
             status: CompanyStatus.SUSPENDED,
+            suspensionReason: CompanySuspensionReason.NON_PAYMENT,
           },
         });
+        if (company.count === 0) return false;
 
-        // Audit Trail
-        await this.auditLogService.log({
-          companyId: sub.companyId,
-          action: AuditAction.STATUS_CHANGE,
-          entity: 'Company',
-          entityId: sub.companyId,
-          oldValues: { status: sub.company.status },
-          newValues: { status: CompanyStatus.SUSPENDED, reason: 'Suspended (Non-Payment)' },
+        await tx.auditLog.create({
+          data: {
+            companyId: sub.companyId,
+            action: AuditAction.STATUS_CHANGE,
+            entity: 'Company',
+            entityId: sub.companyId,
+            oldValues: { status: CompanyStatus.ACTIVE },
+            newValues: { status: CompanyStatus.SUSPENDED, reason: 'Suspended (Non-Payment)' },
+          },
         });
 
         // Broadcast notification to admin
@@ -141,9 +143,14 @@ export class SubscriptionCronService {
             },
           });
         }
+        return true;
       });
+      if (locked) {
+        lockedOut++;
+        this.logger.warn(`Locked out company ${sub.companyId} due to 60+ days of non-payment.`);
+      }
     }
 
-    return delinquentSubs.length;
+    return lockedOut;
   }
 }

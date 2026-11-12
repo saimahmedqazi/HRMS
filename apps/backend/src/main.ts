@@ -2,20 +2,24 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import * as cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import { parseTrustedProxyRanges } from './common/utils/request-ip';
 
 async function bootstrap(): Promise<void> {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT', 4000);
   const frontendUrl = configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
   const apiPrefix = configService.get<string>('API_PREFIX', 'api/v1');
+  const trustedProxyRanges = parseTrustedProxyRanges(configService.get<string>('TRUSTED_PROXY_CIDRS'));
+  app.set('trust proxy', trustedProxyRanges.length ? trustedProxyRanges : false);
 
   // Security headers
   app.use(

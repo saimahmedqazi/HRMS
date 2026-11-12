@@ -8,6 +8,7 @@ import {
   Body,
   Param,
   Query,
+  Res,
   UseGuards,
   UseInterceptors,
   UploadedFile,
@@ -15,6 +16,7 @@ import {
   HttpStatus,
   BadRequestException,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -186,7 +188,7 @@ export class EmployeesController {
   @Post(':id/avatar')
   @ApiOperation({ summary: 'Upload employee profile avatar (Cloudinary/S3)' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
   @Roles(
     UserRole.SUPER_ADMIN,
     UserRole.COMPANY_ADMIN,
@@ -207,7 +209,7 @@ export class EmployeesController {
   @Post(':id/documents')
   @ApiOperation({ summary: 'Upload employee document (PDF/Image) to cloud storage' })
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
   @Roles(
     UserRole.SUPER_ADMIN,
     UserRole.COMPANY_ADMIN,
@@ -245,10 +247,29 @@ export class EmployeesController {
     return this.employeesService.listDocuments(id, user);
   }
 
+  @Get(':id/documents/:documentId/download')
+  @ApiOperation({ summary: 'Open a document within the caller’s employee scope' })
+  @Roles(
+    UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER,
+    UserRole.DEPARTMENT_MANAGER, UserRole.TEAM_LEAD, UserRole.EMPLOYEE,
+  )
+  async downloadDocument(
+    @Param('id') id: string,
+    @Param('documentId') documentId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Res() response: Response,
+  ) {
+    const url = await this.employeesService.getDocumentDownload(id, documentId, user);
+    response.set('Cache-Control', 'private, no-store').set('Referrer-Policy', 'no-referrer').redirect(url);
+  }
+
   @Delete(':id/documents/:documentId')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete employee document' })
-  @Roles(UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  @Roles(
+    UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER,
+    UserRole.DEPARTMENT_MANAGER, UserRole.TEAM_LEAD, UserRole.EMPLOYEE,
+  )
   async deleteDocument(
     @Param('id') id: string,
     @Param('documentId') documentId: string,

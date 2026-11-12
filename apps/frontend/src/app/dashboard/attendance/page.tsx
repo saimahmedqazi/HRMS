@@ -3,8 +3,9 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
-import { useAuth } from '@/lib/auth-context';
+import { api, ApiError } from '@/lib/api';
+import { formatWorkDuration } from '@/lib/attendance-duration';
+import { useAuth, type UserProfile } from '@/lib/auth-context';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   Clock,
@@ -24,6 +25,7 @@ import {
   ShieldCheck,
   Plus,
   Trash2,
+  Home,
 } from 'lucide-react';
 import {
   BarChart,
@@ -36,6 +38,49 @@ import {
   Legend,
 } from 'recharts';
 
+const calendarStatus: Record<string, string> = {
+  PRESENT: 'Present',
+  PRESENT_REMOTE: 'Remote',
+  ABSENT: 'Absent',
+  ABSENT_PENDING_REVIEW: 'Review',
+  ON_LEAVE: 'Leave',
+  HOLIDAY: 'Holiday',
+  WEEKEND: 'Off',
+};
+
+function getPunchLocation(userId: string): Promise<{ latitude: number; longitude: number } | undefined> {
+  if (!navigator.geolocation) return Promise.resolve(undefined);
+
+  return new Promise((resolve) => {
+    const controller = new AbortController();
+    // Bound the total wait, including a browser permission prompt.
+    const timeout = window.setTimeout(() => {
+      controller.abort();
+      resolve(undefined);
+    }, 3000);
+    const finish = (position?: GeolocationPosition) => {
+      window.clearTimeout(timeout);
+      if (controller.signal.aborted) return;
+      resolve(position ? {
+        latitude: Number(position.coords.latitude.toFixed(6)),
+        longitude: Number(position.coords.longitude.toFixed(6)),
+      } : undefined);
+    };
+
+    // A different tab or device may have withdrawn consent since this page loaded.
+    api.get<UserProfile>('/auth/me', { cache: 'no-store', signal: controller.signal })
+      .then((profile) => {
+        if (controller.signal.aborted) return;
+        if (profile.id === userId && profile.employee?.locationConsent) {
+          navigator.geolocation.getCurrentPosition(finish, () => finish(), { timeout: 3000 });
+        } else {
+          finish();
+        }
+      })
+      .catch(() => finish());
+  });
+}
+
 export default function AttendanceDashboardPage() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
@@ -46,39 +91,26 @@ export default function AttendanceDashboardPage() {
   const [isRemote, setIsRemote] = useState(false);
   const [notes, setNotes] = useState('');
   const [timerSeconds, setTimerSeconds] = useState(0);
-  const [coords, setCoords] = useState<{ latitude?: number; longitude?: number }>({});
   const [newWhitelistIp, setNewWhitelistIp] = useState('');
   const [newWhitelistDesc, setNewWhitelistDesc] = useState('');
-  const [calendarMonth, setCalendarMonth] = useState(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
-  });
-
-  useEffect(() => {
-    if (typeof window !== 'undefined' && 'geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setCoords({
-            latitude: Number(pos.coords.latitude.toFixed(6)),
-            longitude: Number(pos.coords.longitude.toFixed(6)),
-          });
-        },
-        () => {},
-        { timeout: 3000, maximumAge: 60000 },
-      );
-    }
-  }, []);
+  const [showRemoteModal, setShowRemoteModal] = useState(false);
+  const [remoteStartDate, setRemoteStartDate] = useState('');
+  const [remoteEndDate, setRemoteEndDate] = useState('');
+  const [remoteReason, setRemoteReason] = useState('');
+  const [selectedMonth, setCalendarMonth] = useState<Date | null>(null);
 
   // Fetch today's attendance
   const { data: attendanceData } = useQuery({
     queryKey: ['attendance-today'],
     queryFn: () => api.get<any>('/attendance/today'),
+    refetchInterval: 60_000,
   });
 
   // Fetch today's work timer
   const { data: timerData } = useQuery({
     queryKey: ['timer-today'],
     queryFn: () => api.get<any>('/timer/today'),
+    refetchInterval: 60_000,
   });
 
   // Fetch attendance records for calendar & graph
@@ -91,6 +123,7 @@ export default function AttendanceDashboardPage() {
   const { data: overviewData } = useQuery({
     queryKey: ['dashboard-overview'],
     queryFn: () => api.get<any>('/analytics/overview'),
+    refetchInterval: 60_000,
   });
 
   // Fetch IP Whitelist & current client IP telemetry
@@ -99,42 +132,65 @@ export default function AttendanceDashboardPage() {
     queryFn: () => api.get<any>('/attendance/ip-whitelist'),
   });
 
+  // Fetch remote work permissions
+  const { data: remotePermissions = [] } = useQuery({
+    queryKey: ['remote-permissions'],
+    queryFn: () => api.get<any[]>('/attendance/remote-permissions'),
+  });
+
   const attendance = attendanceData;
+  const attendanceDate = overviewData?.attendanceDate ?? attendance?.date?.slice(0, 10);
+  const shiftDate = attendance?.date?.slice(0, 10);
+  const overnightShiftDate = shiftDate && attendanceDate && shiftDate !== attendanceDate ? shiftDate : null;
+  const calendarMonth = selectedMonth ?? (attendanceDate
+    ? new Date(`${attendanceDate}T12:00:00`)
+    : new Date());
   const timer = timerData;
+  const currentLatitude = whitelistData?.currentGeo?.latitude;
+  const currentLongitude = whitelistData?.currentGeo?.longitude;
   const recordsList: any[] = Array.isArray(recordsData)
     ? recordsData
     : recordsData?.data || [];
 
   // Local clock ticker for running timer
   useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
-    if (timer && timer.status === 'RUNNING') {
-      const startTime = new Date(timer.startedAt).getTime();
-      const breaksTotalMs = (timer.breaks || []).reduce(
-        (sum: number, b: any) => sum + (b.durationMin || 0) * 60000,
-        0,
-      );
-      interval = setInterval(() => {
-        const elapsedMs = Math.max(0, Date.now() - startTime - breaksTotalMs);
-        setTimerSeconds(Math.floor(elapsedMs / 1000));
-      }, 1000);
-    } else if (timer && timer.totalMinutes) {
-      setTimerSeconds(timer.totalMinutes * 60);
+    if (!timer || timer.status === 'STOPPED') {
+      setTimerSeconds(timer?.workedSeconds ?? (timer?.totalMinutes ?? 0) * 60);
+      return;
     }
-    return () => {
-      if (interval) clearInterval(interval);
+    const startTime = Date.parse(timer.activeSessionStartedAt ?? timer.startedAt);
+    const previousSeconds = timer.activeSessionStartedAt
+      ? (timer.workedSeconds ?? timer.totalMinutes * 60)
+      : 0;
+    const breaks: { startedAt: string; endedAt: string | null }[] = timer.breaks ?? [];
+    const pausedAt = breaks.find((entry) => entry.endedAt === null)?.startedAt;
+    const update = () => {
+      const until = timer.status === 'PAUSED' && pausedAt ? Date.parse(pausedAt) : Date.now();
+      const breaksTotalMs = breaks.reduce((sum, entry) => {
+        const breakStart = Math.max(startTime, Date.parse(entry.startedAt));
+        const breakEnd = Math.min(until, entry.endedAt ? Date.parse(entry.endedAt) : until);
+        return sum + Math.max(0, breakEnd - breakStart);
+      }, 0);
+      setTimerSeconds(previousSeconds + Math.floor(Math.max(0, until - startTime - breaksTotalMs) / 1000));
     };
+    update();
+    if (timer.status !== 'RUNNING') return;
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
   }, [timer]);
 
   // Mutations
   const checkInMutation = useMutation({
-    mutationFn: () =>
-      api.post('/attendance/check-in', {
+    mutationFn: async () => {
+      const location = user?.employee?.locationConsent
+        ? await getPunchLocation(user.id)
+        : undefined;
+      return api.post('/attendance/check-in', {
         isRemote,
         notes: notes || undefined,
-        ...(coords.latitude !== undefined ? { latitude: coords.latitude } : {}),
-        ...(coords.longitude !== undefined ? { longitude: coords.longitude } : {}),
-      }),
+        ...location,
+      });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['attendance-today'] });
       queryClient.invalidateQueries({ queryKey: ['attendance-records'] });
@@ -160,6 +216,54 @@ export default function AttendanceDashboardPage() {
     },
   });
 
+  const createRemoteMutation = useMutation({
+    mutationFn: () =>
+      api.post('/attendance/remote-permissions', {
+        startDate: remoteStartDate,
+        endDate: remoteEndDate,
+        reason: remoteReason,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['remote-permissions'] });
+      setShowRemoteModal(false);
+      setRemoteStartDate('');
+      setRemoteEndDate('');
+      setRemoteReason('');
+      alert('Remote work request submitted successfully.');
+    },
+    onError: (err: any) => {
+      alert(err?.response?.data?.message || err?.message || 'Failed to submit remote work request.');
+    },
+  });
+
+  const step1ApproveMutation = useMutation({
+    mutationFn: (id: string) => api.patch(`/attendance/remote-permissions/${id}/step1`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['remote-permissions'] });
+      alert('Step 1 recommendation recorded.');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ['remote-permissions'] });
+      }
+      alert(err.message || 'Failed to approve Step 1.');
+    },
+  });
+
+  const step2ApproveMutation = useMutation({
+    mutationFn: (id: string) => api.patch(`/attendance/remote-permissions/${id}/step2`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['remote-permissions'] });
+      alert('Step 2 approval granted.');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ['remote-permissions'] });
+      }
+      alert(err.message || 'Failed to approve Step 2.');
+    },
+  });
+
   const checkOutMutation = useMutation({
     mutationFn: () => api.post('/attendance/check-out', {}),
     onSuccess: () => {
@@ -168,6 +272,7 @@ export default function AttendanceDashboardPage() {
       queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] });
     },
   });
+  const punchError = checkInMutation.error || checkOutMutation.error;
 
   const startTimerMutation = useMutation({
     mutationFn: () => api.post('/timer/start', {}),
@@ -189,6 +294,7 @@ export default function AttendanceDashboardPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['timer-today'] });
       queryClient.invalidateQueries({ queryKey: ['attendance-today'] });
+      queryClient.invalidateQueries({ queryKey: ['attendance-records'] });
     },
   });
 
@@ -199,20 +305,13 @@ export default function AttendanceDashboardPage() {
     return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
-  // Compute Present / Remote / Exceptions / Absent summary counts
-  const presentCount = recordsList.filter((r) => r.status === 'PRESENT').length;
-  const remoteCount = recordsList.filter((r) => r.status === 'PRESENT_REMOTE').length;
-  const exceptionCount = recordsList.filter(
-    (r) => r.status === 'ABSENT_PENDING_REVIEW' || r.status === 'LATE',
-  ).length;
-  const absentCount = recordsList.filter((r) => r.status === 'ABSENT').length;
+  const { present: presentCount, remote: remoteCount, absent: absentCount, exceptions: exceptionCount } =
+    overviewData?.todaySummary ?? { present: 0, remote: 0, absent: 0, exceptions: 0 };
 
   const statusBreakdownChart = [
     {
       category: 'Present (Onsite)',
-      Present: isHrOrAdmin
-        ? overviewData?.todaySummary?.present ?? presentCount
-        : presentCount,
+      Present: presentCount,
       Remote: 0,
       Absent: 0,
       Exceptions: 0,
@@ -220,9 +319,7 @@ export default function AttendanceDashboardPage() {
     {
       category: 'Present (Remote)',
       Present: 0,
-      Remote: isHrOrAdmin
-        ? overviewData?.todaySummary?.remote ?? remoteCount
-        : remoteCount,
+      Remote: remoteCount,
       Absent: 0,
       Exceptions: 0,
     },
@@ -230,9 +327,7 @@ export default function AttendanceDashboardPage() {
       category: 'Absent',
       Present: 0,
       Remote: 0,
-      Absent: isHrOrAdmin
-        ? overviewData?.todaySummary?.absent ?? absentCount
-        : absentCount,
+      Absent: absentCount,
       Exceptions: 0,
     },
     {
@@ -240,9 +335,7 @@ export default function AttendanceDashboardPage() {
       Present: 0,
       Remote: 0,
       Absent: 0,
-      Exceptions: isHrOrAdmin
-        ? overviewData?.pendingExceptions ?? exceptionCount
-        : exceptionCount,
+      Exceptions: exceptionCount,
     },
   ];
 
@@ -284,6 +377,12 @@ export default function AttendanceDashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <a
+            href="#remote-work-requests"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500"
+          >
+            <Home className="h-3.5 w-3.5" /> Remote Work Requests
+          </a>
           {isHrOrAdmin && (
             <Link
               href="/dashboard/attendance/exceptions"
@@ -306,7 +405,7 @@ export default function AttendanceDashboardPage() {
         <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <span className="text-[11px] font-semibold uppercase text-zinc-500">Present (Onsite)</span>
           <p className="mt-1 text-2xl font-extrabold text-emerald-600 dark:text-emerald-400">
-            {isHrOrAdmin ? (overviewData?.todaySummary?.present ?? presentCount) : presentCount}
+            {presentCount}
           </p>
           <span className="text-[11px] text-zinc-400">Verified onsite check-ins</span>
         </div>
@@ -314,7 +413,7 @@ export default function AttendanceDashboardPage() {
         <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <span className="text-[11px] font-semibold uppercase text-zinc-500">Present (Remote)</span>
           <p className="mt-1 text-2xl font-extrabold text-blue-600 dark:text-blue-400">
-            {isHrOrAdmin ? (overviewData?.todaySummary?.remote ?? remoteCount) : remoteCount}
+            {remoteCount}
           </p>
           <span className="text-[11px] text-zinc-400">Authorized remote sessions</span>
         </div>
@@ -322,7 +421,7 @@ export default function AttendanceDashboardPage() {
         <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <span className="text-[11px] font-semibold uppercase text-zinc-500">Absent Count</span>
           <p className="mt-1 text-2xl font-extrabold text-rose-600 dark:text-rose-400">
-            {isHrOrAdmin ? (overviewData?.todaySummary?.absent ?? absentCount) : absentCount}
+            {absentCount}
           </p>
           <span className="text-[11px] text-zinc-400">Unexcused / no check-in</span>
         </div>
@@ -330,7 +429,7 @@ export default function AttendanceDashboardPage() {
         <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <span className="text-[11px] font-semibold uppercase text-zinc-500">Exceptions / Pending</span>
           <p className="mt-1 text-2xl font-extrabold text-amber-600 dark:text-amber-400">
-            {isHrOrAdmin ? (overviewData?.pendingExceptions ?? exceptionCount) : exceptionCount}
+            {exceptionCount}
           </p>
           <span className="text-[11px] text-zinc-400">Awaiting HR review</span>
         </div>
@@ -346,6 +445,12 @@ export default function AttendanceDashboardPage() {
             </h2>
             {attendance?.status && <StatusBadge status={attendance.status} />}
           </div>
+          {overnightShiftDate && (
+            <p className="mt-2 text-xs text-zinc-500">Shift date {overnightShiftDate}</p>
+          )}
+          {punchError && (
+            <p role="alert" className="mt-3 text-sm text-rose-700 dark:text-rose-300">{punchError.message}</p>
+          )}
 
           <div className="mt-6 rounded-xl border border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-800/40">
             <div className="grid grid-cols-2 gap-4 text-center">
@@ -422,15 +527,16 @@ export default function AttendanceDashboardPage() {
                   <Globe className="h-3.5 w-3.5 text-indigo-600" />
                   IP:{' '}
                   <strong className="font-mono text-zinc-900 dark:text-zinc-100">
-                    {whitelistData?.currentClientIp || user?.lastLoginIp || '127.0.0.1'}
+                    {whitelistData?.currentClientIp ?? 'Unavailable'}
                   </strong>
                 </span>
                 <span className="flex items-center gap-1">
                   <MapPin className="h-3.5 w-3.5 text-emerald-600" />
-                  Lat/Long:{' '}
+                  Approximate IP Lat/Long:{' '}
                   <strong className="font-mono text-zinc-900 dark:text-zinc-100">
-                    {coords.latitude ?? whitelistData?.currentGeo?.latitude ?? 24.8607},{' '}
-                    {coords.longitude ?? whitelistData?.currentGeo?.longitude ?? 67.0011}
+                    {typeof currentLatitude === 'number' && typeof currentLongitude === 'number'
+                      ? `${currentLatitude}, ${currentLongitude}`
+                      : 'Unavailable'}
                   </strong>
                 </span>
                 <span
@@ -440,7 +546,9 @@ export default function AttendanceDashboardPage() {
                       : 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
                   }`}
                 >
-                  {whitelistData?.isCurrentIpWhitelisted ? 'HR Whitelisted IP' : 'Standard IP'}
+                  {whitelistData?.isCurrentIpWhitelisted
+                    ? 'HR Whitelisted IP'
+                    : whitelistData?.currentClientIp ? 'Standard IP' : 'IP unavailable'}
                 </span>
               </div>
 
@@ -463,7 +571,8 @@ export default function AttendanceDashboardPage() {
           ) : !attendance?.checkOutTime ? (
             <div className="mt-6 space-y-4">
               <p className="text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 p-2.5 rounded-lg border border-emerald-200 dark:border-emerald-900 flex items-center gap-1.5">
-                <CheckCircle className="h-4 w-4" /> You are currently checked in today.
+                <CheckCircle className="h-4 w-4" />
+                {overnightShiftDate ? 'You are still checked in for this shift.' : 'You are currently checked in today.'}
               </p>
               <button
                 disabled={checkOutMutation.isPending}
@@ -475,7 +584,8 @@ export default function AttendanceDashboardPage() {
             </div>
           ) : (
             <div className="mt-6 rounded-lg bg-zinc-50 p-4 text-center text-xs text-zinc-500 dark:bg-zinc-800/40">
-              Shift completed for today. Total work: {attendance.workMinutes || 0}m (Overtime:{' '}
+              {overnightShiftDate ? 'Shift completed.' : 'Shift completed for today.'}{' '}
+              Total work: {formatWorkDuration(attendance)} (Overtime:{' '}
               {attendance.overtimeMinutes || 0}m).
             </div>
           )}
@@ -648,49 +758,37 @@ export default function AttendanceDashboardPage() {
 
               const dayOfWeek = new Date(year, month, cell.day).getDay();
               const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-              const isToday = new Date().toISOString().slice(0, 10) === cell.dateStr;
+              const isToday = attendanceDate === cell.dateStr;
 
               const dayPresent = dayRecords.filter(
                 (r) => r.status === 'PRESENT' || r.status === 'PRESENT_REMOTE',
               ).length;
               const dayAbsent = dayRecords.filter(
-                (r) => r.status === 'ABSENT' || r.status === 'ABSENT_PENDING_REVIEW',
+                (r) => r.status === 'ABSENT',
               ).length;
+              const dayReview = dayRecords.filter((r) => r.status === 'ABSENT_PENDING_REVIEW').length;
+              const singleStatus = dayRecords[0]?.status ?? (isToday ? attendance?.status : null);
 
               let cellBadge = null;
-              if (dayRecords.length > 0) {
-                if (isHrOrAdmin && dayRecords.length > 1) {
-                  cellBadge = (
-                    <div className="mt-1 flex flex-col gap-0.5 text-[9px] font-semibold">
-                      <span className="rounded bg-emerald-100 px-1 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
-                        {dayPresent} P
-                      </span>
-                      {dayAbsent > 0 && (
-                        <span className="rounded bg-rose-100 px-1 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">
-                          {dayAbsent} A
-                        </span>
-                      )}
-                    </div>
-                  );
-                } else {
-                  const st = dayRecords[0].status;
-                  const isPres = st === 'PRESENT' || st === 'PRESENT_REMOTE';
-                  cellBadge = (
-                    <span
-                      className={`mt-1 inline-block rounded px-1 py-0.5 text-[9px] font-bold truncate ${
-                        isPres
-                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                          : 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
-                      }`}
-                    >
-                      {st === 'PRESENT_REMOTE' ? 'Remote' : isPres ? 'Present' : 'Absent'}
-                    </span>
-                  );
-                }
-              } else if (isToday && attendance?.status) {
+              if (dayRecords.length > 1) {
                 cellBadge = (
-                  <span className="mt-1 inline-block rounded bg-emerald-100 px-1 py-0.5 text-[9px] font-bold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
-                    Present
+                  <div className="mt-1 flex flex-wrap gap-0.5 text-[9px] font-semibold">
+                    <span title="Present" className="rounded bg-emerald-100 px-1 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                      {dayPresent} P
+                    </span>
+                    {dayAbsent > 0 && <span title="Absent" className="rounded bg-rose-100 px-1 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">{dayAbsent} A</span>}
+                    {dayReview > 0 && <span title="Pending review" className="rounded bg-amber-100 px-1 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">{dayReview} R</span>}
+                  </div>
+                );
+              } else if (singleStatus) {
+                const color = singleStatus === 'PRESENT' || singleStatus === 'PRESENT_REMOTE'
+                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                  : singleStatus === 'ABSENT'
+                    ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                    : 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300';
+                cellBadge = (
+                  <span className={`mt-1 truncate rounded px-1 py-0.5 text-[9px] font-bold ${color}`}>
+                    {calendarStatus[singleStatus] ?? singleStatus}
                   </span>
                 );
               } else if (isWeekend) {
@@ -702,6 +800,7 @@ export default function AttendanceDashboardPage() {
               return (
                 <div
                   key={cell.dateStr}
+                  aria-current={isToday ? 'date' : undefined}
                   className={`h-14 rounded-lg border p-1.5 flex flex-col justify-between text-xs transition ${
                     isToday
                       ? 'border-indigo-500 bg-indigo-50/30 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
@@ -844,6 +943,208 @@ export default function AttendanceDashboardPage() {
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Remote Work (WFH) Permissions & Requests Card */}
+      <div id="remote-work-requests" className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+              <Home className="h-5 w-5 text-indigo-600" />
+              Remote Work (WFH) Requests & Approvals
+            </h2>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              Submit and manage standing Work From Home permissions. Once approved, remote punches avoid unauthorized check-in exceptions.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowRemoteModal(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500"
+          >
+            <Plus className="h-3.5 w-3.5" /> New Remote Work Request
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-zinc-50 dark:bg-zinc-800/60 text-zinc-500 uppercase">
+              <tr>
+                <th className="py-2.5 px-3">Employee</th>
+                <th className="py-2.5 px-3">Date Range</th>
+                <th className="py-2.5 px-3">Reason / Justification</th>
+                <th className="py-2.5 px-3">Status</th>
+                <th className="py-2.5 px-3">Workflow</th>
+                <th className="py-2.5 px-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              {remotePermissions.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-6 px-3 text-center text-zinc-400">
+                    No remote work permissions requested yet. Click &quot;New Remote Work Request&quot; above to submit one.
+                  </td>
+                </tr>
+              ) : (
+                remotePermissions.map((perm: any) => {
+                  const isOwnRequest = perm.employee?.userId === user?.id;
+                  const canStep1 =
+                    !isOwnRequest &&
+                    (user?.role === 'TEAM_LEAD' || isHrOrAdmin) &&
+                    perm.status === 'PENDING' &&
+                    !perm.step1ApprovedAt;
+                  const canStep2 =
+                    !isOwnRequest &&
+                    (user?.role === 'DEPARTMENT_MANAGER' || isHrOrAdmin) &&
+                    perm.status === 'PENDING' &&
+                    perm.step1ApprovedAt;
+
+                  return (
+                    <tr key={perm.id}>
+                      <td className="py-2.5 px-3 font-medium text-zinc-900 dark:text-zinc-100">
+                        {perm.employee?.firstName} {perm.employee?.lastName}
+                        <span className="block text-[11px] text-zinc-400">
+                          {perm.employee?.employeeCode}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-zinc-700 dark:text-zinc-300">
+                        {new Date(perm.startDate).toLocaleDateString()} — {new Date(perm.endDate).toLocaleDateString()}
+                      </td>
+                      <td className="py-2.5 px-3 text-zinc-600 dark:text-zinc-400 max-w-xs truncate">
+                        {perm.reason}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <StatusBadge status={perm.status} />
+                      </td>
+                      <td className="py-2.5 px-3 text-[11px]">
+                        <div className="space-y-0.5">
+                          <span className={perm.step1ApprovedAt ? 'text-emerald-600 font-medium' : 'text-zinc-400'}>
+                            {perm.step1ApprovedAt ? '✓ Step 1 (TL Recommended)' : '○ Step 1 Pending'}
+                          </span>
+                          <span className="block" />
+                          <span className={perm.step2ApprovedAt ? 'text-emerald-600 font-medium' : 'text-zinc-400'}>
+                            {perm.step2ApprovedAt ? '✓ Step 2 (DM/HR Approved)' : '○ Step 2 Pending'}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-right">
+                        {canStep1 && (
+                          <button
+                            type="button"
+                            onClick={() => step1ApproveMutation.mutate(perm.id)}
+                            disabled={step1ApproveMutation.isPending}
+                            className="mr-1.5 inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-300"
+                          >
+                            Recommend (Step 1)
+                          </button>
+                        )}
+                        {canStep2 && (
+                          <button
+                            type="button"
+                            onClick={() => step2ApproveMutation.mutate(perm.id)}
+                            disabled={step2ApproveMutation.isPending}
+                            className="inline-flex items-center gap-1 rounded bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-indigo-500"
+                          >
+                            Approve (Step 2)
+                          </button>
+                        )}
+                        {!canStep1 && !canStep2 && (
+                          <span className="text-zinc-400">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Remote Work Request Modal */}
+      {showRemoteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between pb-4 border-b border-zinc-200 dark:border-zinc-800">
+              <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                <Home className="h-5 w-5 text-indigo-600" /> Request Remote Work (WFH)
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowRemoteModal(false)}
+                className="text-zinc-400 hover:text-zinc-600 text-lg leading-none"
+              >
+                &times;
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!remoteStartDate || !remoteEndDate || !remoteReason.trim()) return;
+                createRemoteMutation.mutate();
+              }}
+              className="mt-4 space-y-4"
+            >
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
+                  Start Date *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={remoteStartDate}
+                  onChange={(e) => setRemoteStartDate(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
+                  End Date *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={remoteEndDate}
+                  onChange={(e) => setRemoteEndDate(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
+                  Reason / Justification *
+                </label>
+                <textarea
+                  required
+                  rows={3}
+                  value={remoteReason}
+                  onChange={(e) => setRemoteReason(e.target.value)}
+                  placeholder="e.g. Relocating temporarily, home renovation, or health precaution..."
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-zinc-200 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setShowRemoteModal(false)}
+                  className="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={createRemoteMutation.isPending || !remoteStartDate || !remoteEndDate || !remoteReason.trim()}
+                  className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  {createRemoteMutation.isPending ? 'Submitting...' : 'Submit Request'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

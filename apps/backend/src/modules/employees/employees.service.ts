@@ -12,18 +12,35 @@ import { DataScopeService } from '../../common/services/data-scope.service';
 import { MailService } from '../../common/mail/mail.service';
 import { StorageService, DEFAULT_IMAGE_MIMES, DEFAULT_DOCUMENT_MIMES } from '../../common/storage/storage.service';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { getLoginNetworkLocation } from '../../common/utils/login-network-location';
 import {
   UserRole,
+  Employee,
   EmployeeStatus,
   AuditAction,
   NotificationType,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
-import { CreateEmployeeDto } from './dto/create-employee.dto';
+import { CreateEmployeeDto, EMPLOYEE_ONBOARDING_ROLES } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
 import { CreateEmergencyContactDto } from './dto/create-emergency-contact.dto';
+
+const SELF_SERVICE_FIELDS = new Set([
+  'phone', 'address', 'city', 'country', 'dateOfBirth', 'gender', 'nationality', 'profilePictureUrl',
+]);
+
+function normalizeOptionalText(value: string | null | undefined): string | null | undefined {
+  return value === undefined ? undefined : value?.trim() || null;
+}
+
+function omitSensitiveEmployeeFields<T extends Pick<Employee,
+  'baseSalary' | 'bankAccountNumber' | 'bankName' | 'bankBranch' | 'nidNumber' | 'taxId'
+>>(employee: T) {
+  const { baseSalary, bankAccountNumber, bankName, bankBranch, nidNumber, taxId, ...profile } = employee;
+  return profile;
+}
 
 export interface EmployeeQueryFilter {
   search?: string;
@@ -55,32 +72,16 @@ export class EmployeesService {
 
   async listEmployees(user: AuthenticatedUser, query: EmployeeQueryFilter = {}) {
     const companyId = this.getEffectiveCompanyId(user);
-    const userId = (user.id || user.sub)!;
-
-    // Caller's employee context for data scope
-    const callerEmployee = await this.prisma.employee.findFirst({
-      where: { userId },
-      select: { id: true, departmentId: true, teamId: true },
-    });
-
-    const scopeFilter = this.dataScopeService.applyScope(user, {
-      departmentId: callerEmployee?.departmentId || undefined,
-      teamId: callerEmployee?.teamId || undefined,
-      employeeId: callerEmployee?.id || undefined,
-    });
+    const scopeFilter = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
 
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
     const skip = (page - 1) * limit;
 
     const whereClause: any = {
-      companyId,
-      deletedAt: null,
       ...(query.departmentId ? { departmentId: query.departmentId } : {}),
       ...(query.teamId ? { teamId: query.teamId } : {}),
-      ...(scopeFilter.departmentId ? { departmentId: scopeFilter.departmentId } : {}),
-      ...(scopeFilter.teamId ? { teamId: scopeFilter.teamId } : {}),
-      ...(scopeFilter.id ? { id: scopeFilter.id } : {}),
+      ...scopeFilter,
       ...(query.status ? { status: query.status } : {}),
       ...(query.search
         ? {
@@ -135,8 +136,12 @@ export class EmployeesService {
       }),
     ]);
 
+    const manager = user.role === UserRole.TEAM_LEAD || user.role === UserRole.DEPARTMENT_MANAGER;
+    const callerId = user.id || user.sub;
     return {
-      items,
+      items: manager ? items.map((employee) => employee.userId === callerId
+        ? employee
+        : omitSensitiveEmployeeFields(employee)) : items,
       meta: {
         total,
         page,
@@ -148,10 +153,10 @@ export class EmployeesService {
 
   async getEmployeeById(id: string, user: AuthenticatedUser) {
     const companyId = this.getEffectiveCompanyId(user);
-    const userId = (user.id || user.sub)!;
+    const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
 
     const employee = await this.prisma.employee.findFirst({
-      where: { id, companyId, deletedAt: null },
+      where: { id, AND: [scope] },
       include: {
         department: true,
         designation: true,
@@ -167,7 +172,7 @@ export class EmployeesService {
           },
         },
         subordinates: {
-          where: { deletedAt: null },
+          where: scope,
           select: {
             id: true,
             firstName: true,
@@ -178,7 +183,7 @@ export class EmployeesService {
           },
         },
         emergencyContacts: true,
-        documents: true,
+        documents: { where: { companyId } },
         leaveBalances: true,
         user: {
           select: {
@@ -190,8 +195,6 @@ export class EmployeesService {
             lastLoginAt: true,
             lastLoginIp: true,
             lastLoginUserAgent: true,
-            lastLoginCity: true,
-            lastLoginCountry: true,
             twoFaEnabled: true,
           },
         },
@@ -200,16 +203,30 @@ export class EmployeesService {
 
     if (!employee) throw new NotFoundException('Employee not found');
 
-    // Self scope check
-    if (user.role === UserRole.EMPLOYEE && employee.userId !== userId) {
-      throw new ForbiddenException('You can only view your own profile');
+    const profile = {
+      ...employee,
+      user: employee.user ? {
+        ...employee.user,
+        ...getLoginNetworkLocation(employee.user.lastLoginIp),
+      } : null,
+    };
+
+    if (
+      (user.role === UserRole.TEAM_LEAD || user.role === UserRole.DEPARTMENT_MANAGER) &&
+      employee.userId !== (user.id || user.sub)
+    ) {
+      return omitSensitiveEmployeeFields(profile);
     }
 
-    return employee;
+    return profile;
   }
 
   async onboardEmployee(dto: CreateEmployeeDto, user: AuthenticatedUser) {
     const companyId = this.getEffectiveCompanyId(user);
+    const role = dto.role || UserRole.EMPLOYEE;
+    if (!EMPLOYEE_ONBOARDING_ROLES.includes(role)) {
+      throw new ForbiddenException('This role cannot be assigned through employee onboarding');
+    }
 
     // 1. Check email uniqueness
     const existingUser = await this.prisma.user.findUnique({
@@ -256,7 +273,6 @@ export class EmployeesService {
     // 5. Generate random initial password
     const tempPassword = `ZenHR@${crypto.randomBytes(3).toString('hex')}!`;
     const passwordHash = await bcrypt.hash(tempPassword, 10);
-    const role = dto.role || UserRole.EMPLOYEE;
     const dataScope = this.dataScopeService.getScope(role);
 
     // 6. Execute atomic creation
@@ -306,6 +322,7 @@ export class EmployeesService {
       if (defaultShift) {
         await tx.employeeShift.create({
           data: {
+            companyId,
             employeeId: employee.id,
             shiftId: defaultShift.id,
             effectiveFrom: new Date(),
@@ -377,19 +394,31 @@ export class EmployeesService {
       user.role === UserRole.COMPANY_ADMIN ||
       user.role === UserRole.HR_MANAGER;
 
-    // Self update restrictions for non-HR/Admin roles
     if (!isHrOrAdmin) {
       if (employee.userId !== userId) {
         throw new ForbiddenException('You can only update your own profile');
       }
-      // Non-HR/Admin roles can only update personal contact info and avatar
+      if (Object.entries(dto).some(([field, value]) => value !== undefined && !SELF_SERVICE_FIELDS.has(field))) {
+        throw new ForbiddenException('Contact HR to change your official name or employment details.');
+      }
+    }
+
+    const dateOfBirth = dto.dateOfBirth === undefined ? undefined : dto.dateOfBirth ? new Date(dto.dateOfBirth) : null;
+    if (dateOfBirth && (!Number.isFinite(dateOfBirth.getTime()) || dateOfBirth.getTime() > Date.now())) {
+      throw new BadRequestException('Enter a valid date of birth in the past or today.');
+    }
+
+    if (!isHrOrAdmin) {
       return this.prisma.employee.update({
-        where: { id },
+        where: { id, companyId, userId, deletedAt: null },
         data: {
-          phone: dto.phone,
-          address: dto.address,
-          city: dto.city,
-          country: dto.country,
+          phone: normalizeOptionalText(dto.phone),
+          address: normalizeOptionalText(dto.address),
+          city: normalizeOptionalText(dto.city),
+          country: normalizeOptionalText(dto.country),
+          dateOfBirth,
+          gender: normalizeOptionalText(dto.gender),
+          nationality: normalizeOptionalText(dto.nationality),
           profilePictureUrl: dto.profilePictureUrl,
         },
       });
@@ -429,7 +458,7 @@ export class EmployeesService {
     }
 
     return this.prisma.employee.update({
-      where: { id },
+      where: { id, companyId, deletedAt: null },
       data: {
         ...(dto.firstName ? { firstName: dto.firstName } : {}),
         ...(dto.lastName ? { lastName: dto.lastName } : {}),
@@ -437,6 +466,9 @@ export class EmployeesService {
         ...(dto.address !== undefined ? { address: dto.address } : {}),
         ...(dto.city !== undefined ? { city: dto.city } : {}),
         ...(dto.country !== undefined ? { country: dto.country } : {}),
+        ...(dateOfBirth !== undefined ? { dateOfBirth } : {}),
+        ...(dto.gender !== undefined ? { gender: dto.gender } : {}),
+        ...(dto.nationality !== undefined ? { nationality: dto.nationality } : {}),
         ...(dto.departmentId !== undefined ? { departmentId: dto.departmentId } : {}),
         ...(dto.designationId !== undefined ? { designationId: dto.designationId } : {}),
         ...(dto.teamId !== undefined ? { teamId: dto.teamId } : {}),
@@ -454,7 +486,7 @@ export class EmployeesService {
     const employee = await this.prisma.employee.findFirst({
       where: { id, companyId, deletedAt: null },
       include: {
-        user: true,
+        user: { select: { email: true } },
         reportingManager: { select: { id: true, userId: true, user: { select: { email: true } } } },
       },
     });
@@ -465,7 +497,8 @@ export class EmployeesService {
     const newStatus = dto.status;
 
     if (previousStatus === newStatus) {
-      return employee;
+      const { user: employeeUser, reportingManager, ...profile } = employee;
+      return profile;
     }
 
     // Update status
@@ -554,23 +587,29 @@ export class EmployeesService {
 
   async getOrgChart(id: string, user: AuthenticatedUser) {
     const companyId = this.getEffectiveCompanyId(user);
+    const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
+    const chartFields = {
+      id: true,
+      employeeCode: true,
+      firstName: true,
+      lastName: true,
+      profilePictureUrl: true,
+      reportingManagerId: true,
+      designation: { select: { name: true } },
+      department: { select: { name: true } },
+    } as const;
 
     const rootEmployee = await this.prisma.employee.findFirst({
-      where: { id, companyId, deletedAt: null },
-      include: {
-        designation: { select: { name: true } },
-        department: { select: { name: true } },
+      where: { id, AND: [scope] },
+      select: {
+        ...chartFields,
         subordinates: {
-          where: { deletedAt: null },
-          include: {
-            designation: { select: { name: true } },
-            department: { select: { name: true } },
+          where: scope,
+          select: {
+            ...chartFields,
             subordinates: {
-              where: { deletedAt: null },
-              include: {
-                designation: { select: { name: true } },
-                department: { select: { name: true } },
-              },
+              where: scope,
+              select: chartFields,
             },
           },
         },
@@ -600,8 +639,28 @@ export class EmployeesService {
       user.role === UserRole.COMPANY_ADMIN ||
       user.role === UserRole.HR_MANAGER;
 
+    // NEW: check if caller is a manager of this employee's dept/team
+    let isManagerOfEmployee = false;
     if (!isHrOrAdmin && employee.userId !== userId) {
-      throw new ForbiddenException('You can only manage your own emergency contacts');
+      if (user.role === UserRole.DEPARTMENT_MANAGER || user.role === UserRole.TEAM_LEAD) {
+        const callerEmp = await this.prisma.employee.findFirst({
+          where: { companyId, userId },
+          select: { departmentId: true, teamId: true },
+        });
+        isManagerOfEmployee =
+          (user.role === UserRole.DEPARTMENT_MANAGER &&
+            !!callerEmp?.departmentId &&
+            callerEmp.departmentId === employee.departmentId) ||
+          (user.role === UserRole.TEAM_LEAD &&
+            !!callerEmp?.teamId &&
+            callerEmp.teamId === employee.teamId);
+      }
+    }
+
+    if (!isHrOrAdmin && employee.userId !== userId && !isManagerOfEmployee) {
+      throw new ForbiddenException(
+        'You can only manage emergency contacts for employees in your team or department',
+      );
     }
 
     return this.prisma.emergencyContact.create({
@@ -634,8 +693,28 @@ export class EmployeesService {
       user.role === UserRole.COMPANY_ADMIN ||
       user.role === UserRole.HR_MANAGER;
 
+    // Check if caller is a manager of this employee's dept/team
+    let isManagerOfContact = false;
     if (!isHrOrAdmin && employee.userId !== userId) {
-      throw new ForbiddenException('You can only manage your own emergency contacts');
+      if (user.role === UserRole.DEPARTMENT_MANAGER || user.role === UserRole.TEAM_LEAD) {
+        const callerEmp = await this.prisma.employee.findFirst({
+          where: { companyId, userId },
+          select: { departmentId: true, teamId: true },
+        });
+        isManagerOfContact =
+          (user.role === UserRole.DEPARTMENT_MANAGER &&
+            !!callerEmp?.departmentId &&
+            callerEmp.departmentId === employee.departmentId) ||
+          (user.role === UserRole.TEAM_LEAD &&
+            !!callerEmp?.teamId &&
+            callerEmp.teamId === employee.teamId);
+      }
+    }
+
+    if (!isHrOrAdmin && employee.userId !== userId && !isManagerOfContact) {
+      throw new ForbiddenException(
+        'You can only manage emergency contacts for employees in your team or department',
+      );
     }
 
     const contact = await this.prisma.emergencyContact.findFirst({
@@ -667,8 +746,28 @@ export class EmployeesService {
       user.role === UserRole.COMPANY_ADMIN ||
       user.role === UserRole.HR_MANAGER;
 
+    // Check if caller is a manager of this employee's dept/team
+    let isManagerForAvatar = false;
     if (!isHrOrAdmin && employee.userId !== userId) {
-      throw new ForbiddenException('You can only upload your own profile picture');
+      if (user.role === UserRole.DEPARTMENT_MANAGER || user.role === UserRole.TEAM_LEAD) {
+        const callerEmp = await this.prisma.employee.findFirst({
+          where: { companyId, userId },
+          select: { departmentId: true, teamId: true },
+        });
+        isManagerForAvatar =
+          (user.role === UserRole.DEPARTMENT_MANAGER &&
+            !!callerEmp?.departmentId &&
+            callerEmp.departmentId === employee.departmentId) ||
+          (user.role === UserRole.TEAM_LEAD &&
+            !!callerEmp?.teamId &&
+            callerEmp.teamId === employee.teamId);
+      }
+    }
+
+    if (!isHrOrAdmin && employee.userId !== userId && !isManagerForAvatar) {
+      throw new ForbiddenException(
+        'You can only upload avatars for employees in your team or department',
+      );
     }
 
     const upload = await this.storageService.uploadFile(file, {
@@ -708,12 +807,33 @@ export class EmployeesService {
       user.role === UserRole.COMPANY_ADMIN ||
       user.role === UserRole.HR_MANAGER;
 
+    // Check if caller is a manager of this employee's dept/team
+    let isManagerForDocs = false;
     if (!isHrOrAdmin && employee.userId !== userId) {
-      throw new ForbiddenException('You can only upload your own documents');
+      if (user.role === UserRole.DEPARTMENT_MANAGER || user.role === UserRole.TEAM_LEAD) {
+        const callerEmp = await this.prisma.employee.findFirst({
+          where: { companyId, userId },
+          select: { departmentId: true, teamId: true },
+        });
+        isManagerForDocs =
+          (user.role === UserRole.DEPARTMENT_MANAGER &&
+            !!callerEmp?.departmentId &&
+            callerEmp.departmentId === employee.departmentId) ||
+          (user.role === UserRole.TEAM_LEAD &&
+            !!callerEmp?.teamId &&
+            callerEmp.teamId === employee.teamId);
+      }
+    }
+
+    if (!isHrOrAdmin && employee.userId !== userId && !isManagerForDocs) {
+      throw new ForbiddenException(
+        'You can only upload documents for employees in your team or department',
+      );
     }
 
     const upload = await this.storageService.uploadFile(file, {
       folder: `zenhr/companies/${companyId}/documents`,
+      authenticated: true,
       allowedMimeTypes: DEFAULT_DOCUMENT_MIMES,
       maxSizeBytes: 10 * 1024 * 1024, // 10MB
     });
@@ -733,16 +853,13 @@ export class EmployeesService {
 
   async listDocuments(employeeId: string, user: AuthenticatedUser) {
     const companyId = this.getEffectiveCompanyId(user);
-    const userId = (user.id || user.sub)!;
+    const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
 
     const employee = await this.prisma.employee.findFirst({
-      where: { id: employeeId, companyId, deletedAt: null },
+      where: { id: employeeId, AND: [scope] },
+      select: { id: true },
     });
     if (!employee) throw new NotFoundException('Employee not found');
-
-    if (user.role === UserRole.EMPLOYEE && employee.userId !== userId) {
-      throw new ForbiddenException('You can only view your own documents');
-    }
 
     return this.prisma.employeeDocument.findMany({
       where: { employeeId, companyId },
@@ -755,15 +872,26 @@ export class EmployeesService {
     documentId: string,
     user: AuthenticatedUser,
   ) {
-    const companyId = this.getEffectiveCompanyId(user);
-
-    const doc = await this.prisma.employeeDocument.findFirst({
-      where: { id: documentId, employeeId, companyId },
-    });
-    if (!doc) throw new NotFoundException('Document not found');
+    const doc = await this.getScopedDocument(employeeId, documentId, user);
+    await this.storageService.deleteFile(doc.fileUrl, [`zenhr/companies/${doc.companyId}/documents`]);
 
     return this.prisma.employeeDocument.delete({
-      where: { id: documentId },
+      where: { id: doc.id, companyId: doc.companyId, employeeId },
     });
+  }
+
+  async getDocumentDownload(employeeId: string, documentId: string, user: AuthenticatedUser) {
+    const doc = await this.getScopedDocument(employeeId, documentId, user);
+    return this.storageService.getDownloadUrl(doc.fileUrl, [`zenhr/companies/${doc.companyId}/documents`]);
+  }
+
+  private async getScopedDocument(employeeId: string, documentId: string, user: AuthenticatedUser) {
+    const companyId = this.getEffectiveCompanyId(user);
+    const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
+    const document = await this.prisma.employeeDocument.findFirst({
+      where: { id: documentId, employeeId, companyId, employee: scope },
+    });
+    if (!document) throw new NotFoundException('Document not found');
+    return document;
   }
 }

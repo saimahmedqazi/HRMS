@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { getRequestIp } from '../../common/utils/request-ip';
 import { UserRole, AttendanceStatus } from '@prisma/client';
 import { AttendanceService } from './attendance.service';
 import { CheckInDto } from './dto/check-in.dto';
@@ -46,11 +47,7 @@ export class AttendanceController {
     @Req() req: Request,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
-      req.socket.remoteAddress ||
-      '127.0.0.1';
-    return this.attendanceService.checkIn(dto, ip, user);
+    return this.attendanceService.checkIn(dto, getRequestIp(req), user);
   }
 
   @Post('check-out')
@@ -198,13 +195,7 @@ export class AttendanceController {
     @Req() req: Request,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      (req.headers['x-real-ip'] as string)?.trim() ||
-      req.ip ||
-      req.socket.remoteAddress ||
-      '127.0.0.1';
-    return this.attendanceService.listIpWhitelist(user, ip);
+    return this.attendanceService.listIpWhitelist(user, getRequestIp(req));
   }
 
   @Post('ip-whitelist')

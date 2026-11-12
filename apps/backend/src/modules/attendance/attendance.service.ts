@@ -7,6 +7,10 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { getCompanyAttendanceTime } from '../../common/utils/attendance-date';
+import { findCurrentPunch, resolveEmployeeAttendanceDay, shiftStandardMinutes } from '../../common/utils/attendance-shift';
+import { normalizeIpAddress } from '../../common/utils/request-ip';
+import { rethrowMissingRecordAsConflict } from '../../common/utils/prisma-conflict';
 import { DataScopeService } from '../../common/services/data-scope.service';
 import { MailService } from '../../common/mail/mail.service';
 import { AttendanceGateway } from './attendance.gateway';
@@ -15,7 +19,9 @@ import {
   UserRole,
   AttendanceStatus,
   RemoteWorkStatus,
+  TimerStatus,
   NotificationType,
+  Prisma,
 } from '@prisma/client';
 import * as geoip from 'geoip-lite';
 import { CheckInDto } from './dto/check-in.dto';
@@ -50,12 +56,7 @@ export class AttendanceService {
     return companyId;
   }
 
-  private getTodayDate(): Date {
-    const now = new Date();
-    return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-  }
-
-  async checkIn(dto: CheckInDto, ip: string, user: AuthenticatedUser) {
+  async checkIn(dto: CheckInDto, ip: string | null, user: AuthenticatedUser) {
     const companyId = this.getEffectiveCompanyId(user);
     const userId = (user.id || user.sub)!;
 
@@ -69,45 +70,28 @@ export class AttendanceService {
 
     if (!employee) throw new NotFoundException('Employee profile not found');
 
-    const today = this.getTodayDate();
-
-    // Check if attendance already recorded today
-    const existing = await this.prisma.attendanceRecord.findUnique({
-      where: {
-        companyId_employeeId_date: {
-          companyId,
-          employeeId: employee.id,
-          date: today,
-        },
-      },
-    });
-
-    if (existing && existing.checkInTime) {
-      throw new ConflictException('You have already checked in for today');
-    }
-
     const checkInTime = new Date();
-    const cleanIp = (ip || '127.0.0.1').replace(/^::ffff:/, '');
-    const geo = geoip.lookup(cleanIp);
+    const scope = { companyId, employeeId: employee.id };
+    const local = await getCompanyAttendanceTime(this.prisma, companyId, checkInTime);
+    const dates = await resolveEmployeeAttendanceDay(this.prisma, scope, checkInTime, local);
+    const shiftDate = dates.date;
+    const cleanIp = normalizeIpAddress(ip ?? undefined);
     let status: AttendanceStatus = AttendanceStatus.PRESENT;
 
     // Check HR IP Whitelist for Office & Remote/Hybrid employees
-    const whitelist =
-      typeof (this.prisma as any).ipWhitelist?.findMany === 'function'
-        ? await this.prisma.ipWhitelist.findMany({ where: { companyId } })
-        : [];
-    const isIpWhitelisted = (whitelist || []).some(
-      (entry: any) => entry.ipAddress === cleanIp || entry.ipAddress === '*',
+    const whitelist = await this.prisma.ipWhitelist.findMany({ where: { companyId } });
+    const isIpWhitelisted = cleanIp !== null && whitelist.some(
+      (entry) => entry.ipAddress === cleanIp || entry.ipAddress === '*',
     );
 
-    // Check for approved standing remote work permission covering today
+    // Check for approved standing remote work permission covering the shift.
     const permission = await this.prisma.remoteWorkPermission.findFirst({
       where: {
         companyId,
         employeeId: employee.id,
         status: RemoteWorkStatus.APPROVED,
-        startDate: { lte: today },
-        endDate: { gte: today },
+        startDate: { lte: shiftDate },
+        endDate: { gte: shiftDate },
       },
     });
 
@@ -118,58 +102,56 @@ export class AttendanceService {
         // Unauthorized remote check-in -> route to HR Exceptions Queue
         status = AttendanceStatus.ABSENT_PENDING_REVIEW;
       }
-    } else if (whitelist && whitelist.length > 0 && !isIpWhitelisted) {
+    } else if (whitelist.length > 0 && !isIpWhitelisted) {
       // Office IP restriction active: employee attempted onsite punch from non-whitelisted IP
       status = permission
         ? AttendanceStatus.PRESENT_REMOTE
         : AttendanceStatus.ABSENT_PENDING_REVIEW;
     }
 
-    const resolvedLat =
-      dto.latitude !== undefined ? dto.latitude : geo?.ll?.[0] ?? null;
-    const resolvedLng =
-      dto.longitude !== undefined ? dto.longitude : geo?.ll?.[1] ?? null;
+    const attendanceKey = { ...scope, date: shiftDate };
+    const record = await this.prisma.$transaction(async (tx) => {
+      const existing = await findCurrentPunch(tx, scope, dates);
+      if (existing?.checkInTime) {
+        throw new ConflictException(
+          existing.date.getTime() === shiftDate.getTime()
+            ? 'You have already checked in for this shift'
+            : 'Check out of your previous shift before starting a new one',
+        );
+      }
 
-    const locationString =
-      resolvedLat !== null && resolvedLng !== null
-        ? JSON.stringify({
-            lat: resolvedLat,
-            lng: resolvedLng,
-            city: geo?.city || 'Local Network',
-            country: geo?.country || 'PK',
+      let checkInLocation: string | null = null;
+      if (typeof dto.latitude === 'number' && typeof dto.longitude === 'number') {
+        const preference = await tx.employee.findFirst({
+          where: { id: employee.id, companyId, userId, deletedAt: null },
+          select: { locationConsent: true },
+        });
+        if (preference?.locationConsent) {
+          checkInLocation = JSON.stringify({
+            lat: dto.latitude,
+            lng: dto.longitude,
             whitelisted: isIpWhitelisted,
-          })
-        : null;
-
-    const record = await this.prisma.attendanceRecord.upsert({
-      where: {
-        companyId_employeeId_date: {
-          companyId,
-          employeeId: employee.id,
-          date: today,
+          });
+        }
+      }
+      await tx.attendanceRecord.createMany({ data: attendanceKey, skipDuplicates: true });
+      return tx.attendanceRecord.update({
+        where: { companyId_employeeId_date: attendanceKey, checkInTime: null },
+        data: {
+          checkInTime,
+          status,
+          isRemote: dto.isRemote,
+          checkInIp: cleanIp,
+          checkInLocation,
+          notes: dto.notes,
+          markedBySystem: false,
         },
-      },
-      update: {
-        checkInTime,
-        status,
-        isRemote: dto.isRemote,
-        checkInIp: cleanIp,
-        checkInLocation: locationString,
-        notes: dto.notes,
-        markedBySystem: false,
-      },
-      create: {
-        companyId,
-        employeeId: employee.id,
-        date: today,
-        checkInTime,
-        status,
-        isRemote: dto.isRemote,
-        checkInIp: cleanIp,
-        checkInLocation: locationString,
-        notes: dto.notes,
-        markedBySystem: false,
-      },
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }).catch((error: unknown) => {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2025', 'P2034'].includes(error.code)) {
+        throw new ConflictException('The attendance record changed. Refresh it before trying again.');
+      }
+      throw error;
     });
 
     // If routed to HR Exceptions Queue, broadcast alert
@@ -178,9 +160,9 @@ export class AttendanceService {
         attendanceId: record.id,
         employeeId: employee.id,
         employeeName: `${employee.firstName} ${employee.lastName}`,
-        date: today.toISOString(),
+        date: shiftDate.toISOString(),
         checkInTime: checkInTime.toISOString(),
-        ipAddress: ip,
+        ipAddress: cleanIp ?? undefined,
         timestamp: new Date().toISOString(),
       };
 
@@ -229,46 +211,40 @@ export class AttendanceService {
     });
     if (!employee) throw new NotFoundException('Employee not found');
 
-    const today = this.getTodayDate();
-
-    const record = await this.prisma.attendanceRecord.findUnique({
-      where: {
-        companyId_employeeId_date: {
-          companyId,
-          employeeId: employee.id,
-          date: today,
-        },
-      },
-    });
+    const checkOutTime = new Date();
+    const scope = { companyId, employeeId: employee.id };
+    const local = await getCompanyAttendanceTime(this.prisma, companyId, checkOutTime);
+    const dates = await resolveEmployeeAttendanceDay(this.prisma, scope, checkOutTime, local);
+    const record = await findCurrentPunch(this.prisma, scope, dates);
 
     if (!record || !record.checkInTime) {
-      throw new BadRequestException('You have not checked in today');
+      throw new BadRequestException('You have not checked in for this shift');
     }
     if (record.checkOutTime) {
-      throw new BadRequestException('You have already checked out today');
+      throw new BadRequestException('You have already checked out for this shift');
     }
 
-    const checkOutTime = new Date();
-    const totalMinutes = Math.round(
-      (checkOutTime.getTime() - record.checkInTime.getTime()) / 60000,
-    );
-
-    // Look up assigned shift duration (standard 8h = 480m)
-    const empShift = await this.prisma.employeeShift.findFirst({
-      where: { employeeId: employee.id },
-      include: { shift: true },
+    const completedTimer = await this.prisma.workTimerEntry.findFirst({
+      where: { ...scope, date: record.date, status: TimerStatus.STOPPED },
+      select: { totalMinutes: true },
     });
-    const standardWorkMinutes = 480; // Default 8 hours
-    const overtimeMinutes = Math.max(0, totalMinutes - standardWorkMinutes);
+    const elapsedMinutes = Math.round((checkOutTime.getTime() - record.checkInTime.getTime()) / 60000);
+    const totalMinutes = completedTimer?.totalMinutes ?? Math.max(0, elapsedMinutes);
+    const overtimeMinutes = Math.max(0, totalMinutes - shiftStandardMinutes(dates.shift));
 
     return this.prisma.attendanceRecord.update({
-      where: { id: record.id },
+      where: { id: record.id, companyId, checkOutTime: null },
       data: {
         checkOutTime,
         workMinutes: totalMinutes,
         overtimeMinutes,
         notes: dto.notes ? `${record.notes || ''} | Checkout: ${dto.notes}`.trim() : record.notes,
       },
+    }).catch((error: unknown) => {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        throw new ConflictException('The attendance record changed. Refresh it before trying again.');
+      }
+      throw error;
     });
   }
 
@@ -281,35 +257,17 @@ export class AttendanceService {
     });
     if (!employee) throw new NotFoundException('Employee not found');
 
-    const today = this.getTodayDate();
-
-    const record = await this.prisma.attendanceRecord.findUnique({
-      where: {
-        companyId_employeeId_date: {
-          companyId,
-          employeeId: employee.id,
-          date: today,
-        },
-      },
-    });
-
-    return record || { status: null, checkedIn: false, date: today };
+    const now = new Date();
+    const scope = { companyId, employeeId: employee.id };
+    const local = await getCompanyAttendanceTime(this.prisma, companyId, now);
+    const dates = await resolveEmployeeAttendanceDay(this.prisma, scope, now, local);
+    const record = await findCurrentPunch(this.prisma, scope, dates);
+    return record ?? { status: null, checkedIn: false, date: dates.date };
   }
 
   async listAttendanceRecords(user: AuthenticatedUser, filter: AttendanceFilter = {}) {
     const companyId = this.getEffectiveCompanyId(user);
-    const userId = (user.id || user.sub)!;
-
-    const callerEmployee = await this.prisma.employee.findFirst({
-      where: { userId },
-      select: { id: true, departmentId: true, teamId: true },
-    });
-
-    const scopeFilter = this.dataScopeService.applyScope(user, {
-      departmentId: callerEmployee?.departmentId || undefined,
-      teamId: callerEmployee?.teamId || undefined,
-      employeeId: callerEmployee?.id || undefined,
-    });
+    const scopeFilter = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
 
     const whereClause: any = {
       companyId,
@@ -388,38 +346,42 @@ export class AttendanceService {
 
     const record = await this.prisma.attendanceRecord.findFirst({
       where: { id, companyId },
-      include: { employee: { include: { user: true } } },
+      select: { date: true, status: true, notes: true, employee: { select: { userId: true } } },
     });
     if (!record) throw new NotFoundException('Attendance record not found');
+    const conflictMessage = 'This attendance exception is no longer pending review.';
+    if (record.status !== AttendanceStatus.ABSENT_PENDING_REVIEW) {
+      throw new ConflictException(conflictMessage);
+    }
 
-    const newStatus =
-      dto.action === 'APPROVE'
-        ? AttendanceStatus.PRESENT_REMOTE
-        : AttendanceStatus.ABSENT;
+    const approved = dto.action === 'APPROVE';
+    const status = approved ? AttendanceStatus.PRESENT_REMOTE : AttendanceStatus.ABSENT;
+    const decision = approved ? 'approved' : 'rejected';
 
-    const updated = await this.prisma.attendanceRecord.update({
-      where: { id },
-      data: {
-        status: newStatus,
-        notes: dto.notes
-          ? `${record.notes || ''} | HR Resolution: ${dto.action} (${dto.notes})`.trim()
-          : record.notes,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.attendanceRecord.update({
+        where: { id, companyId, status: AttendanceStatus.ABSENT_PENDING_REVIEW },
+        data: {
+          status,
+          notes: dto.notes
+            ? [record.notes, `HR Resolution: ${dto.action} (${dto.notes})`].filter(Boolean).join(' | ')
+            : undefined,
+        },
+      }).catch((error: unknown) => rethrowMissingRecordAsConflict(error, conflictMessage));
+
+      await tx.notification.create({
+        data: {
+          companyId,
+          userId: record.employee.userId,
+          type: NotificationType.ATTENDANCE_EXCEPTION,
+          title: `Remote Check-in Exception ${approved ? 'Approved' : 'Rejected'}`,
+          body: `Your remote check-in for ${record.date.toDateString()} was ${decision} by HR.`,
+          data: { attendanceId: id, status },
+        },
+      });
+
+      return updated;
     });
-
-    // Notify employee of resolution
-    await this.prisma.notification.create({
-      data: {
-        companyId,
-        userId: record.employee.userId,
-        type: NotificationType.ATTENDANCE_EXCEPTION,
-        title: `Remote Check-in Exception ${dto.action === 'APPROVE' ? 'Approved' : 'Rejected'}`,
-        body: `Your remote check-in for ${record.date.toDateString()} was ${dto.action.toLowerCase()}d by HR.`,
-        data: { attendanceId: id, status: newStatus },
-      },
-    });
-
-    return updated;
   }
 
   // Remote Work Permissions
@@ -450,21 +412,18 @@ export class AttendanceService {
 
   async listRemotePermissions(user: AuthenticatedUser) {
     const companyId = this.getEffectiveCompanyId(user);
-    const userId = (user.id || user.sub)!;
-
-    const employee = await this.prisma.employee.findFirst({
-      where: { userId },
-    });
+    const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
 
     return this.prisma.remoteWorkPermission.findMany({
       where: {
         companyId,
-        ...(user.role === UserRole.EMPLOYEE ? { employeeId: employee?.id } : {}),
+        employee: scope,
       },
       include: {
         employee: {
           select: {
             id: true,
+            userId: true,
             employeeCode: true,
             firstName: true,
             lastName: true,
@@ -480,20 +439,40 @@ export class AttendanceService {
     const userId = (user.id || user.sub)!;
 
     const permission = await this.prisma.remoteWorkPermission.findFirst({
-      where: { id, companyId },
+      where: { id, companyId, employee: { companyId, deletedAt: null } },
+      include: {
+        employee: {
+          select: {
+            userId: true,
+            teamId: true,
+            reportingManager: { select: { userId: true, companyId: true } },
+          },
+        },
+      },
     });
     if (!permission) throw new NotFoundException('Permission request not found');
-    if (permission.status && permission.status !== RemoteWorkStatus.PENDING) {
-      throw new BadRequestException('Permission request is no longer pending');
+    if (permission.status !== RemoteWorkStatus.PENDING || permission.step1ApprovedAt) {
+      throw new ConflictException('Step 1 is no longer pending');
+    }
+    if (permission.employee.userId === userId) {
+      throw new ForbiddenException('You cannot approve your own remote work request');
+    }
+    if (user.role === UserRole.TEAM_LEAD) {
+      const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
+      const manager = permission.employee.reportingManager;
+      const isDirectManager = manager?.userId === userId && manager.companyId === companyId;
+      if (!isDirectManager && (!scope.teamId || scope.teamId !== permission.employee.teamId)) {
+        throw new ForbiddenException('You can only recommend requests within your team or reporting line');
+      }
     }
 
     return this.prisma.remoteWorkPermission.update({
-      where: { id },
+      where: { id, companyId, status: RemoteWorkStatus.PENDING, step1ApprovedAt: null },
       data: {
         step1ApproverId: userId,
         step1ApprovedAt: new Date(),
       },
-    });
+    }).catch((error: unknown) => rethrowMissingRecordAsConflict(error, 'Step 1 is no longer pending'));
   }
 
   async approvePermissionStep2(id: string, user: AuthenticatedUser) {
@@ -501,45 +480,58 @@ export class AttendanceService {
     const userId = (user.id || user.sub)!;
 
     const permission = await this.prisma.remoteWorkPermission.findFirst({
-      where: { id, companyId },
+      where: { id, companyId, employee: { companyId, deletedAt: null } },
+      include: { employee: { select: { userId: true, departmentId: true } } },
     });
     if (!permission) throw new NotFoundException('Permission request not found');
-    if (permission.status && permission.status !== RemoteWorkStatus.PENDING) {
-      throw new BadRequestException('Permission request is no longer pending');
+    if (permission.status !== RemoteWorkStatus.PENDING) {
+      throw new ConflictException('Step 2 is no longer pending');
+    }
+    if (!permission.step1ApprovedAt) {
+      throw new BadRequestException('Step 2 requires Step 1 to be completed');
+    }
+    if (permission.employee.userId === userId) {
+      throw new ForbiddenException('You cannot approve your own remote work request');
+    }
+    if (user.role === UserRole.DEPARTMENT_MANAGER) {
+      const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
+      if (!scope.departmentId || scope.departmentId !== permission.employee.departmentId) {
+        throw new ForbiddenException('You can only approve requests within your department');
+      }
     }
 
     return this.prisma.remoteWorkPermission.update({
-      where: { id },
+      where: { id, companyId, status: RemoteWorkStatus.PENDING, step1ApprovedAt: { not: null } },
       data: {
         step2ApproverId: userId,
         step2ApprovedAt: new Date(),
         status: RemoteWorkStatus.APPROVED,
       },
-    });
+    }).catch((error: unknown) => rethrowMissingRecordAsConflict(error, 'Step 2 is no longer pending'));
   }
 
   // HR IP Whitelist Management (Office & Remote/Hybrid WFH IPs)
-  async listIpWhitelist(user: AuthenticatedUser, currentIp: string) {
+  async listIpWhitelist(user: AuthenticatedUser, currentIp: string | null) {
     const companyId = this.getEffectiveCompanyId(user);
-    const cleanIp = (currentIp || '127.0.0.1').replace(/^::ffff:/, '');
-    const geo = geoip.lookup(cleanIp);
+    const cleanIp = normalizeIpAddress(currentIp ?? undefined);
+    const geo = cleanIp ? geoip.lookup(cleanIp) : null;
 
     const items = await this.prisma.ipWhitelist.findMany({
       where: { companyId },
       orderBy: { createdAt: 'desc' },
     });
 
-    const isCurrentIpWhitelisted = items.some(
+    const isCurrentIpWhitelisted = cleanIp !== null && items.some(
       (item) => item.ipAddress === cleanIp || item.ipAddress === '*',
     );
 
     return {
       currentClientIp: cleanIp,
       currentGeo: {
-        city: geo?.city || (cleanIp === '127.0.0.1' || cleanIp === '::1' ? 'Local Office Network' : 'Verified Network'),
-        country: geo?.country || 'PK',
-        latitude: geo?.ll?.[0] ?? 24.8607,
-        longitude: geo?.ll?.[1] ?? 67.0011,
+        city: geo?.city || null,
+        country: geo?.country || null,
+        latitude: geo?.ll?.[0] ?? null,
+        longitude: geo?.ll?.[1] ?? null,
       },
       isCurrentIpWhitelisted,
       items,
@@ -552,7 +544,8 @@ export class AttendanceService {
   ) {
     const companyId = this.getEffectiveCompanyId(user);
     const userId = (user.id || user.sub)!;
-    const cleanIp = dto.ipAddress.trim().replace(/^::ffff:/, '');
+    const enteredIp = dto.ipAddress.trim();
+    const cleanIp = enteredIp === '*' ? enteredIp : normalizeIpAddress(enteredIp);
 
     if (!cleanIp) {
       throw new BadRequestException('Valid IP address is required');

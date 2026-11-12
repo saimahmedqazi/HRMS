@@ -25,6 +25,9 @@ export default function RegisterPage() {
   const { refetchUser } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+
+  React.useEffect(() => setIsReady(true), []);
 
   const {
     register,
@@ -40,7 +43,7 @@ export default function RegisterPage() {
     setIsSubmitting(true);
     try {
       await api.post('/auth/register', data);
-      refetchUser();
+      await refetchUser();
       router.push('/dashboard');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Registration failed';
@@ -71,7 +74,8 @@ export default function RegisterPage() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form method="post" onSubmit={handleSubmit(onSubmit)}>
+          <fieldset disabled={!isReady} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
               Company Name *
@@ -153,6 +157,7 @@ export default function RegisterPage() {
           >
             {isSubmitting ? 'Creating Organization...' : 'Complete Registration'}
           </button>
+          </fieldset>
         </form>
 
         <div className="mt-6 border-t border-slate-100 pt-4 text-center dark:border-slate-800">

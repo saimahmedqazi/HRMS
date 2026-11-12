@@ -1,4 +1,39 @@
 import { registerAs } from '@nestjs/config';
+import { randomBytes } from 'node:crypto';
+
+const localSigningKeys = {
+  access: randomBytes(32).toString('base64'),
+  refresh: randomBytes(32).toString('base64'),
+};
+
+function requireSigningSecret(name: 'JWT_ACCESS_SECRET' | 'JWT_REFRESH_SECRET'): string {
+  const value = process.env[name];
+  if (!value || Buffer.byteLength(value.trim(), 'utf8') < 32 || /change-in-production|placeholder/i.test(value)) {
+    throw new Error(`${name} must be set to a non-placeholder secret of at least 32 bytes in production.`);
+  }
+  return value;
+}
+
+function jwtConfig() {
+  const production = process.env.NODE_ENV === 'production';
+  const accessSecret = production
+    ? requireSigningSecret('JWT_ACCESS_SECRET')
+    : process.env.JWT_ACCESS_SECRET || localSigningKeys.access;
+  const refreshSecret = production
+    ? requireSigningSecret('JWT_REFRESH_SECRET')
+    : process.env.JWT_REFRESH_SECRET || localSigningKeys.refresh;
+
+  if (production && accessSecret === refreshSecret) {
+    throw new Error('JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be different in production.');
+  }
+
+  return {
+    accessSecret,
+    accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m',
+    refreshSecret,
+    refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
+  };
+}
 
 export const appConfig = registerAs('app', () => ({
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -6,12 +41,7 @@ export const appConfig = registerAs('app', () => ({
   apiPrefix: process.env.API_PREFIX || 'api/v1',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
 
-  jwt: {
-    accessSecret: process.env.JWT_ACCESS_SECRET || 'change-in-production',
-    accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m',
-    refreshSecret: process.env.JWT_REFRESH_SECRET || 'change-in-production-refresh',
-    refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
-  },
+  jwt: jwtConfig(),
 
   cookie: {
     secret: process.env.COOKIE_SECRET || 'cookie-secret',
@@ -52,14 +82,10 @@ export const appConfig = registerAs('app', () => ({
   },
 
   security: {
+    totpEncryptionKey: process.env.TOTP_ENCRYPTION_KEY,
     bcryptRounds: 12,
     maxLoginAttempts: 5,
     lockoutDurationMinutes: 15,
     supportModeDurationHours: 1,
-  },
-
-  superAdmin: {
-    email: process.env.SUPER_ADMIN_EMAIL || 'superadmin@zenhr.com',
-    password: process.env.SUPER_ADMIN_PASSWORD || 'SuperAdmin@123',
   },
 }));

@@ -1,11 +1,13 @@
 import 'multer';
 import {
   Controller,
+  Get,
   Post,
   UseGuards,
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  StreamableFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
@@ -16,6 +18,8 @@ import { Roles } from '@common/decorators/roles.decorator';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { BulkImportService } from './bulk-import.service';
 
+const spreadsheetUploadLimits = { fileSize: 10 * 1024 * 1024 };
+
 @ApiTags('Bulk Employee Import')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -23,10 +27,20 @@ import { BulkImportService } from './bulk-import.service';
 export class BulkImportController {
   constructor(private readonly bulkImportService: BulkImportService) {}
 
+  @Get('template')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  @ApiOperation({ summary: 'Download the employee import spreadsheet template' })
+  downloadTemplate() {
+    return new StreamableFile(this.bulkImportService.createTemplate(), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: 'attachment; filename="workforce-import-sample.xlsx"',
+    });
+  }
+
   @Post('preview')
   @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: spreadsheetUploadLimits }))
   @ApiOperation({ summary: 'Preview and validate bulk employee Excel import without saving' })
   async previewImport(
     @CurrentUser() user: any,
@@ -39,7 +53,7 @@ export class BulkImportController {
   @Post('execute')
   @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: spreadsheetUploadLimits }))
   @ApiOperation({ summary: 'Execute permanent bulk employee onboarding from Excel file' })
   async executeImport(
     @CurrentUser() user: any,

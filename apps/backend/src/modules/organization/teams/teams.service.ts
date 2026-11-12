@@ -5,6 +5,7 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
 import { CreateTeamDto } from './dto/create-team.dto';
@@ -20,6 +21,21 @@ export class TeamsService {
       throw new ForbiddenException('Company context required');
     }
     return companyId;
+  }
+
+  private async requireManagedDepartment(
+    user: AuthenticatedUser,
+    companyId: string,
+    departmentId: string,
+  ): Promise<void> {
+    if (user.role !== UserRole.DEPARTMENT_MANAGER) return;
+
+    const userId = user.id || user.sub;
+    const manager = userId && await this.prisma.employee.findFirst({
+      where: { userId, companyId, departmentId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!manager) throw new ForbiddenException('You can only manage teams in your department');
   }
 
   async listTeams(user: AuthenticatedUser, departmentId?: string) {
@@ -75,6 +91,7 @@ export class TeamsService {
 
   async createTeam(dto: CreateTeamDto, user: AuthenticatedUser) {
     const companyId = this.getEffectiveCompanyId(user);
+    await this.requireManagedDepartment(user, companyId, dto.departmentId);
 
     // Verify department exists in company
     const department = await this.prisma.department.findFirst({
@@ -124,6 +141,7 @@ export class TeamsService {
       where: { id, companyId, deletedAt: null },
     });
     if (!team) throw new NotFoundException('Team not found');
+    await this.requireManagedDepartment(user, companyId, team.departmentId);
 
     if (dto.name && dto.name !== team.name) {
       const duplicate = await this.prisma.team.findFirst({
@@ -140,6 +158,9 @@ export class TeamsService {
     }
 
     if (dto.departmentId) {
+      if (dto.departmentId !== team.departmentId) {
+        await this.requireManagedDepartment(user, companyId, dto.departmentId);
+      }
       const dept = await this.prisma.department.findFirst({
         where: { id: dto.departmentId, companyId, deletedAt: null },
       });
@@ -177,6 +198,7 @@ export class TeamsService {
     });
 
     if (!team) throw new NotFoundException('Team not found');
+    await this.requireManagedDepartment(user, companyId, team.departmentId);
 
     if (team._count.employees > 0) {
       throw new BadRequestException(

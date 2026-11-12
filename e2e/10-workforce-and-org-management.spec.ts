@@ -1,15 +1,14 @@
 import { test, expect } from '@playwright/test';
-import { PrismaClient } from '@prisma/client';
+import { openFixtureDatabase } from './fixture-database';
 
 test.describe('Workforce Onboarding & Organization Structure Management', () => {
-  const prisma = new PrismaClient();
-
   test.beforeAll(async () => {
+    const prisma = openFixtureDatabase();
     // Clean up test employee, department, and designation if they exist
     await prisma.employee.deleteMany({ where: { user: { email: 'chloe.davis@acme.com' } } });
     await prisma.user.deleteMany({ where: { email: 'chloe.davis@acme.com' } });
-    await prisma.designation.deleteMany({ where: { name: 'Senior CS Specialist' } });
-    await prisma.department.deleteMany({ where: { name: 'Customer Success' } });
+    await prisma.designation.deleteMany({ where: { name: 'Senior CS Specialist', company: { slug: 'acme-corp' } } });
+    await prisma.department.deleteMany({ where: { name: 'Customer Success', company: { slug: 'acme-corp' } } });
     await prisma.$disconnect();
   });
 
@@ -65,7 +64,7 @@ test.describe('Workforce Onboarding & Organization Structure Management', () => 
 
     // 5. Verify Success Credentials Modal
     await expect(page.locator('text=Employee Successfully Onboarded!')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('text=chloe.davis@acme.com')).toBeVisible();
+    await expect(page.getByText(/^Email:\s*chloe\.davis@acme\.com$/)).toBeVisible();
     await expect(page.locator('text=Temporary Password:')).toBeVisible();
 
     // Close credentials modal

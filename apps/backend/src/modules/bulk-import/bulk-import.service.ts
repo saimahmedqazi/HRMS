@@ -5,9 +5,9 @@ import {
   Logger,
 } from '@nestjs/common';
 import * as xlsx from 'xlsx';
-import * as bcrypt from 'bcrypt';
-import { DataScope, EmployeeStatus, LeaveType, UserRole } from '@prisma/client';
+import { DataScope, EmployeeStatus, LeaveType, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { PASSWORD_SETUP_REQUIRED } from '@common/utils/password-policy';
 
 export interface RowError {
   row: number;
@@ -32,6 +32,16 @@ export class BulkImportService {
   private readonly logger = new Logger(BulkImportService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  createTemplate(): Buffer {
+    const workbook = xlsx.utils.book_new();
+    const sheet = xlsx.utils.aoa_to_sheet([[
+      'firstName', 'lastName', 'email', 'employeeCode', 'hireDate',
+      'departmentName', 'designationName', 'baseSalary', 'phone',
+    ]]);
+    xlsx.utils.book_append_sheet(workbook, sheet, 'Employees');
+    return xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  }
 
   /**
    * Parse workbook from buffer.
@@ -66,8 +76,9 @@ export class BulkImportService {
     const seenEmails = new Set<string>();
     const seenCodes = new Set<string>();
 
-    // Fetch existing users globally (User.email is @unique across platform) and company employee codes
+    // Preview may disclose conflicts only within the HR user's own company.
     const existingUsers = await this.prisma.user.findMany({
+      where: { companyId },
       select: { email: true },
     });
     const existingEmails = new Set(existingUsers.map((u) => u.email.toLowerCase()));
@@ -171,7 +182,6 @@ export class BulkImportService {
       throw new BadRequestException('No valid rows found in file to import.');
     }
 
-    const defaultPasswordHash = await bcrypt.hash('ZenHR@Default2026!', 10);
     const rawRows = this.parseWorkbook(file.buffer);
 
     let importedCount = 0;
@@ -237,7 +247,7 @@ export class BulkImportService {
             data: {
               companyId,
               email,
-              passwordHash: defaultPasswordHash,
+              passwordHash: PASSWORD_SETUP_REQUIRED,
               role: UserRole.EMPLOYEE,
               dataScope: DataScope.SELF,
               isEmailVerified: true,
@@ -276,9 +286,10 @@ export class BulkImportService {
         });
 
         importedCount++;
-      } catch (err: any) {
-        this.logger.error(`Import failed on row ${rowNum}: ${err.message}`);
-        errors.push({ row: rowNum, field: 'general', message: err.message });
+      } catch (error) {
+        const code = error instanceof Prisma.PrismaClientKnownRequestError ? error.code : 'unexpected error';
+        this.logger.error(`Import failed on row ${rowNum} (${code})`);
+        errors.push({ row: rowNum, field: 'general', message: 'Could not import this row. Check the employee details and try again.' });
       }
     }
 

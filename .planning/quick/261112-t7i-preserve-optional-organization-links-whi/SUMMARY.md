@@ -1,0 +1,12 @@
+# Optional workforce relationships and shift ownership
+
+| Severity | Affected files | Finding and fix |
+| --- | --- | --- |
+| High | `schema.prisma`, `20261112050000_scope_optional_workforce_relationships/migration.sql` | Optional links used a target ID without a company key, and department manager and team lead had no employee foreign keys. PostgreSQL now checks matching company IDs for employee department, designation, team and reporting manager, department manager, team lead, and payslip payroll structure. Deleting a linked record clears the optional ID and retains the owner company. |
+| High | `schema.prisma`, migration, `employees.service.ts`, `attendance-shift.ts` | The shift assignment join could not enforce that its employee and shift belonged to the same company. The migration backfills the employee's company ID and requires it to match both parents. Current onboarding supplies the ID explicitly. Inserts using the previous format derive the ID from the employee during rolling deployments. |
+
+The optional foreign keys use PostgreSQL column-specific `SET NULL`. Prisma warns because its schema represents the action without the column list. The checked-in SQL implements the intended behavior, and the database regression verifies it. Provision databases with the migration files to preserve that behavior. [PostgreSQL constraints](https://www.postgresql.org/docs/16/ddl-constraints.html)
+
+The migration passed on disposable PostgreSQL 16 with existing shift assignments and preserved their dates and associations. A previous-format insert also retained company ownership after the migration. Two PostgreSQL regression tests checked valid assignments, cross-company rejection, all seven optional delete actions, and preservation of the owning company. The GitHub Actions workflow now includes these tests. The workflow YAML and equivalent commands were checked locally.
+
+The backend production build, both TypeScript checks, 224 Jest tests, and 129 Chromium tests passed. The Chromium suite used the migration before the previous-format insert trigger was added. The final migration was then verified on both a fresh database and a populated upgrade. The two PostgreSQL regression tests passed on both. The production-mode API passed login, cookie, profile, refresh, and default-shift onboarding checks on the final migration. Prisma reported no drift. The migration remains unverified against the deployed client database.

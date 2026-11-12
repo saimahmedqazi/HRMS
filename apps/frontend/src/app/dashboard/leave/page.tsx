@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, API_PREFIX } from '@/lib/api';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   Calendar,
@@ -303,7 +303,7 @@ export default function LeaveDashboardPage() {
                     <td className="px-4 py-3">
                       {req.medicalCertUrl ? (
                         <a
-                          href={req.medicalCertUrl}
+                          href={`${API_PREFIX}/leave/requests/${req.id}/prescription/download`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-xs text-primary-600 hover:underline"

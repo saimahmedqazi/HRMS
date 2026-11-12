@@ -40,6 +40,18 @@ test.describe('Authentication & Access Control Flows', () => {
     await expect(page.locator('input[type="password"]')).toBeVisible();
   });
 
+  test('Login and registration show field errors before submitting blank forms', async ({ page }) => {
+    await page.goto('/login');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.getByText('Please enter a valid email address', { exact: true })).toBeVisible();
+    await expect(page.getByText('Password is required', { exact: true })).toBeVisible();
+
+    await page.goto('/register');
+    await page.locator('button[type="submit"]').click();
+    await expect(page.getByText('Company name must be at least 2 characters', { exact: true })).toBeVisible();
+    await expect(page.getByText('Password must be at least 8 characters', { exact: true })).toBeVisible();
+  });
+
   test('Login and verify dashboard access for all roles', async ({ page }) => {
     const credentials = [
       { email: 'superadmin@zenhr.com', password: 'SuperAdmin@123', expectedHeader: 'Platform Master Console' },

@@ -9,7 +9,26 @@ import {
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
-const prisma = new PrismaClient();
+function getDemoDatabaseUrl(): string {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('The demo seed is available only for local development and testing.');
+  }
+
+  const connection = process.env.DATABASE_URL;
+  if (connection) {
+    let url: URL | undefined;
+    try {
+      url = new URL(connection);
+    } catch {
+      // Report the setup requirement without exposing the connection string.
+    }
+    if (url && ['postgres:', 'postgresql:'].includes(url.protocol) &&
+        ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) return connection;
+  }
+  throw new Error('Set DATABASE_URL explicitly to the disposable loopback PostgreSQL database for demo data.');
+}
+
+const prisma = new PrismaClient({ datasourceUrl: getDemoDatabaseUrl() });
 
 async function main() {
   console.log('🌱 Seeding database...');
@@ -414,7 +433,7 @@ async function main() {
 main()
   .catch((e) => {
     console.error('Seeding error:', e);
-    process.exit(1);
+    process.exitCode = 1;
   })
   .finally(async () => {
     await prisma.$disconnect();

@@ -1,26 +1,70 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GoogleGenAI } from '@google/genai';
+import { ApiError, GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { ChatRequestDto } from './dto/chat-request.dto';
+
+const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
+const GEMINI_TIMEOUT_MS = 15_000;
+const PREFERRED_MODEL_TIMEOUT_MS = 5_000;
+const GEMINI_MIN_SERVER_TIMEOUT_MS = 10_000;
 
 @Injectable()
 export class AiAssistantService {
   private readonly logger = new Logger(AiAssistantService.name);
   private aiClient: GoogleGenAI | null = null;
+  private readonly modelName: string;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
   ) {
     const apiKey = this.configService.get<string>('GEMINI_API_KEY');
+    this.modelName = this.configService.get<string>('GEMINI_MODEL')?.trim() || DEFAULT_GEMINI_MODEL;
     if (apiKey && !apiKey.includes('mock') && !apiKey.includes('placeholder')) {
       this.aiClient = new GoogleGenAI({ apiKey });
     } else {
       this.logger.warn(
         'GEMINI_API_KEY unconfigured; operating in deterministic HR policy sandbox simulation mode.',
       );
+    }
+  }
+
+  private async requestGemini(systemInstruction: string, question: string) {
+    if (!this.aiClient) return;
+    const deadline = AbortSignal.timeout(GEMINI_TIMEOUT_MS);
+    const models = this.modelName === DEFAULT_GEMINI_MODEL
+      ? [DEFAULT_GEMINI_MODEL]
+      : [this.modelName, DEFAULT_GEMINI_MODEL];
+
+    for (const model of models) {
+      if (deadline.aborted) return;
+      const useDefault = model === DEFAULT_GEMINI_MODEL;
+      const abortSignal = useDefault ? deadline : AbortSignal.any([deadline, AbortSignal.timeout(PREFERRED_MODEL_TIMEOUT_MS)]);
+      try {
+        const response = await this.aiClient.models.generateContent({
+          model,
+          contents: question,
+          config: {
+            systemInstruction,
+            abortSignal,
+            httpOptions: {
+              timeout: useDefault ? GEMINI_TIMEOUT_MS : GEMINI_MIN_SERVER_TIMEOUT_MS,
+              retryOptions: { attempts: useDefault ? 2 : 1 },
+            },
+            ...(useDefault && { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }),
+          },
+        });
+        const reply = response.text?.trim();
+        if (reply) return { reply, model };
+        this.logger.warn('Gemini returned no visible text');
+      } catch (error) {
+        const status = error instanceof ApiError ? error.status : undefined;
+        const reason = abortSignal.aborted ? 'request deadline reached' : status ? `HTTP ${status}` : 'request failed';
+        this.logger.warn(`Gemini ${reason}`);
+        if (status && status !== 404 && status !== 408 && status !== 429 && status < 500) return;
+      }
     }
   }
 
@@ -74,8 +118,12 @@ ORGANIZATIONAL POLICIES:
    - Work Timer tracks active hours and breaks.
    - Accumulated break time exceeding 60 minutes triggers real-time alerts to the Team Lead and Department Manager.
    - Overtime is computed on checkout when work exceeds standard shift hours.
+5. Remote Work / Work From Home (WFH):
+   - Employees can request remote work permission from the Attendance page by clicking "New Remote Work Request".
+   - Standing remote work requests require a two-tier approval: Step 1 (Team Lead) -> Step 2 (Department Manager / HR).
+   - Once approved, employees can check in remotely from anywhere without triggering the unauthorized check-in exception.
 
-REVIWER CONTEXT:
+EMPLOYEE CONTEXT:
 - Name: ${employee ? `${employee.firstName} ${employee.lastName}` : 'Administrator'}
 - Role: ${userRole}
 - Department: ${employee?.department?.name || 'General'}
@@ -91,33 +139,8 @@ SECURITY & PRIVACY RULES:
 `;
 
     // 4. If live Gemini API key is configured, invoke Gemini API
-    if (this.aiClient) {
-      try {
-        const modelName = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Gemini API call timed out after 5000ms')), 5000),
-        );
-
-        const response: any = await Promise.race([
-          this.aiClient.models.generateContent({
-            model: modelName,
-            contents: [
-              {
-                role: 'user',
-                parts: [{ text: `${systemPrompt}\n\nUser Question: ${dto.message}` }],
-              },
-            ],
-          }),
-          timeoutPromise,
-        ]);
-
-        const reply = response.text || 'I am currently unable to process your request.';
-        return { reply, model: modelName };
-      } catch (err: any) {
-        this.logger.warn(`Gemini API fallback to local policy engine: ${err.message}`);
-        // Fallback to intelligent deterministic response
-      }
-    }
+    const liveReply = await this.requestGemini(systemPrompt, dto.message);
+    if (liveReply) return liveReply;
 
     // 5. Intelligent Deterministic Sandbox Fallback
     const query = dto.message.toLowerCase();
@@ -140,6 +163,13 @@ SECURITY & PRIVACY RULES:
       reply = `Here is your current leave balance:\n• Casual Leave: ${availCasual} days available\n• Sick Leave: ${availSick} days available\n• Annual Leave: ${availAnnual} days available`;
     } else if (query.includes('break') || query.includes('timer') || query.includes('alert')) {
       reply = `The ZenHR Work Timer tracks your active time and breaks. If your cumulative break time exceeds 60 minutes in a single shift, a real-time overstay notification is broadcast to your Team Lead and Department Manager.`;
+    } else if (
+      query.includes('work from home') ||
+      query.includes('remote') ||
+      query.includes('wfh') ||
+      query.includes('home')
+    ) {
+      reply = `To apply to work from home (Remote Work):\n1. Open **Attendance** or **My Attendance** on your dashboard.\n2. In Remote Work Requests, click **New Remote Work Request**.\n3. Enter the start date, end date, and reason.\n4. Submit the request for Step 1 recommendation and Step 2 approval.\n\nOnce approved, you can punch in remotely without triggering HR exceptions.`;
     } else if (
       (query.includes('salary') || query.includes('compensation') || query.includes('earns') || query.includes('pay')) &&
       !query.includes('my salary') && !query.includes('my pay') && !query.includes('my compensation')

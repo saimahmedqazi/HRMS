@@ -78,10 +78,12 @@ test.describe('Company Admin (CEO) End-to-End Suite', () => {
     await expect(page.locator('text=Attendance Analytics Graph (Present vs. Absent)')).toBeVisible();
 
     // Monthly Attendance Calendar Grid
-    await expect(page.getByRole('heading', { name: 'Monthly Attendance Calendar' })).toBeVisible();
-    await expect(page.getByText('Sun', { exact: true })).toBeVisible();
-    await expect(page.getByText('Mon', { exact: true })).toBeVisible();
-    await expect(page.getByText('Sat', { exact: true })).toBeVisible();
+    const calendarHeading = page.getByRole('heading', { name: 'Monthly Attendance Calendar' });
+    await expect(calendarHeading).toBeVisible();
+    const calendar = calendarHeading.locator('xpath=../../..');
+    for (const day of ['Sun', 'Mon', 'Sat']) {
+      await expect(calendar.getByText(day, { exact: true })).toBeVisible();
+    }
 
     // HR IP Whitelist (Office & Remote / Hybrid WFH Access Control) panel
     await expect(page.locator('text=HR IP Whitelist (Office & Remote / Hybrid WFH Access Control)')).toBeVisible();
@@ -96,13 +98,13 @@ test.describe('Company Admin (CEO) End-to-End Suite', () => {
     await expect(page.locator('text=192.168.1.100')).toBeVisible({ timeout: 10000 });
   });
 
-  test('Billing page displays Active Tier, Billing Dates, and Stripe credentials', async ({ page }) => {
+  test('Billing page displays the active tier, billing dates, and Stripe portal', async ({ page }) => {
     await page.click('a[href="/dashboard/billing"]');
     await page.waitForURL('**/dashboard/billing');
     await expect(page.locator('h1')).toContainText('Billing & Subscription Plans');
 
     // Active Tier Badge
-    await expect(page.locator('text=PREMIUM PLAN')).toBeVisible();
+    await expect(page.getByText('PREMIUM PLAN', { exact: true })).toBeVisible();
 
     // Billing Cycle Start Date & Next Renewal Date
     await expect(page.locator('text=Billing Cycle Start Date')).toBeVisible();

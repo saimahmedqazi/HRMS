@@ -2,12 +2,12 @@
 
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api, API_BASE_URL } from '@/lib/api';
+import { api, API_PREFIX } from '@/lib/api';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { CreditCard, Download, Calendar, DollarSign } from 'lucide-react';
+import { CreditCard, Download } from 'lucide-react';
 
 export default function MyPayslipsPage() {
-  const { data: payslips = [], isLoading } = useQuery({
+  const { data: payslips = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['my-payslips'],
     queryFn: () => api.get<any[]>('/payroll/payslips'),
   });
@@ -26,7 +26,20 @@ export default function MyPayslipsPage() {
 
       {/* Main Table */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-sm overflow-hidden">
-        {payslips.length === 0 ? (
+        {isLoading ? (
+          <p role="status" className="p-12 text-center text-sm text-gray-500">Loading payslips…</p>
+        ) : isError && payslips.length === 0 ? (
+          <div className="p-12 text-center">
+            <p role="alert" className="text-sm text-gray-700 dark:text-gray-200">Could not load your payslips.</p>
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              className="mt-3 rounded-lg bg-primary-600 px-4 py-2 text-xs font-semibold text-white hover:bg-primary-700"
+            >
+              Try again
+            </button>
+          </div>
+        ) : payslips.length === 0 ? (
           <div className="p-12 text-center">
             <CreditCard className="w-10 h-10 text-gray-400 mx-auto mb-3 opacity-60" />
             <h3 className="text-sm font-medium text-gray-900 dark:text-white">
@@ -77,7 +90,7 @@ export default function MyPayslipsPage() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <a
-                        href={`${API_BASE_URL}/api/v1/payroll/payslips/${p.id}/pdf`}
+                        href={`${API_PREFIX}/payroll/payslips/${p.id}/pdf`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-primary-600 hover:bg-primary-700 text-white shadow-sm"

@@ -8,15 +8,7 @@ import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-
-export interface BreakAlertPayload {
-  employeeId: string;
-  employeeName: string;
-  departmentName?: string;
-  shiftBreakLimit: number;
-  actualBreakMinutes: number;
-  timestamp: string;
-}
+import { JwtPayload, JwtStrategy } from '../auth/strategies/jwt.strategy';
 
 export interface AttendanceExceptionPayload {
   attendanceId: string;
@@ -44,6 +36,7 @@ export class AttendanceGateway implements OnGatewayConnection, OnGatewayDisconne
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly jwtStrategy: JwtStrategy,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -62,25 +55,37 @@ export class AttendanceGateway implements OnGatewayConnection, OnGatewayDisconne
         return;
       }
 
-      const secret = this.configService.get<string>('app.jwt.accessSecret', 'change-in-production');
-      const payload = this.jwtService.verify(token, { secret });
+      const secret = this.configService.getOrThrow<string>('app.jwt.accessSecret');
+      const payload = this.jwtService.verify<JwtPayload>(token, { secret });
+      const user = await this.jwtStrategy.validate(payload);
+      if (!client.connected) return;
+
+      const expiresIn = payload.exp! * 1000 - Date.now();
+      if (expiresIn <= 0) {
+        client.disconnect();
+        return;
+      }
+      const expiration = setTimeout(() => client.disconnect(), expiresIn);
+      expiration.unref();
+      client.once('disconnect', () => clearTimeout(expiration));
 
       // Join tenant room and user room
-      if (payload.companyId) {
-        client.join(`company_${payload.companyId}`);
+      if (user.companyId) {
+        client.join(`company_${user.companyId}`);
       }
-      client.join(`user_${payload.sub}`);
+      if (user.companyId) await client.join(`attendance_${user.companyId}_${user.id}`);
 
       // If Company Admin / CEO
-      if (payload.role === 'COMPANY_ADMIN') {
-        client.join(`ceo_${payload.companyId}`);
+      if (user.role === 'COMPANY_ADMIN') {
+        client.join(`ceo_${user.companyId}`);
       }
       // If HR Manager
-      if (payload.role === 'HR_MANAGER') {
-        client.join(`hr_${payload.companyId}`);
+      if (user.role === 'HR_MANAGER') {
+        client.join(`hr_${user.companyId}`);
       }
 
-      this.logger.debug(`Client ${client.id} connected for user ${payload.sub}`);
+      client.emit('attendance_ready');
+      this.logger.debug(`Client ${client.id} connected for user ${user.id}`);
     } catch (err) {
       this.logger.warn(`Unauthorized WebSocket connection attempt: ${client.id}`);
       client.disconnect();
@@ -91,30 +96,10 @@ export class AttendanceGateway implements OnGatewayConnection, OnGatewayDisconne
     this.logger.debug(`Client disconnected: ${client.id}`);
   }
 
-  // Emits real-time break overstay alert to Team Lead, Dept Manager, and CEO rooms
-  broadcastBreakAlert(
-    companyId: string,
-    teamLeadId: string | undefined,
-    departmentManagerId: string | undefined,
-    payload: BreakAlertPayload,
-  ) {
-    if (!this.server) return;
-
-    // 1. Emit to CEO / Company Admin room
-    this.server.to(`ceo_${companyId}`).emit('break_alert', payload);
-
-    // 2. Emit to HR room
-    this.server.to(`hr_${companyId}`).emit('break_alert', payload);
-
-    // 3. Emit to Dept Manager if assigned
-    if (departmentManagerId) {
-      this.server.to(`user_${departmentManagerId}`).emit('break_alert', payload);
-    }
-
-    // 4. Emit to Team Lead if assigned
-    if (teamLeadId) {
-      this.server.to(`user_${teamLeadId}`).emit('break_alert', payload);
-    }
+  broadcastBreakAlert(companyId: string, recipientIds: string[]) {
+    if (!this.server || !recipientIds.length) return;
+    // Clients reload notification details through the authenticated HTTP API.
+    this.server.to(recipientIds.map((id) => `attendance_${companyId}_${id}`)).emit('break_alert');
   }
 
   // Emits unauthorized remote check-in exception to HR room

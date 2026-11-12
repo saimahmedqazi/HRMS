@@ -1,15 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { CompanyStatus, SubscriptionStatus, UserRole } from '@prisma/client';
+import { CompanyStatus, CompanySuspensionReason, SubscriptionStatus } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { MailService } from '@common/mail/mail.service';
-import { AuditLogService } from '@common/services/audit-log.service';
 import { SubscriptionCronService } from './subscription-cron.service';
 
 describe('SubscriptionCronService', () => {
   let service: SubscriptionCronService;
   let prisma: any;
   let mailService: any;
-  let auditLogService: any;
 
   const mockCompanyId = 'company-123';
 
@@ -17,11 +15,12 @@ describe('SubscriptionCronService', () => {
     prisma = {
       subscription: {
         findMany: jest.fn(),
-        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       company: {
-        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      auditLog: { create: jest.fn() },
       user: {
         findFirst: jest.fn().mockResolvedValue({ id: 'user-admin', email: 'admin@acme.com' }),
       },
@@ -35,16 +34,12 @@ describe('SubscriptionCronService', () => {
       sendMail: jest.fn().mockResolvedValue(true),
     };
 
-    auditLogService = {
-      log: jest.fn().mockResolvedValue({ id: 'audit-1' }),
-    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SubscriptionCronService,
         { provide: PrismaService, useValue: prisma },
         { provide: MailService, useValue: mailService },
-        { provide: AuditLogService, useValue: auditLogService },
       ],
     }).compile();
 
@@ -92,22 +87,34 @@ describe('SubscriptionCronService', () => {
       const count = await service.processNonPaymentLockouts();
 
       expect(count).toBe(1);
-      expect(prisma.subscription.update).toHaveBeenCalledWith({
-        where: { id: 'sub-1' },
+      expect(prisma.subscription.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 'sub-1',
+          status: SubscriptionStatus.PAST_DUE,
+          lastFailedPaymentAt: { lte: expect.any(Date) },
+        },
         data: expect.objectContaining({
           status: SubscriptionStatus.SUSPENDED,
         }),
       });
-      expect(prisma.company.update).toHaveBeenCalledWith({
-        where: { id: mockCompanyId },
-        data: { status: CompanyStatus.SUSPENDED },
+      expect(prisma.company.updateMany).toHaveBeenCalledWith({
+        where: { id: mockCompanyId, status: CompanyStatus.ACTIVE },
+        data: { status: CompanyStatus.SUSPENDED, suspensionReason: CompanySuspensionReason.NON_PAYMENT },
       });
-      expect(auditLogService.log).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
           action: 'STATUS_CHANGE',
           entity: 'Company',
         }),
-      );
+      });
+    });
+
+    it('skips a subscription that was paid after the initial delinquency scan', async () => {
+      prisma.subscription.findMany.mockResolvedValue([{ id: 'sub-1', companyId: mockCompanyId }]);
+      prisma.subscription.updateMany.mockResolvedValueOnce({ count: 0 });
+      await expect(service.processNonPaymentLockouts()).resolves.toBe(0);
+      expect(prisma.company.updateMany).not.toHaveBeenCalled();
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
     });
   });
 });

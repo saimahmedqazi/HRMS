@@ -55,14 +55,12 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           status = HttpStatus.BAD_REQUEST;
           message = 'Database operation failed';
       }
-    } else if (exception instanceof Error) {
-      message = exception.message;
     }
 
     // Log server errors
     if (status >= 500) {
       this.logger.error(
-        `${request.method} ${request.url} → ${status}: ${message}`,
+        `${request.method} ${request.path} → ${status}: ${message}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
     }
@@ -73,7 +71,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       message,
       errors,
       timestamp: new Date().toISOString(),
-      path: request.url,
+      path: request.path,
     });
   }
 }

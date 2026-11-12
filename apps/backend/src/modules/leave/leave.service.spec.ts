@@ -4,6 +4,7 @@ import { ApprovalStatus, LeaveStatus, LeaveType, UserRole } from '@prisma/client
 import { PrismaService } from '@common/prisma/prisma.service';
 import { StorageService } from '@common/storage/storage.service';
 import { MailService } from '@common/mail/mail.service';
+import { DataScopeService } from '@common/services/data-scope.service';
 import { ApprovalEngineService } from './approval-engine.service';
 import { LeaveService } from './leave.service';
 
@@ -29,8 +30,7 @@ describe('LeaveService', () => {
       leaveBalance: {
         findMany: jest.fn(),
         findUnique: jest.fn(),
-        create: jest.fn(),
-        update: jest.fn(),
+        createMany: jest.fn(),
         updateMany: jest.fn(),
       },
       leaveRequest: {
@@ -50,6 +50,7 @@ describe('LeaveService', () => {
         create: jest.fn(),
       },
       $transaction: jest.fn((callback) => callback(prisma)),
+      $executeRaw: jest.fn().mockResolvedValue(1),
     };
 
     approvalEngine = {
@@ -66,6 +67,7 @@ describe('LeaveService', () => {
 
     storageService = {
       uploadFile: jest.fn().mockResolvedValue({ url: 'https://cloudinary.com/prescription.pdf' }),
+      deleteFile: jest.fn(),
     };
 
     mailService = {
@@ -75,6 +77,7 @@ describe('LeaveService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         LeaveService,
+        DataScopeService,
         { provide: PrismaService, useValue: prisma },
         { provide: ApprovalEngineService, useValue: approvalEngine },
         { provide: StorageService, useValue: storageService },
@@ -226,12 +229,35 @@ describe('LeaveService', () => {
       );
 
       expect(storageService.uploadFile).toHaveBeenCalled();
-      expect(prisma.leaveBalance.update).toHaveBeenCalledWith({
-        where: { id: 'balance-1' },
-        data: { pending: { increment: 3 } },
+      expect(prisma.leaveBalance.createMany).toHaveBeenCalledWith({
+        data: { companyId: mockCompanyId, employeeId: mockEmployeeId, leaveType: LeaveType.SICK, year: 2026, allocated: 14 },
+        skipDuplicates: true,
       });
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
       expect(prisma.notification.create).toHaveBeenCalled();
       expect(result.id).toBe('req-1');
+    });
+
+    it('does not create a request when the balance cannot be reserved and removes the uploaded attachment', async () => {
+      prisma.employee.findFirst.mockResolvedValue({
+        id: mockEmployeeId, userId: mockUserId, user: { role: UserRole.EMPLOYEE },
+      });
+      prisma.leaveTypeSetting.findFirst.mockResolvedValue({
+        id: 'setting-sick', isActive: true, requiresMedicalCert: true,
+        leaveType: LeaveType.SICK, annualAllocation: 14,
+      });
+      prisma.$executeRaw.mockResolvedValueOnce(0);
+      prisma.leaveBalance.findUnique.mockResolvedValue({ allocated: 14, carried: 0, used: 8, pending: 4 });
+
+      await expect(service.createLeaveRequest(mockCompanyId, mockUserId, {
+        leaveTypeSettingId: 'setting-sick', startDate: '2026-11-10', endDate: '2026-11-12',
+      }, {} as Express.Multer.File)).rejects.toThrow('Requested: 3 days, Available: 2 days.');
+
+      expect(prisma.leaveRequest.create).not.toHaveBeenCalled();
+      expect(prisma.notification.create).not.toHaveBeenCalled();
+      expect(storageService.deleteFile).toHaveBeenCalledWith(
+        'https://cloudinary.com/prescription.pdf', [`zenhr/companies/${mockCompanyId}/prescriptions`],
+      );
     });
   });
 
@@ -375,20 +401,23 @@ describe('LeaveService', () => {
   });
 
   describe('getLeaveRequestById', () => {
-    it('should forbid an EMPLOYEE from viewing another employee leave request', async () => {
-      prisma.leaveRequest.findFirst.mockResolvedValue({
-        id: 'req-other',
-        companyId: mockCompanyId,
-        employeeId: 'emp-other',
-        employee: { userId: 'user-other' },
-      });
+    it('queries leave request details within the employee’s own scope', async () => {
+      prisma.employee.findFirst.mockResolvedValue({ id: mockEmployeeId });
+      prisma.leaveRequest.findFirst.mockResolvedValue(null);
 
       await expect(
         service.getLeaveRequestById(mockCompanyId, 'req-other', {
           id: mockUserId,
           role: UserRole.EMPLOYEE,
         }),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.leaveRequest.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+        where: {
+          id: 'req-other',
+          companyId: mockCompanyId,
+          employee: { id: mockEmployeeId, companyId: mockCompanyId, deletedAt: null },
+        },
+      }));
     });
   });
 });

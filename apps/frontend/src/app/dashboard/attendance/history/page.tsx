@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { formatWorkDuration } from '@/lib/attendance-duration';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { ArrowLeft, Calendar, Search } from 'lucide-react';
 
@@ -22,6 +23,7 @@ export default function AttendanceHistoryPage() {
   });
 
   const records = recordsData || [];
+
 
   return (
     <div className="space-y-6">
@@ -111,7 +113,7 @@ export default function AttendanceHistoryPage() {
               records.map((r: any) => (
                 <tr key={r.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
                   <td className="py-4 pl-6 pr-3 text-xs font-medium text-zinc-900 dark:text-zinc-100">
-                    {new Date(r.date).toLocaleDateString()}
+                    {new Date(r.date).toLocaleDateString(undefined, { timeZone: 'UTC' })}
                   </td>
                   <td className="px-3 py-4 text-xs text-zinc-800 dark:text-zinc-200">
                     {r.employee?.firstName} {r.employee?.lastName}
@@ -128,7 +130,7 @@ export default function AttendanceHistoryPage() {
                     {r.checkOutTime ? new Date(r.checkOutTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
                   </td>
                   <td className="px-3 py-4 text-right text-xs font-medium text-zinc-800 dark:text-zinc-200">
-                    {r.workMinutes}m
+                    {formatWorkDuration(r)}
                   </td>
                   <td className="px-3 py-4 text-right text-xs font-medium text-indigo-600 dark:text-indigo-400">
                     {r.overtimeMinutes > 0 ? `+${r.overtimeMinutes}m` : '0m'}

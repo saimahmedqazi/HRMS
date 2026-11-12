@@ -17,12 +17,12 @@ export class LoginDto {
   @IsOptional()
   twoFactorCode?: string;
 
-  @ApiPropertyOptional({ example: 24.8607 })
+  @ApiPropertyOptional({ deprecated: true, description: 'Accepted for older clients and ignored' })
   @IsNumber()
   @IsOptional()
   latitude?: number;
 
-  @ApiPropertyOptional({ example: 67.0011 })
+  @ApiPropertyOptional({ deprecated: true, description: 'Accepted for older clients and ignored' })
   @IsNumber()
   @IsOptional()
   longitude?: number;

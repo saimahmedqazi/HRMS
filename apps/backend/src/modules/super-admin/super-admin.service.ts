@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { CompanyStatus, UserRole, AuditAction } from '@prisma/client';
+import { CompanyStatus, CompanySuspensionReason, UserRole, AuditAction } from '@prisma/client';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 
 @Injectable()
@@ -103,32 +103,32 @@ export class SuperAdminService {
   }
 
   async updateCompanyStatus(companyId: string, status: CompanyStatus, adminUser: AuthenticatedUser) {
-    const company = await this.prisma.company.findUnique({ where: { id: companyId } });
-    if (!company) throw new NotFoundException('Company not found');
+    return this.prisma.$transaction(async (tx) => {
+      const company = await tx.company.findUnique({ where: { id: companyId } });
+      if (!company) throw new NotFoundException('Company not found');
 
-    const updated = await this.prisma.company.update({
-      where: { id: companyId },
-      data: { status },
-    });
-
-    const superAdminId = (adminUser.id || adminUser.sub)!;
-
-    // Write audit log
-    await this.prisma.auditLog.create({
-      data: {
-        userId: superAdminId,
-        action: AuditAction.STATUS_CHANGE,
-        entity: 'Company',
-        entityId: companyId,
-        newValues: {
-          previousStatus: company.status,
-          newStatus: status,
-          updatedBy: adminUser.email,
+      const updated = await tx.company.update({
+        where: { id: companyId },
+        data: {
+          status,
+          suspensionReason: status === CompanyStatus.SUSPENDED ? CompanySuspensionReason.MANUAL : null,
         },
-      },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: (adminUser.id || adminUser.sub)!,
+          action: AuditAction.STATUS_CHANGE,
+          entity: 'Company',
+          entityId: companyId,
+          newValues: {
+            previousStatus: company.status,
+            newStatus: status,
+            updatedBy: adminUser.email,
+          },
+        },
+      });
+      return updated;
     });
-
-    return updated;
   }
 
   async enterSupportMode(companyId: string, reason: string, adminUser: AuthenticatedUser) {
@@ -166,7 +166,7 @@ export class SuperAdminService {
     });
 
     // Issue updated token carrying supportModeCompanyId
-    const accessSecret = this.configService.get<string>('app.jwt.accessSecret');
+    const accessSecret = this.configService.getOrThrow<string>('app.jwt.accessSecret');
     const token = await this.jwtService.signAsync(
       {
         sub: superAdminId,
@@ -223,7 +223,7 @@ export class SuperAdminService {
     });
 
     // Issue standard Super Admin token
-    const accessSecret = this.configService.get<string>('app.jwt.accessSecret');
+    const accessSecret = this.configService.getOrThrow<string>('app.jwt.accessSecret');
     const token = await this.jwtService.signAsync(
       {
         sub: superAdminId,

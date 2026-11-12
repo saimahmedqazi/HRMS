@@ -5,8 +5,9 @@ services:
     runtime: node
     plan: standard
     region: frankfurt
-    buildCommand: npm install && npx prisma generate --schema=./apps/backend/prisma/schema.prisma && npm run build --workspace=apps/backend
-    startCommand: node apps/backend/dist/main
+    buildCommand: npm ci --include=dev && npx prisma generate --schema=./apps/backend/prisma/schema.prisma && npm run build --workspace=apps/backend
+    preDeployCommand: npm run prisma:migrate:deploy --workspace=apps/backend
+    startCommand: npm run start:prod --workspace=apps/backend
     envVars:
       - key: NODE_ENV
         value: production
@@ -16,9 +17,13 @@ services:
         fromDatabase:
           name: zenhr-postgres
           property: connectionString
+      - key: FRONTEND_URL
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
       - key: REDIS_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: zenhr-redis
           property: connectionString
       - key: JWT_ACCESS_SECRET
@@ -34,28 +39,25 @@ services:
     runtime: node
     plan: standard
     region: frankfurt
-    buildCommand: npm install && npm run build --workspace=apps/frontend
+    buildCommand: npm ci --include=dev && npm run build --workspace=apps/frontend
     startCommand: npm run start --workspace=apps/frontend
     envVars:
       - key: NODE_ENV
         value: production
       - key: NEXT_PUBLIC_API_URL
-        fromService:
-          type: web
-          name: zenhr-backend-api
-          property: host
+        sync: false
+
+  - type: keyvalue
+    name: zenhr-redis
+    plan: standard
+    region: frankfurt
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
 
 databases:
   # Managed PostgreSQL 16
   - name: zenhr-postgres
     databaseName: zenhr_production
     user: zenhr_admin
-    plan: standard
     region: frankfurt
-    postgresMajorVersion: 16
-
-  # Managed Redis 7
-  - name: zenhr-redis
-    plan: standard
-    region: frankfurt
-    maxmemoryPolicy: noeviction
+    postgresMajorVersion: '16'

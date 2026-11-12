@@ -1,22 +1,25 @@
 # Stage 1: Dependencies & Build
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
 COPY package*.json ./
-COPY apps/frontend/package*.json ./apps/frontend/
+COPY apps/backend/package.json ./apps/backend/
+COPY apps/frontend/package.json ./apps/frontend/
 
-RUN npm install
+RUN npm ci
 
 COPY apps/frontend ./apps/frontend
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
+ARG NEXT_PUBLIC_API_URL
+RUN mkdir -p apps/frontend/public
 RUN npm run build --workspace=apps/frontend
 
 # Stage 2: Production Runner
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 
 WORKDIR /app
 

@@ -2,27 +2,33 @@ import {
   Controller,
   Post,
   Get,
+  Patch,
   Body,
   Req,
   Res,
   Query,
   UseGuards,
   HttpCode,
+  Header,
   HttpStatus,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { SessionProbe } from '../../common/guards/request-throttler.guard';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { getRequestIp } from '../../common/utils/request-ip';
 import { RegisterCompanyDto } from './dto/register-company.dto';
 import { LoginDto } from './dto/login.dto';
+import { LocationConsentDto } from './dto/location-consent.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
-import { VerifyTotpDto } from './dto/totp.dto';
+import { DisableTotpDto, VerifyTotpDto, VerifyTwoFactorLoginDto } from './dto/totp.dto';
 import { UserRole } from '@prisma/client';
 
 @ApiTags('auth')
@@ -36,6 +42,7 @@ export class AuthController {
 
   @Public()
   @Post('register')
+  @Throttle({ short: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Register a new company and company admin user' })
   @ApiResponse({ status: 201, description: 'Company and admin registered successfully' })
   async register(
@@ -57,16 +64,9 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const rawIp =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      (req.headers['x-real-ip'] as string)?.trim() ||
-      req.ip ||
-      req.socket.remoteAddress ||
-      '127.0.0.1';
-    const ip = rawIp.replace(/^::ffff:/, '');
     const userAgent = req.headers['user-agent'] || 'Unknown';
 
-    const result = await this.authService.login(dto, ip, userAgent);
+    const result = await this.authService.login(dto, getRequestIp(req), userAgent);
 
     if ('requires2fa' in result) {
       return result;
@@ -78,30 +78,24 @@ export class AuthController {
 
   @Public()
   @Post('login/2fa')
+  @Throttle({ short: { limit: 15, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Complete two-factor authentication challenge' })
   async verify2faLogin(
-    @Body('tempToken') tempToken: string,
-    @Body('code') code: string,
+    @Body() dto: VerifyTwoFactorLoginDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const rawIp =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      (req.headers['x-real-ip'] as string)?.trim() ||
-      req.ip ||
-      req.socket.remoteAddress ||
-      '127.0.0.1';
-    const ip = rawIp.replace(/^::ffff:/, '');
     const userAgent = req.headers['user-agent'] || 'Unknown';
 
-    const result = await this.authService.verify2faLogin(tempToken, code, ip, userAgent);
+    const result = await this.authService.verify2faLogin(dto.tempToken, dto.code, getRequestIp(req), userAgent);
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
     return { user: result.user };
   }
 
   @Public()
   @Post('refresh')
+  @SessionProbe('refresh_token')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Rotate and refresh JWT access token using httpOnly cookie' })
   async refresh(
@@ -132,6 +126,7 @@ export class AuthController {
 
   @Public()
   @Post('forgot-password')
+  @Throttle({ short: { limit: 15, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Request password reset email' })
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
@@ -141,6 +136,7 @@ export class AuthController {
 
   @Public()
   @Post('reset-password')
+  @Throttle({ short: { limit: 15, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reset password with reset token' })
   async resetPassword(@Body() dto: ResetPasswordDto) {
@@ -157,12 +153,15 @@ export class AuthController {
   }
 
   @Post('2fa/generate')
+  @Header('Cache-Control', 'no-store')
   @ApiOperation({ summary: 'Generate TOTP 2FA secret and QR code' })
   async generateTotp(@CurrentUser() user: AuthenticatedUser) {
     return this.authService.generateTotp((user.id || user.sub)!);
   }
 
   @Post('2fa/enable')
+  @Header('Cache-Control', 'no-store')
+  @Throttle({ short: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Verify TOTP code and enable 2FA' })
   async enableTotp(
     @CurrentUser() user: AuthenticatedUser,
@@ -172,19 +171,27 @@ export class AuthController {
   }
 
   @Post('2fa/disable')
+  @Throttle({ short: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Disable 2FA' })
   async disableTotp(
     @CurrentUser() user: AuthenticatedUser,
-    @Body('password') passwordConfirm: string,
+    @Body() dto: DisableTotpDto,
   ) {
-    await this.authService.disableTotp((user.id || user.sub)!, passwordConfirm);
+    await this.authService.disableTotp((user.id || user.sub)!, dto.password);
     return { message: 'Two-factor authentication disabled' };
   }
 
   @Get('me')
+  @SessionProbe('access_token')
   @ApiOperation({ summary: 'Get current user profile, company, and employee context' })
   async getMe(@CurrentUser() user: AuthenticatedUser) {
     return this.authService.getMe((user.id || user.sub)!, user.supportModeCompanyId);
+  }
+
+  @Patch('me/location-consent')
+  @ApiOperation({ summary: 'Set device location consent for your attendance punches' })
+  async updateLocationConsent(@CurrentUser() user: AuthenticatedUser, @Body() dto: LocationConsentDto) {
+    return this.authService.updateLocationConsent((user.id || user.sub)!, user.companyId, dto.locationConsent);
   }
 
   @Get('me/modules')
@@ -192,7 +199,8 @@ export class AuthController {
   async getMyModules(@CurrentUser() user: AuthenticatedUser) {
     if (user.role === UserRole.SUPER_ADMIN && user.supportModeCompanyId) {
       const superModules = this.authService.getAllowedModules(UserRole.SUPER_ADMIN);
-      const adminModules = this.authService.getAllowedModules(UserRole.COMPANY_ADMIN);
+      const adminModules = this.authService.getAllowedModules(UserRole.COMPANY_ADMIN)
+        .filter((module) => module !== 'payroll');
       const merged = Array.from(new Set([...superModules, ...adminModules]));
       return {
         role: user.role,

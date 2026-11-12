@@ -2,6 +2,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '@/lib/api';
+import { io } from 'socket.io-client';
 import {
   Bell,
   ShieldCheck,
@@ -12,6 +15,7 @@ import {
   PackageCheck,
   UserPlus,
   Clock,
+  AlertTriangle,
   X,
   Menu,
 } from 'lucide-react';
@@ -19,48 +23,75 @@ import {
 interface NotificationItem {
   id: string;
   title: string;
-  description: string;
-  time: string;
-  read: boolean;
-  type: 'payroll' | 'resource' | 'import' | 'system';
+  body: string;
+  createdAt: string;
+  isRead: boolean;
+  type: string;
 }
 
 interface HeaderProps {
   onMenuClick?: () => void;
 }
 
+const timeAgo = (dateStr: string) => {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+};
+
 export function Header({ onMenuClick }: HeaderProps) {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [isDark, setIsDark] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const notificationRef = useRef<HTMLDivElement>(null);
+  const canReceiveBreakAlerts = Boolean(user?.companyId && ['COMPANY_ADMIN', 'HR_MANAGER', 'DEPARTMENT_MANAGER', 'TEAM_LEAD'].includes(user.role));
 
-  const [notifications, setNotifications] = useState<NotificationItem[]>([
-    {
-      id: '1',
-      title: 'Monthly Payroll Run Processed',
-      description: 'October 2026 compensation run of $306,900 disbursable generated for 6 employees.',
-      time: '10m ago',
-      read: false,
-      type: 'payroll',
-    },
-    {
-      id: '2',
-      title: 'Resource Requisition Fulfilled',
-      description: 'Dell UltraSharp 32" 4K Monitor assigned Asset Tag #ACM-HW-4091.',
-      time: '25m ago',
-      read: false,
-      type: 'resource',
-    },
-    {
-      id: '3',
-      title: 'Bulk Workforce Import Complete',
-      description: '2 new employees (Alice Smith, Bob Jones) onboarded with leave entitlements.',
-      time: '45m ago',
-      read: false,
-      type: 'import',
-    },
-  ]);
+  useEffect(() => {
+    if (!canReceiveBreakAlerts) return;
+
+    const socket = io('/ws/attendance', {
+      path: '/api/attendance-events',
+      addTrailingSlash: false,
+      transports: ['polling'],
+    });
+    let active = true;
+    const refreshNotifications = () => void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    socket.on('attendance_ready', refreshNotifications);
+    socket.on('break_alert', refreshNotifications);
+    socket.on('disconnect', (reason) => {
+      if (reason === 'io server disconnect') {
+        void api.get('/auth/me').then(() => { if (active) socket.connect(); }).catch(() => {});
+      }
+    });
+    return () => {
+      active = false;
+      socket.removeAllListeners();
+      socket.disconnect();
+    };
+  }, [canReceiveBreakAlerts, queryClient, user?.companyId, user?.id]);
+
+  const { data: notifications = [] } = useQuery<NotificationItem[]>({
+    queryKey: ['notifications', user?.id, user?.supportModeCompanyId ? null : user?.companyId ?? null],
+    queryFn: () => api.get<NotificationItem[]>('/notifications'),
+    enabled: Boolean(user?.id),
+    refetchInterval: 30_000,
+    retry: false,
+  });
+
+  const markAllMutation = useMutation({
+    mutationFn: () => api.patch('/notifications/mark-all-read', {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+
+  const unreadCount = notifications.filter((n) => !n.isRead).length;
+
+  const markAllAsRead = () => {
+    markAllMutation.mutate();
+  };
 
   // Sync theme with DOM and localStorage
   useEffect(() => {
@@ -97,12 +128,6 @@ export function Header({ onMenuClick }: HeaderProps) {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const unreadCount = notifications.filter((n) => !n.read).length;
-
-  const markAllAsRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-  };
 
   return (
     <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 md:px-6 dark:border-slate-800 dark:bg-slate-900 shrink-0 transition-colors">
@@ -181,32 +206,42 @@ export function Header({ onMenuClick }: HeaderProps) {
               </div>
 
               <div className="divide-y divide-slate-100 dark:divide-slate-800/60 max-h-80 overflow-y-auto">
-                {notifications.map((item) => (
-                  <div
-                    key={item.id}
-                    className={`p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition flex items-start gap-3 ${
-                      !item.read ? 'bg-blue-50/40 dark:bg-blue-950/20' : ''
-                    }`}
-                  >
-                    <div className="mt-0.5 p-2 rounded-xl bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-400 flex-shrink-0">
-                      {item.type === 'payroll' && <CreditCard className="w-3.5 h-3.5" />}
-                      {item.type === 'resource' && <PackageCheck className="w-3.5 h-3.5" />}
-                      {item.type === 'import' && <UserPlus className="w-3.5 h-3.5" />}
-                      {item.type === 'system' && <Clock className="w-3.5 h-3.5" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
-                          {item.title}
-                        </p>
-                        <span className="text-[10px] text-slate-400 flex-shrink-0">{item.time}</span>
-                      </div>
-                      <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5 line-clamp-2 leading-relaxed">
-                        {item.description}
-                      </p>
-                    </div>
+                {notifications.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-slate-400">
+                    No notifications yet.
                   </div>
-                ))}
+                ) : (
+                  notifications.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition flex items-start gap-3 ${
+                        !item.isRead ? 'bg-blue-50/40 dark:bg-blue-950/20' : ''
+                      }`}
+                    >
+                      <div className="mt-0.5 p-2 rounded-xl bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-400 flex-shrink-0">
+                        {item.type === 'PAYROLL' && <CreditCard className="w-3.5 h-3.5" />}
+                        {item.type === 'RESOURCE' && <PackageCheck className="w-3.5 h-3.5" />}
+                        {item.type === 'IMPORT' && <UserPlus className="w-3.5 h-3.5" />}
+                        {item.type === 'ATTENDANCE_EXCEPTION' && <AlertTriangle className="w-3.5 h-3.5" />}
+                        {item.type === 'GENERAL' && <Clock className="w-3.5 h-3.5" />}
+                        {!['PAYROLL', 'RESOURCE', 'IMPORT', 'ATTENDANCE_EXCEPTION', 'GENERAL'].includes(item.type) && (
+                          <Bell className="w-3.5 h-3.5" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
+                            {item.title}
+                          </p>
+                          <span className="text-[10px] text-slate-400 flex-shrink-0">{timeAgo(item.createdAt)}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5 line-clamp-2 leading-relaxed">
+                          {item.body}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}

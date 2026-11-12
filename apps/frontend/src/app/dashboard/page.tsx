@@ -542,7 +542,7 @@ export default function DashboardHubPage() {
           <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 shadow-sm">
             <span className="text-xs uppercase text-gray-500 font-semibold">Break Overstay Alerts</span>
             <p className="text-xs text-gray-500 mt-2">
-              WebSocket alerts broadcast instantly if any team member exceeds 60m of break time.
+              Check the notification bell for team members who exceed their shift’s break limit.
             </p>
           </div>
         </div>

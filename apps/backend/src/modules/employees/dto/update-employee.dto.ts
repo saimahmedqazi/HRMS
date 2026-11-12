@@ -1,8 +1,11 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
+  IsDateString,
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -23,22 +26,39 @@ export class UpdateEmployeeDto {
   @ApiPropertyOptional({ example: '+1-555-0199' })
   @IsString()
   @IsOptional()
-  phone?: string;
+  phone?: string | null;
+
+  @ApiPropertyOptional({ example: '1995-05-15' })
+  @Transform(({ value }) => value === '' ? null : value)
+  @IsDateString({ strict: true })
+  @Matches(/^\d{4}-\d{2}-\d{2}(?:$|T)/, { message: 'dateOfBirth must include a year, month and day' })
+  @IsOptional()
+  dateOfBirth?: string | null;
+
+  @ApiPropertyOptional({ example: 'Female' })
+  @IsString()
+  @IsOptional()
+  gender?: string | null;
+
+  @ApiPropertyOptional({ example: 'US' })
+  @IsString()
+  @IsOptional()
+  nationality?: string | null;
 
   @ApiPropertyOptional({ example: '123 Tech Way, Suite 400' })
   @IsString()
   @IsOptional()
-  address?: string;
+  address?: string | null;
 
   @ApiPropertyOptional({ example: 'San Francisco' })
   @IsString()
   @IsOptional()
-  city?: string;
+  city?: string | null;
 
   @ApiPropertyOptional({ example: 'USA' })
   @IsString()
   @IsOptional()
-  country?: string;
+  country?: string | null;
 
   @ApiPropertyOptional({ example: 'cuid_department_id' })
   @IsString()

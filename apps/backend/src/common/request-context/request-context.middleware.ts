@@ -3,6 +3,7 @@ import { Request, Response, NextFunction } from 'express';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { requestContextStorage } from './request-context.storage';
+import { getRequestIp } from '../utils/request-ip';
 
 interface JwtPayload {
   sub: string;
@@ -31,7 +32,7 @@ export class RequestContextMiddleware implements NestMiddleware {
     if (token) {
       try {
         const payload = this.jwtService.verify<JwtPayload>(token, {
-          secret: this.configService.get<string>('app.jwt.accessSecret'),
+          secret: this.configService.getOrThrow<string>('app.jwt.accessSecret'),
         });
         userId = payload.sub;
         companyId = payload.companyId;
@@ -42,18 +43,13 @@ export class RequestContextMiddleware implements NestMiddleware {
       }
     }
 
-    const ipAddress =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
-      null;
-
     requestContextStorage.run(
       {
         userId,
         companyId,
         role,
         supportModeCompanyId,
-        ipAddress,
+        ipAddress: getRequestIp(req),
         userAgent: req.headers['user-agent'] || null,
       },
       () => next(),

@@ -1,0 +1,10 @@
+.git
+**/node_modules
+**/.next
+**/dist
+**/.env
+**/.env.*
+**/tsconfig.tsbuildinfo
+**/coverage
+test-results
+playwright-report

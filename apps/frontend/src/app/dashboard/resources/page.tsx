@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   Laptop,
@@ -14,6 +14,8 @@ import {
   Layers,
 } from 'lucide-react';
 
+type ResourceAction = 'APPROVE' | 'REJECT' | 'FULFILL';
+
 export default function ResourcesDashboardPage() {
   const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
@@ -24,7 +26,7 @@ export default function ResourcesDashboardPage() {
   // Fulfillment / Approval state
   const [actionModalOpen, setActionModalOpen] = useState(false);
   const [selectedReq, setSelectedReq] = useState<any>(null);
-  const [actionType, setActionType] = useState<'APPROVE' | 'REJECT' | 'FULFILL'>('APPROVE');
+  const [actionType, setActionType] = useState<ResourceAction>('APPROVE');
   const [actionNotes, setActionNotes] = useState('');
 
   // Fetch current user
@@ -56,34 +58,34 @@ export default function ResourcesDashboardPage() {
     },
   });
 
-  // Approve / Reject Mutation
-  const approveMutation = useMutation({
-    mutationFn: () =>
-      api.post(`/resources/requests/${selectedReq.id}/approve`, {
-        decision: actionType === 'APPROVE' ? 'APPROVE' : 'REJECT',
-        notes: actionNotes || undefined,
-      }),
+  const actionMutation = useMutation({
+    mutationFn: ({ id, action, notes }: { id: string; action: ResourceAction; notes?: string }) => {
+      const url = `/resources/requests/${id}`;
+      return action === 'FULFILL'
+        ? api.post(`${url}/fulfill`, { notes })
+        : api.post(`${url}/approve`, { decision: action, notes });
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['resource-requests'] });
+      void queryClient.invalidateQueries({ queryKey: ['resource-requests'] });
       setActionModalOpen(false);
       setSelectedReq(null);
       setActionNotes('');
     },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ['resource-requests'] });
+      }
+    },
   });
+  const actionConflict = actionMutation.error instanceof ApiError && actionMutation.error.status === 409;
 
-  // Fulfill Mutation
-  const fulfillMutation = useMutation({
-    mutationFn: () =>
-      api.post(`/resources/requests/${selectedReq.id}/fulfill`, {
-        notes: actionNotes || undefined,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['resource-requests'] });
-      setActionModalOpen(false);
-      setSelectedReq(null);
-      setActionNotes('');
-    },
-  });
+  const openAction = (request: { id: string }, action: ResourceAction) => {
+    actionMutation.reset();
+    setSelectedReq(request);
+    setActionType(action);
+    setActionNotes('');
+    setActionModalOpen(true);
+  };
 
   const isOpsOrAdmin =
     user?.role === 'COMPANY_ADMIN' ||
@@ -162,7 +164,6 @@ export default function ResourcesDashboardPage() {
                     isManager &&
                     (isOpsOrAdmin || !isSelfRequest);
                   const canFulfill = req.status === 'STEP_1_APPROVED' && isOpsOrAdmin;
-
                   return (
                     <tr
                       key={req.id}
@@ -190,37 +191,33 @@ export default function ResourcesDashboardPage() {
                         {canApprove ? (
                           <div className="inline-flex gap-1.5">
                             <button
-                              onClick={() => {
-                                setSelectedReq(req);
-                                setActionType('APPROVE');
-                                setActionModalOpen(true);
-                              }}
+                              onClick={() => openAction(req, 'APPROVE')}
                               className="px-2.5 py-1 text-xs font-semibold rounded bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 hover:bg-emerald-100"
                             >
                               Approve
                             </button>
                             <button
-                              onClick={() => {
-                                setSelectedReq(req);
-                                setActionType('REJECT');
-                                setActionModalOpen(true);
-                              }}
+                              onClick={() => openAction(req, 'REJECT')}
                               className="px-2.5 py-1 text-xs font-semibold rounded bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300 hover:bg-rose-100"
                             >
                               Reject
                             </button>
                           </div>
                         ) : canFulfill ? (
-                          <button
-                            onClick={() => {
-                              setSelectedReq(req);
-                              setActionType('FULFILL');
-                              setActionModalOpen(true);
-                            }}
-                            className="px-3 py-1 text-xs font-semibold rounded-lg bg-primary-600 hover:bg-primary-700 text-white shadow-sm"
-                          >
-                            Fulfill
-                          </button>
+                          <div className="inline-flex gap-1.5">
+                            <button
+                              onClick={() => openAction(req, 'FULFILL')}
+                              className="px-3 py-1 text-xs font-semibold rounded-lg bg-primary-600 hover:bg-primary-700 text-white shadow-sm"
+                            >
+                              Fulfill
+                            </button>
+                            <button
+                              onClick={() => openAction(req, 'REJECT')}
+                              className="px-2.5 py-1 text-xs font-semibold rounded bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300 hover:bg-rose-100"
+                            >
+                              Reject
+                            </button>
+                          </div>
                         ) : (
                           <span className="text-xs text-gray-400">—</span>
                         )}
@@ -333,6 +330,7 @@ export default function ResourcesDashboardPage() {
               </h3>
               <button
                 onClick={() => setActionModalOpen(false)}
+                disabled={actionMutation.isPending}
                 className="text-gray-400 hover:text-gray-600 text-lg leading-none"
               >
                 &times;
@@ -373,24 +371,25 @@ export default function ResourcesDashboardPage() {
               </div>
             </div>
 
+            {actionMutation.error && (
+              <p role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-950 dark:text-rose-300">
+                {actionMutation.error.message}
+              </p>
+            )}
+
             <div className="flex justify-end gap-3 pt-4 mt-4 border-t border-gray-200 dark:border-gray-800">
               <button
                 type="button"
                 onClick={() => setActionModalOpen(false)}
+                disabled={actionMutation.isPending}
                 className="px-4 py-2 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  if (actionType === 'FULFILL') {
-                    fulfillMutation.mutate();
-                  } else {
-                    approveMutation.mutate();
-                  }
-                }}
-                disabled={approveMutation.isPending || fulfillMutation.isPending}
+                onClick={() => actionMutation.mutate({ id: selectedReq.id, action: actionType, notes: actionNotes || undefined })}
+                disabled={actionMutation.isPending || actionConflict}
                 className={`px-4 py-2 text-xs font-semibold rounded-lg text-white ${
                   actionType === 'REJECT'
                     ? 'bg-rose-600 hover:bg-rose-700'

@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEmail,
-  IsEnum,
+  IsIn,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -10,6 +10,13 @@ import {
   Min,
 } from 'class-validator';
 import { UserRole } from '@prisma/client';
+
+export const EMPLOYEE_ONBOARDING_ROLES: UserRole[] = [
+  UserRole.EMPLOYEE,
+  UserRole.TEAM_LEAD,
+  UserRole.DEPARTMENT_MANAGER,
+  UserRole.HR_MANAGER,
+];
 
 export class CreateEmployeeDto {
   @ApiProperty({ example: 'Alice' })
@@ -29,8 +36,8 @@ export class CreateEmployeeDto {
   @IsNotEmpty()
   email!: string;
 
-  @ApiProperty({ enum: UserRole, default: UserRole.EMPLOYEE })
-  @IsEnum(UserRole)
+  @ApiPropertyOptional({ enum: EMPLOYEE_ONBOARDING_ROLES, default: UserRole.EMPLOYEE })
+  @IsIn(EMPLOYEE_ONBOARDING_ROLES)
   @IsOptional()
   role?: UserRole = UserRole.EMPLOYEE;
 

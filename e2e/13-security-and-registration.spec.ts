@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { PrismaClient } from '@prisma/client';
+import { authenticator } from 'otplib';
+import { openFixtureDatabase } from './fixture-database';
 
 test.describe('Security & Tenant Registration Lifecycle', () => {
-  const prisma = new PrismaClient();
-
   test.beforeEach(async () => {
+    const prisma = openFixtureDatabase();
     // Clean up any previous test tenant records
     const testUser = await prisma.user.findUnique({
       where: { email: 'peter.gibbons@initech-corp.com' },
@@ -20,44 +20,84 @@ test.describe('Security & Tenant Registration Lifecycle', () => {
         }).catch(() => {});
       }
     }
-  });
-
-  test.afterAll(async () => {
     await prisma.$disconnect();
   });
 
-  test('Settings 2FA Secret & QR Code Generation', async ({ page }) => {
-    await page.context().clearCookies();
-    await page.goto('/login');
-    await page.fill('input[type="email"]', 'ceo@acme.com');
-    await page.fill('input[type="password"]', 'Password@123');
-    await page.click('button[type="submit"]');
-    await page.waitForURL('**/dashboard', { timeout: 15000 });
+  test('Authenticator setup stores an encrypted secret and supports TOTP and backup sign-in', async ({ page }) => {
+    const prisma = openFixtureDatabase();
+    const email = 'ceo@acme.com';
+    const password = 'Password@123';
+    const signIn = async () => {
+      await page.goto('/login');
+      await page.locator('input[type="email"]').fill(email);
+      await page.locator('input[type="password"]').fill(password);
+      await page.locator('button[type="submit"]').click();
+    };
+    const openSecuritySettings = async () => {
+      await page.locator('a[href="/dashboard/settings"]').click();
+      await page.getByRole('button', { name: 'Security & 2FA' }).click();
+    };
+    const enterAuthenticatorCode = async (label: string, secret: string) => {
+      const input = page.getByLabel(label, { exact: true });
+      await expect(input).toBeVisible();
+      await expect.poll(() => authenticator.timeRemaining()).toBeGreaterThan(5);
+      await input.fill(authenticator.generate(secret));
+    };
 
-    await page.click('a[href="/dashboard/settings"]');
-    await page.waitForURL('**/dashboard/settings');
+    try {
+      const original = await prisma.user.findUniqueOrThrow({
+        where: { email },
+        select: { id: true, twoFaEnabled: true, twoFaSecret: true, twoFaBackupCodes: true },
+      });
+      const { id, ...originalSetup } = original;
+      try {
+        await signIn();
+        await page.waitForURL('**/dashboard');
+        await openSecuritySettings();
+        await expect(page.getByText('DISABLED', { exact: true })).toBeVisible();
+        await page.getByRole('button', { name: 'Configure Two-Factor Authentication' }).click();
+        await expect(page.getByRole('img', { name: '2FA QR Code' })).toBeVisible();
+        const secret = (await page.locator('code').textContent())!.trim();
+        await enterAuthenticatorCode('2. Enter 6-digit verification code', secret);
+        await page.getByRole('button', { name: 'Enable', exact: true }).click();
 
-    // Click Security & 2FA tab
-    await page.click('button:has-text("Security & 2FA")');
+        const recovery = page.getByRole('region', { name: 'Save your backup codes' });
+        await expect(recovery.locator('code')).toHaveCount(8);
+        const backup = (await recovery.locator('code').first().textContent())!.trim();
+        const stored = await prisma.user.findUniqueOrThrow({ where: { id } });
+        expect(stored.twoFaSecret?.startsWith('totp:v1:')).toBe(true);
+        expect(stored.twoFaBackupCodes).toHaveLength(8);
+        expect(stored.twoFaBackupCodes.includes(backup)).toBe(false);
+        const repeatSetup = await page.request.post('/api/v1/auth/2fa/generate');
+        expect(repeatSetup.status()).toBe(409);
 
-    // Verify 2FA status badge
-    await expect(page.locator('text=Two-Factor Authentication (TOTP)')).toBeVisible();
-    await expect(page.locator('text=DISABLED')).toBeVisible();
+        await recovery.getByRole('button', { name: 'Done' }).click();
+        await expect(recovery).toBeHidden();
+        await page.locator('button[title="Sign out"]').click();
+        await page.waitForURL('**/login');
+        await signIn();
+        await enterAuthenticatorCode('Verification Code', secret);
+        await page.getByRole('button', { name: 'Verify Code' }).click();
+        await expect(page).toHaveURL(/\/dashboard$/);
 
-    // Click Configure Two-Factor Authentication
-    const configBtn = page.locator('button:has-text("Configure Two-Factor Authentication")');
-    await expect(configBtn).toBeVisible();
-    await configBtn.click();
+        await page.locator('button[title="Sign out"]').click();
+        await page.waitForURL('**/login');
+        await signIn();
+        await page.getByLabel('Verification Code').fill(backup);
+        await page.getByRole('button', { name: 'Verify Code' }).click();
+        await expect(page).toHaveURL(/\/dashboard$/);
+        expect((await prisma.user.findUniqueOrThrow({ where: { id } })).twoFaBackupCodes).toHaveLength(7);
 
-    // Verify QR Code image is generated and rendered
-    const qrImage = page.locator('img[alt="2FA QR Code"]');
-    await expect(qrImage).toBeVisible({ timeout: 10000 });
-
-    // Verify secret code block is rendered
-    await expect(page.locator('code')).toBeVisible();
-
-    // Verify 6-digit input is available
-    await expect(page.locator('input[placeholder="123456"]')).toBeVisible();
+        await openSecuritySettings();
+        await page.getByLabel('Confirm your password to disable 2FA').fill(password);
+        await page.getByRole('button', { name: 'Disable 2FA' }).click();
+        await expect(page.getByText('DISABLED', { exact: true })).toBeVisible();
+      } finally {
+        await prisma.user.update({ where: { id }, data: originalSetup });
+      }
+    } finally {
+      await prisma.$disconnect();
+    }
   });
 
   test('New Tenant Self-Service Registration & Isolated Workspace Login', async ({ page }) => {

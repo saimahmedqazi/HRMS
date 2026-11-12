@@ -101,6 +101,16 @@ describe('EmployeesService', () => {
   });
 
   describe('onboardEmployee', () => {
+    it('rejects roles outside the tenant onboarding role list before writing a user', async () => {
+      await expect(service.onboardEmployee({
+        firstName: 'QA',
+        lastName: 'Employee',
+        email: 'employee@example.test',
+        role: UserRole.SUPER_ADMIN,
+      }, mockAdminUser)).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.user.create).not.toHaveBeenCalled();
+    });
+
     it('should throw ConflictException if email is already taken', async () => {
       mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'existing-user' });
 
@@ -149,6 +159,9 @@ describe('EmployeesService', () => {
 
       expect(result.employeeCode).toBe('EMP-006');
       expect(result.status).toBe(EmployeeStatus.ON_PROBATION);
+      expect(mockPrisma.employeeShift.create).toHaveBeenCalledWith({
+        data: { companyId: mockAdminUser.companyId, employeeId: 'new-emp-id', shiftId: 'default-shift', effectiveFrom: expect.any(Date) },
+      });
       expect(mockPrisma.employee.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -277,6 +290,28 @@ describe('EmployeesService', () => {
   });
 
   describe('updateEmployee', () => {
+    const profileOwner = { id: 'employee-user', email: 'fixture@example.test', role: UserRole.EMPLOYEE, companyId: 'comp-1' };
+
+    it('updates the owner’s personal fields and clears optional values', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-1', userId: profileOwner.id });
+      mockPrisma.employee.update.mockResolvedValueOnce({ id: 'emp-1', phone: '+1 555 0102', dateOfBirth: null });
+
+      await service.updateEmployee('emp-1', { phone: ' +1 555 0102 ', dateOfBirth: null, address: '' }, profileOwner);
+
+      expect(mockPrisma.employee.update).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'emp-1', userId: profileOwner.id, companyId: 'comp-1', deletedAt: null },
+        data: expect.objectContaining({ phone: '+1 555 0102', address: null, dateOfBirth: null }),
+      }));
+    });
+
+    it('rejects the entire self-service update when it includes an HR-managed field', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-1', userId: profileOwner.id });
+
+      await expect(service.updateEmployee('emp-1', { phone: '+1 555 0102', salary: 1 }, profileOwner))
+        .rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.employee.update).not.toHaveBeenCalled();
+    });
+
     it('should prevent employee from selecting themselves as their reporting manager', async () => {
       mockPrisma.employee.findFirst.mockResolvedValueOnce({
         id: 'emp-1',

@@ -11,7 +11,7 @@ export default defineConfig({
   retries: 0,
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000',
     headless: true,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

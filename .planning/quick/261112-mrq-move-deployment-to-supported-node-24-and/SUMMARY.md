@@ -1,0 +1,12 @@
+# Node 24 runtime and production dependencies
+
+| Severity | Affected files | Confirmed issue and fix |
+| --- | --- | --- |
+| High | `package.json`, both Dockerfiles, GitHub Actions workflow | Production and CI used or allowed the end-of-life Node 20 runtime. Inspect the previous CI and image versions to reproduce. The repository now targets Node 24 LTS in CI, Docker, and the application manifests used by Render and Vercel. [Node release schedule](https://nodejs.org/en/about/previous-releases) |
+| High | Backend manifest and workspace lockfile | The installed GeoIP package pinned `ip-address` to an affected range. The production lockfile audit reproduced the finding. GeoIP 2.0.3 uses a current `ip-address` and keeps the existing local lookup API. |
+| Moderate | Backend manifest and workspace lockfile | The production audit also flagged `qs`, `file-type`, and `uuid`. Use fixed transitive versions and remove the unused direct UUID dependency. The new lockfile retains the installed NestJS and Next.js release lines. |
+| Medium | Frontend Dockerfile and `.dockerignore` | The frontend runner tried to copy an absent `public` directory. The build now creates it, runs a workspace clean install with both manifests, and accepts the backend origin as a build argument. The image build context excludes local environment files and generated dependencies. The backend image explicitly installs the OpenSSL runtime required by Prisma. |
+
+The workspace production lockfile audit reports zero high or critical findings and eight moderate entries. All eight trace to the same NestJS SSE advisory. A source review found no SSE routes or EventSource consumers. The standalone frontend reports zero production findings. [NestJS advisory](https://github.com/advisories/GHSA-36xv-jgw5-4q75)
+
+Clean installs, the backend build, both workspace typechecks, and the standalone and workspace frontend production builds passed on Node 24.22.3. Prisma generated its client, applied all four migrations, and seeded both test tenants on disposable PostgreSQL 16. Runtime checks verified the installed package versions, IPv4 and IPv6 GeoIP lookups, Express query parsing, UUID generation, and NestJS PDF validation. The production-mode API passed login, secure cookie checks, profile retrieval, and session refresh. The initial full regression passed 220 Jest tests and 127 Chromium tests. Docker image builds require a machine with a container runtime.

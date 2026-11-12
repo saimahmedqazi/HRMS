@@ -7,7 +7,9 @@ import { MailService } from '../../common/mail/mail.service';
 import { DataScopeService } from '../../common/services/data-scope.service';
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import { createHash } from 'crypto';
 import { UserRole } from '@prisma/client';
+import * as passwordPolicy from '../../common/utils/password-policy';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -19,6 +21,7 @@ describe('AuthService', () => {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
       create: jest.fn(),
     },
     company: {
@@ -49,9 +52,13 @@ describe('AuthService', () => {
       if (key === 'app.security.bcryptRounds') return 10;
       if (key === 'app.security.maxLoginAttempts') return 5;
       if (key === 'app.security.lockoutDurationMinutes') return 15;
+      if (key === 'app.security.totpEncryptionKey') return Buffer.alloc(32, 19).toString('base64');
+      return defaultValue;
+    }),
+    getOrThrow: jest.fn((key: string) => {
       if (key === 'app.jwt.accessSecret') return 'test-access-secret';
       if (key === 'app.jwt.refreshSecret') return 'test-refresh-secret';
-      return defaultValue;
+      throw new Error(`Missing test configuration: ${key}`);
     }),
   };
 
@@ -128,6 +135,24 @@ describe('AuthService', () => {
   });
 
   describe('login', () => {
+    it.each(['pending setup', 'retired shared password'])('rejects %s without issuing session tokens', async (scenario) => {
+      const password = 'FixturePassword123!';
+      const setupPending = scenario === 'pending setup';
+      const passwordHash = setupPending ? passwordPolicy.PASSWORD_SETUP_REQUIRED : await bcrypt.hash(password, 4);
+      const revoked = jest.spyOn(passwordPolicy, 'isRevokedImportPassword').mockReturnValue(!setupPending);
+      mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'imported-user', passwordHash, failedLoginAttempts: 0 });
+      mockPrisma.user.updateMany.mockResolvedValue({ count: 1 });
+
+      try {
+        await expect(service.login({ email: 'imported@example.test', password }, null, 'fixture'))
+          .rejects.toThrow(UnauthorizedException);
+        expect(mockJwtService.sign).not.toHaveBeenCalled();
+        expect(mockJwtService.signAsync).not.toHaveBeenCalled();
+      } finally {
+        revoked.mockRestore();
+      }
+    });
+
     it('should throw UnauthorizedException for unknown email', async () => {
       mockPrisma.user.findUnique.mockResolvedValueOnce(null);
 
@@ -157,12 +182,16 @@ describe('AuthService', () => {
         failedLoginAttempts: 4, // 5th attempt will lock
         lockedUntil: null,
       });
+      mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 1 });
 
       await expect(
         service.login({ email: 'user@test.com', password: 'WrongPassword' }, '127.0.0.1', 'agent'),
       ).rejects.toThrow(/Account locked for 15 minutes/);
 
-      expect(mockPrisma.user.update).toHaveBeenCalledWith(
+      expect(mockPrisma.user.updateMany).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        data: { failedLoginAttempts: { increment: 1 } },
+      }));
+      expect(mockPrisma.user.updateMany).toHaveBeenNthCalledWith(2,
         expect.objectContaining({
           data: expect.objectContaining({
             failedLoginAttempts: 0,
@@ -194,7 +223,7 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('tempToken');
     });
 
-    it('should login successfully with correct credentials', async () => {
+    it('signs in and captures the network IP without using legacy device coordinates', async () => {
       const passwordHash = await bcrypt.hash('CorrectPassword123', 10);
       mockPrisma.user.findUnique.mockResolvedValueOnce({
         id: 'user-ok',
@@ -208,16 +237,34 @@ describe('AuthService', () => {
         company: { name: 'Acme Corp' },
         employee: { firstName: 'Alice', lastName: 'Smith' },
       });
+      mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 });
       mockPrisma.user.update.mockResolvedValueOnce({});
 
       const result = await service.login(
-        { email: 'ok@test.com', password: 'CorrectPassword123' },
-        '127.0.0.1',
+        { email: 'ok@test.com', password: 'CorrectPassword123', latitude: 1.5, longitude: 2.5 },
+        '::ffff:127.0.0.1',
         'agent',
       );
 
       expect(result).toHaveProperty('accessToken');
       expect((result as any).user.email).toBe('ok@test.com');
+      expect(mockPrisma.user.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ lastLoginIp: '127.0.0.1', lastLoginCity: null, lastLoginCountry: null }),
+      }));
+    });
+
+    it('counts a failed second factor toward the same account lockout', async () => {
+      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-2fa', is2faTemp: true });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-2fa', twoFaEnabled: true, twoFaSecret: 'JBSWY3DPEHPK3PXP', twoFaBackupCodes: [],
+      });
+      mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.verify2faLogin('fixture-token', '00000000')).rejects.toThrow('Invalid two-factor code');
+      expect(mockPrisma.user.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: { failedLoginAttempts: { increment: 1 } },
+      }));
+      expect(mockJwtService.signAsync).not.toHaveBeenCalled();
     });
 
     it('should reject login if tenant company is SUSPENDED', async () => {
@@ -238,6 +285,22 @@ describe('AuthService', () => {
     });
   });
 
+  describe('two-factor setup', () => {
+    it('rejects regeneration for a user whose authenticator is enabled', async () => {
+      mockPrisma.user.findUnique.mockResolvedValueOnce({ email: 'enabled@example.test', twoFaEnabled: true });
+
+      await expect(service.generateTotp('user-1')).rejects.toThrow('already enabled');
+      expect(mockPrisma.user.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects repeated enable requests so issued backup codes are preserved', async () => {
+      mockPrisma.user.findUnique.mockResolvedValueOnce({ twoFaEnabled: true, twoFaSecret: 'stored' });
+
+      await expect(service.enableTotp('user-1', '123456')).rejects.toThrow('already enabled');
+      expect(mockPrisma.user.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('logout', () => {
     it('should clear refresh token hash from user record', async () => {
       mockPrisma.user.update.mockResolvedValueOnce({});
@@ -247,6 +310,32 @@ describe('AuthService', () => {
         where: { id: 'user-1' },
         data: { refreshTokenHash: null },
       });
+    });
+  });
+
+  describe('refresh rotation', () => {
+    it('rotates only the currently stored session', async () => {
+      const token = 'current-fixture-session';
+      const fingerprint = `sha256:${createHash('sha256').update(token).digest('hex')}`;
+      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1' });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'fixture@example.test',
+        companyId: 'tenant-1',
+        role: UserRole.EMPLOYEE,
+        refreshTokenHash: fingerprint,
+      });
+      mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await expect(service.refreshToken(token)).resolves.toHaveProperty('refreshToken');
+      expect(mockPrisma.user.updateMany).toHaveBeenCalledWith({
+        where: { id: 'user-1', refreshTokenHash: fingerprint, deletedAt: null },
+        data: { refreshTokenHash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) },
+      });
+      expect(mockJwtService.signAsync).toHaveBeenCalledWith(
+        { sub: 'user-1', jti: expect.any(String) },
+        expect.objectContaining({ secret: 'test-refresh-secret' }),
+      );
     });
   });
 });

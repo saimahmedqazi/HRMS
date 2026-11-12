@@ -14,6 +14,7 @@ describe('AnalyticsService', () => {
     prisma = {
       company: {
         count: jest.fn().mockResolvedValue(10),
+        findUnique: jest.fn().mockResolvedValue({ timezone: 'UTC' }),
       },
       user: {
         count: jest.fn().mockResolvedValue(150),
@@ -26,9 +27,12 @@ describe('AnalyticsService', () => {
       subscription: {
         count: jest.fn().mockResolvedValue(5),
       },
+      employeeShift: { findFirst: jest.fn().mockResolvedValue(null) },
+      shift: { findFirst: jest.fn().mockResolvedValue(null) },
       attendanceRecord: {
         findFirst: jest.fn().mockResolvedValue({
           status: AttendanceStatus.PRESENT,
+          date: new Date(),
           checkInTime: new Date(),
         }),
         findMany: jest.fn().mockResolvedValue([]),
@@ -85,6 +89,39 @@ describe('AnalyticsService', () => {
   });
 
   describe('getDashboardOverview', () => {
+    it('counts Team Lead attendance on the company date across a UTC day boundary', async () => {
+      jest.useFakeTimers({ now: new Date('2026-11-11T20:00:00Z') });
+      try {
+        prisma.company.findUnique.mockResolvedValue({ timezone: 'Asia/Karachi' });
+        prisma.employee.findFirst.mockResolvedValue({ id: 'lead', teamId: 'team-1' });
+        prisma.employee.findMany.mockResolvedValue([{ id: 'lead' }, { id: 'member' }, { id: 'remote' }]);
+        prisma.attendanceRecord.findMany.mockResolvedValue([
+          { status: AttendanceStatus.PRESENT },
+          { status: AttendanceStatus.PRESENT_REMOTE },
+          { status: AttendanceStatus.ABSENT_PENDING_REVIEW },
+        ]);
+
+        const overview = await service.getDashboardOverview(mockCompanyId, {
+          id: 'lead-user',
+          role: UserRole.TEAM_LEAD,
+        });
+        expect(overview).toMatchObject({
+          attendanceDate: '2026-11-12',
+          presentToday: 2,
+          todaySummary: { present: 1, remote: 1, absent: 0, exceptions: 1 },
+        });
+        expect(prisma.attendanceRecord.findMany).toHaveBeenCalledWith({
+          where: {
+            companyId: mockCompanyId,
+            employeeId: { in: ['lead', 'member', 'remote'] },
+            date: new Date('2026-11-12T00:00:00Z'),
+          },
+        });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('should return personal operational widgets for EMPLOYEE role', async () => {
       const overview = (await service.getDashboardOverview(mockCompanyId, {
         id: mockUserId,

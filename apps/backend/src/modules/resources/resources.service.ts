@@ -2,22 +2,30 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
 } from '@nestjs/common';
 import {
   ApprovalStatus,
   NotificationType,
+  Prisma,
+  ResourceRequest,
   ResourceRequestStatus,
   UserRole,
 } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { DataScopeService } from '@common/services/data-scope.service';
+import { rethrowMissingRecordAsConflict } from '@common/utils/prisma-conflict';
 import { CreateResourceRequestDto } from './dto/create-resource-request.dto';
 import { ApproveResourceRequestDto } from './dto/approve-resource-request.dto';
 import { FulfillResourceRequestDto } from './dto/fulfill-resource-request.dto';
 
 @Injectable()
 export class ResourcesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly dataScopeService: DataScopeService,
+  ) {}
 
   /**
    * Submit a new equipment/software resource request.
@@ -28,8 +36,8 @@ export class ResourcesService {
     dto: CreateResourceRequestDto,
   ) {
     const employee = await this.prisma.employee.findFirst({
-      where: { companyId, userId },
-      include: { department: true },
+      where: { companyId, userId, deletedAt: null },
+      include: { department: { select: { companyId: true, managerId: true } } },
     });
 
     if (!employee) {
@@ -38,9 +46,10 @@ export class ResourcesService {
 
     // Step 1 approver: department manager if present, else null
     let step1ApproverId: string | null = null;
-    if (employee.department?.managerId) {
+    if (employee.department?.companyId === companyId && employee.department.managerId) {
       const mgr = await this.prisma.employee.findUnique({
-        where: { id: employee.department.managerId },
+        where: { id: employee.department.managerId, companyId, deletedAt: null },
+        select: { userId: true },
       });
       step1ApproverId = mgr?.userId || null;
     }
@@ -90,25 +99,33 @@ export class ResourcesService {
     user: { id: string; role: UserRole },
     status?: ResourceRequestStatus,
   ) {
-    const where: any = companyId ? { companyId } : {};
-    if (status) {
-      where.status = status;
+    // Platform roles without a company context should not see any requests
+    if (!companyId) {
+      return [];
     }
-
-    if (user.role === UserRole.EMPLOYEE) {
-      const emp = await this.prisma.employee.findFirst({
-        where: { companyId, userId: user.id },
-      });
-      where.requestedById = emp?.id || 'none';
+    const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
+    const where: Prisma.ResourceRequestWhereInput = {
+      companyId,
+      status,
+      requestedBy: scope,
+    };
+    if (user.role === UserRole.DEPARTMENT_MANAGER || user.role === UserRole.TEAM_LEAD) {
+      where.requestedBy = { companyId, deletedAt: null };
+      where.OR = [{ requestedBy: scope }, { step1ApproverId: user.id }];
     }
 
     return this.prisma.resourceRequest.findMany({
       where,
       include: {
         requestedBy: {
-          include: {
-            department: true,
-            team: true,
+          select: {
+            id: true,
+            userId: true,
+            employeeCode: true,
+            firstName: true,
+            lastName: true,
+            department: { select: { id: true, name: true } },
+            team: { select: { id: true, name: true } },
           },
         },
       },
@@ -126,89 +143,61 @@ export class ResourcesService {
     userRole: UserRole,
     dto: ApproveResourceRequestDto,
   ) {
+    if (!companyId) throw new ForbiddenException('Company context required.');
     const request = await this.prisma.resourceRequest.findFirst({
-      where: companyId ? { id, companyId } : { id },
-      include: { requestedBy: { include: { user: true } } },
+      where: { id, companyId },
+      include: { requestedBy: { select: { userId: true, teamId: true, departmentId: true } } },
     });
 
     if (!request) {
       throw new NotFoundException('Resource request not found.');
     }
 
-    if (request.status !== ResourceRequestStatus.PENDING) {
-      throw new BadRequestException('Resource request is not pending approval.');
-    }
-
-    const isAuthorized =
+    const isOperationsRole =
       userRole === UserRole.SUPER_ADMIN ||
       userRole === UserRole.OPERATION_MANAGER ||
       userRole === UserRole.COMPANY_ADMIN ||
-      userRole === UserRole.HR_MANAGER ||
-      userRole === UserRole.DEPARTMENT_MANAGER ||
-      userRole === UserRole.TEAM_LEAD ||
-      request.step1ApproverId === userId;
+      userRole === UserRole.HR_MANAGER;
 
-    if (!isAuthorized) {
-      throw new ForbiddenException('Not authorized to approve this resource request.');
+    const canAct =
+      request.status === ResourceRequestStatus.PENDING ||
+      (request.status === ResourceRequestStatus.STEP_1_APPROVED &&
+        dto.decision === 'REJECT' &&
+        isOperationsRole);
+    if (!isOperationsRole) {
+      if (userRole !== UserRole.DEPARTMENT_MANAGER && userRole !== UserRole.TEAM_LEAD) {
+        throw new ForbiddenException('Not authorized to approve this resource request.');
+      }
+      if (request.requestedBy.userId === userId) {
+        throw new ForbiddenException('You cannot approve your own resource request.');
+      }
+      if (request.step1ApproverId !== userId) {
+        const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, {
+          id: userId,
+          role: userRole,
+        });
+        const inScope = userRole === UserRole.TEAM_LEAD
+          ? scope.teamId && scope.teamId === request.requestedBy.teamId
+          : scope.departmentId && scope.departmentId === request.requestedBy.departmentId;
+        if (!inScope) throw new ForbiddenException('Not authorized to approve this resource request.');
+      }
     }
 
-    if (
-      (userRole === UserRole.DEPARTMENT_MANAGER || userRole === UserRole.TEAM_LEAD) &&
-      request.requestedBy?.userId &&
-      request.requestedBy.userId === userId
-    ) {
-      throw new ForbiddenException('You cannot approve your own resource request.');
-    }
+    if (!canAct) throw new ConflictException('Resource request cannot be actioned at this stage.');
 
-    const targetCompanyId = companyId || request.companyId;
-
-    if (dto.decision === 'REJECT') {
-      const rejected = await this.prisma.resourceRequest.update({
-        where: { id },
-        data: {
-          status: ResourceRequestStatus.REJECTED,
-          step1Status: ApprovalStatus.REJECTED,
-          step1ApprovedAt: new Date(),
-          step1Notes: dto.notes,
-        },
-      });
-
-      await this.prisma.notification.create({
-        data: {
-          companyId: targetCompanyId,
-          userId: request.requestedBy.userId,
-          type: NotificationType.GENERAL,
-          title: 'Resource Request Rejected',
-          body: `Your request for ${request.resourceType} was rejected: ${dto.notes || 'No reason provided.'}`,
-          data: { resourceRequestId: id },
-        },
-      });
-
-      return rejected;
-    }
-
-    const approved = await this.prisma.resourceRequest.update({
-      where: { id },
-      data: {
-        status: ResourceRequestStatus.STEP_1_APPROVED,
-        step1Status: ApprovalStatus.APPROVED,
-        step1ApprovedAt: new Date(),
-        step1Notes: dto.notes,
-      },
+    const rejected = dto.decision === 'REJECT';
+    return this.transitionRequest(request, {
+      status: rejected ? ResourceRequestStatus.REJECTED : ResourceRequestStatus.STEP_1_APPROVED,
+      step1Status: rejected ? ApprovalStatus.REJECTED : ApprovalStatus.APPROVED,
+      step1ApprovedAt: new Date(),
+      step1Notes: dto.notes,
+    }, rejected ? {
+      title: 'Resource Request Rejected',
+      body: `Your request for ${request.resourceType} was rejected: ${dto.notes || 'No reason provided.'}`,
+    } : {
+      title: 'Resource Request Approved (Ready for Fulfillment)',
+      body: `Your request for ${request.resourceType} has been approved and queued for IT/Operations fulfillment.`,
     });
-
-    await this.prisma.notification.create({
-      data: {
-        companyId: targetCompanyId,
-        userId: request.requestedBy.userId,
-        type: NotificationType.GENERAL,
-        title: 'Resource Request Approved (Ready for Fulfillment)',
-        body: `Your request for ${request.resourceType} has been approved and queued for IT/Operations fulfillment.`,
-        data: { resourceRequestId: id },
-      },
-    });
-
-    return approved;
   }
 
   /**
@@ -231,9 +220,10 @@ export class ResourcesService {
       throw new ForbiddenException('Only Operations, HR, or Company Admins can fulfill resource requests.');
     }
 
+    if (!companyId) throw new ForbiddenException('Company context required.');
     const request = await this.prisma.resourceRequest.findFirst({
-      where: companyId ? { id, companyId } : { id },
-      include: { requestedBy: { include: { user: true } } },
+      where: { id, companyId },
+      include: { requestedBy: { select: { userId: true } } },
     });
 
     if (!request) {
@@ -241,32 +231,47 @@ export class ResourcesService {
     }
 
     if (request.status !== ResourceRequestStatus.STEP_1_APPROVED) {
-      throw new BadRequestException('Request must be approved before fulfillment.');
+      if (request.status === ResourceRequestStatus.PENDING) {
+        throw new BadRequestException('Request must be approved before fulfillment.');
+      }
+      throw new ConflictException('Resource request cannot be fulfilled at this stage.');
     }
 
-    const targetCompanyId = companyId || request.companyId;
-
-    const fulfilled = await this.prisma.resourceRequest.update({
-      where: { id },
-      data: {
-        status: ResourceRequestStatus.FULFILLED,
-        step3FulfilledAt: new Date(),
-        step3FulfilledBy: userId,
-        step3Notes: dto.notes,
-      },
+    return this.transitionRequest(request, {
+      status: ResourceRequestStatus.FULFILLED,
+      step3FulfilledAt: new Date(),
+      step3FulfilledBy: userId,
+      step3Notes: dto.notes,
+    }, {
+      title: 'Resource Request Fulfilled',
+      body: `Your requested resource (${request.resourceType}) has been fulfilled: ${dto.notes || 'Ready for pickup/use.'}`,
     });
+  }
 
-    await this.prisma.notification.create({
-      data: {
-        companyId: targetCompanyId,
-        userId: request.requestedBy.userId,
-        type: NotificationType.GENERAL,
-        title: 'Resource Request Fulfilled',
-        body: `Your requested resource (${request.resourceType}) has been fulfilled: ${dto.notes || 'Ready for pickup/use.'}`,
-        data: { resourceRequestId: id },
-      },
+  private async transitionRequest(
+    request: Pick<ResourceRequest, 'id' | 'companyId' | 'status'> & { requestedBy: { userId: string } },
+    data: Prisma.ResourceRequestUncheckedUpdateInput,
+    notification: { title: string; body: string },
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.resourceRequest.update({
+        where: { id: request.id, companyId: request.companyId, status: request.status },
+        data,
+      }).catch((error: unknown) => rethrowMissingRecordAsConflict(
+        error, 'The resource request changed. Refresh it before trying again.',
+      ));
+
+      await tx.notification.create({
+        data: {
+          companyId: request.companyId,
+          userId: request.requestedBy.userId,
+          type: NotificationType.GENERAL,
+          ...notification,
+          data: { resourceRequestId: request.id },
+        },
+      });
+
+      return updated;
     });
-
-    return fulfilled;
   }
 }

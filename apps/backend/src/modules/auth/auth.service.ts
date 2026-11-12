@@ -1,9 +1,11 @@
 import {
   Injectable,
   ConflictException,
+  ForbiddenException,
   UnauthorizedException,
   NotFoundException,
   BadRequestException,
+  ServiceUnavailableException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -12,13 +14,16 @@ import * as bcrypt from 'bcrypt';
 import { authenticator } from 'otplib';
 import * as qrcode from 'qrcode';
 import * as crypto from 'crypto';
-import * as geoip from 'geoip-lite';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { MailService } from '../../common/mail/mail.service';
 import { DataScopeService } from '../../common/services/data-scope.service';
+import { getLoginNetworkLocation } from '../../common/utils/login-network-location';
+import { isRevokedImportPassword, PASSWORD_SETUP_REQUIRED } from '../../common/utils/password-policy';
 import { RegisterCompanyDto } from './dto/register-company.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { isInactiveAccount } from './account-state';
+import { decryptTotpSecret, encryptTotpSecret, isLegacyTotpSecret, parseTotpEncryptionKey } from './totp-secret';
 import { CompanyStatus, UserRole, DataScope, LeaveType, EmployeeStatus } from '@prisma/client';
 
 export interface TokenResponse {
@@ -38,6 +43,7 @@ export interface TokenResponse {
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly totpEncryptionKey: Buffer | null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -45,9 +51,15 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly mailService: MailService,
     private readonly dataScopeService: DataScopeService,
-  ) {}
+  ) {
+    const key = configService.get<string>('app.security.totpEncryptionKey');
+    this.totpEncryptionKey = key || configService.get<string>('app.nodeEnv') === 'production'
+      ? parseTotpEncryptionKey(key)
+      : null;
+  }
 
   async registerCompany(dto: RegisterCompanyDto): Promise<TokenResponse> {
+    if (isRevokedImportPassword(dto.adminPassword)) throw new BadRequestException('Choose a different password.');
     const existing = await this.prisma.user.findUnique({
       where: { email: dto.adminEmail.toLowerCase() },
     });
@@ -141,7 +153,7 @@ export class AuthService {
 
   async login(
     dto: LoginDto,
-    ip: string,
+    ip: string | null,
     userAgent: string,
   ): Promise<
     | TokenResponse
@@ -159,6 +171,9 @@ export class AuthService {
     if (user.company && user.company.status === CompanyStatus.SUSPENDED) {
       throw new UnauthorizedException('Your organization account is currently suspended.');
     }
+    if (isInactiveAccount(user)) {
+      throw new UnauthorizedException('User account is inactive.');
+    }
 
     // Check account lockout
     if (user.lockedUntil && user.lockedUntil > new Date()) {
@@ -169,40 +184,23 @@ export class AuthService {
     }
 
     // Verify password
-    const isPasswordValid = await bcrypt.compare(dto.password, user.passwordHash);
+    const isPasswordValid = user.passwordHash !== PASSWORD_SETUP_REQUIRED &&
+      !isRevokedImportPassword(dto.password) && await bcrypt.compare(dto.password, user.passwordHash);
     if (!isPasswordValid) {
-      const maxAttempts = this.configService.get<number>('app.security.maxLoginAttempts', 5);
-      const lockoutMinutes = this.configService.get<number>('app.security.lockoutDurationMinutes', 15);
-      const newAttempts = user.failedLoginAttempts + 1;
-
-      if (newAttempts >= maxAttempts) {
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: {
-            failedLoginAttempts: 0,
-            lockedUntil: new Date(Date.now() + lockoutMinutes * 60000),
-          },
-        });
-        throw new UnauthorizedException(
-          `Account locked for ${lockoutMinutes} minutes due to ${maxAttempts} consecutive failed login attempts.`,
-        );
-      } else {
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: { failedLoginAttempts: newAttempts },
-        });
-        throw new UnauthorizedException('Invalid credentials');
-      }
+      return this.recordFailedAuthentication(user.id, 'Invalid credentials');
     }
 
     // Check 2FA
-    if (user.twoFaEnabled && user.twoFaSecret) {
+    if (user.twoFaEnabled) {
+      if (!user.twoFaSecret) {
+        throw new UnauthorizedException('Two-factor authentication is unavailable for this account.');
+      }
       if (!dto.twoFactorCode) {
         // Issue short-lived temp token (5 min) for 2FA verification step
         const tempToken = this.jwtService.sign(
           { sub: user.id, is2faTemp: true },
           {
-            secret: this.configService.get<string>('app.jwt.accessSecret'),
+            secret: this.configService.getOrThrow<string>('app.jwt.accessSecret'),
             expiresIn: '5m',
           },
         );
@@ -211,53 +209,35 @@ export class AuthService {
 
       const isTotpValid = authenticator.verify({
         token: dto.twoFactorCode,
-        secret: user.twoFaSecret,
+        secret: this.readTotpSecret(user.id, user.twoFaSecret),
       });
 
       if (!isTotpValid) {
         // Check backup codes
         const backupValid = await this.verifyBackupCode(user.id, dto.twoFactorCode, user.twoFaBackupCodes);
         if (!backupValid) {
-          throw new UnauthorizedException('Invalid two-factor code');
+          return this.recordFailedAuthentication(user.id, 'Invalid two-factor code');
         }
       }
     }
 
-    // Reset failed login attempts and capture IP + Lat/Long location
-    const cleanIp = (ip || '127.0.0.1').replace(/^::ffff:/, '');
-    const geo = geoip.lookup(cleanIp);
-    const lat =
-      typeof dto.latitude === 'number'
-        ? dto.latitude
-        : geo?.ll?.[0] !== undefined
-          ? geo.ll[0]
-          : 24.8607;
-    const lng =
-      typeof dto.longitude === 'number'
-        ? dto.longitude
-        : geo?.ll?.[1] !== undefined
-          ? geo.ll[1]
-          : 67.0011;
-    const resolvedCity =
-      geo?.city ||
-      (cleanIp === '127.0.0.1' || cleanIp === '::1'
-        ? 'Local Office Network'
-        : 'Verified Network');
-    const resolvedCountryCode = geo?.country || 'PK';
-    const countryWithCoords = `${resolvedCountryCode} | ${Number(lat).toFixed(4)}, ${Number(lng).toFixed(4)}`;
+    const { lastLoginIp, lastLoginCity, lastLoginCountry } = getLoginNetworkLocation(ip);
 
-    await this.prisma.user.update({
-      where: { id: user.id },
+    const authenticated = await this.prisma.user.updateMany({
+      where: { id: user.id, deletedAt: null, OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] },
       data: {
         failedLoginAttempts: 0,
         lockedUntil: null,
         lastLoginAt: new Date(),
-        lastLoginIp: cleanIp,
+        lastLoginIp,
         lastLoginUserAgent: userAgent.slice(0, 255),
-        lastLoginCity: resolvedCity,
-        lastLoginCountry: countryWithCoords,
+        lastLoginCity,
+        lastLoginCountry,
       },
     });
+    if (authenticated.count === 0) {
+      throw new UnauthorizedException('Account is temporarily unavailable for sign-in.');
+    }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role, user.companyId);
     await this.storeRefreshTokenHash(user.id, tokens.refreshToken);
@@ -280,13 +260,13 @@ export class AuthService {
   async verify2faLogin(
     tempToken: string,
     code: string,
-    ip = '127.0.0.1',
+    ip: string | null = null,
     userAgent = 'Unknown',
   ): Promise<TokenResponse> {
     let payload: { sub: string; is2faTemp?: boolean };
     try {
       payload = this.jwtService.verify(tempToken, {
-        secret: this.configService.get<string>('app.jwt.accessSecret'),
+        secret: this.configService.getOrThrow<string>('app.jwt.accessSecret'),
       });
     } catch {
       throw new UnauthorizedException('Expired or invalid two-factor verification session');
@@ -301,46 +281,40 @@ export class AuthService {
       include: { company: true, employee: true },
     });
 
-    if (!user || user.deletedAt || !user.twoFaSecret) {
+    if (!user || isInactiveAccount(user) || !user.twoFaEnabled || !user.twoFaSecret ||
+        (user.lockedUntil && user.lockedUntil > new Date())) {
       throw new UnauthorizedException('User not found or 2FA not enabled');
     }
 
     const isTotpValid = authenticator.verify({
       token: code,
-      secret: user.twoFaSecret,
+      secret: this.readTotpSecret(user.id, user.twoFaSecret),
     });
 
     if (!isTotpValid) {
       const backupValid = await this.verifyBackupCode(user.id, code, user.twoFaBackupCodes);
       if (!backupValid) {
-        throw new UnauthorizedException('Invalid two-factor code');
+        return this.recordFailedAuthentication(user.id, 'Invalid two-factor code');
       }
     }
 
-    const cleanIp = (ip || '127.0.0.1').replace(/^::ffff:/, '');
-    const geo = geoip.lookup(cleanIp);
-    const lat = geo?.ll?.[0] ?? 24.8607;
-    const lng = geo?.ll?.[1] ?? 67.0011;
-    const resolvedCity =
-      geo?.city ||
-      (cleanIp === '127.0.0.1' || cleanIp === '::1'
-        ? 'Local Office Network'
-        : 'Verified Network');
-    const resolvedCountryCode = geo?.country || 'PK';
-    const countryWithCoords = `${resolvedCountryCode} | ${Number(lat).toFixed(4)}, ${Number(lng).toFixed(4)}`;
+    const { lastLoginIp, lastLoginCity, lastLoginCountry } = getLoginNetworkLocation(ip);
 
-    await this.prisma.user.update({
-      where: { id: user.id },
+    const authenticated = await this.prisma.user.updateMany({
+      where: { id: user.id, deletedAt: null, OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] },
       data: {
         failedLoginAttempts: 0,
         lockedUntil: null,
         lastLoginAt: new Date(),
-        lastLoginIp: cleanIp,
+        lastLoginIp,
         lastLoginUserAgent: userAgent.slice(0, 255),
-        lastLoginCity: resolvedCity,
-        lastLoginCountry: countryWithCoords,
+        lastLoginCity,
+        lastLoginCountry,
       },
     });
+    if (authenticated.count === 0) {
+      throw new UnauthorizedException('Account is temporarily unavailable for sign-in.');
+    }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role, user.companyId);
     await this.storeRefreshTokenHash(user.id, tokens.refreshToken);
@@ -364,7 +338,7 @@ export class AuthService {
     let payload: { sub: string };
     try {
       payload = this.jwtService.verify(oldRefreshToken, {
-        secret: this.configService.get<string>('app.jwt.refreshSecret'),
+        secret: this.configService.getOrThrow<string>('app.jwt.refreshSecret'),
       });
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');
@@ -372,24 +346,22 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
+      include: { company: { select: { status: true } }, employee: { select: { status: true, deletedAt: true } } },
     });
 
-    if (!user || user.deletedAt || !user.refreshTokenHash || (user.lockedUntil && user.lockedUntil > new Date())) {
+    if (!user || isInactiveAccount(user) || user.refreshTokenHash !== this.hashRefreshToken(oldRefreshToken) ||
+        (user.lockedUntil && user.lockedUntil > new Date())) {
       throw new UnauthorizedException('Session expired');
     }
 
-    const isTokenMatch = await bcrypt.compare(oldRefreshToken, user.refreshTokenHash);
-    if (!isTokenMatch) {
-      // Invalidate current refresh token to protect account from replay attack
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: { refreshTokenHash: null },
-      });
-      throw new UnauthorizedException('Token replay detected. Please login again.');
-    }
-
     const tokens = await this.generateTokens(user.id, user.email, user.role, user.companyId);
-    await this.storeRefreshTokenHash(user.id, tokens.refreshToken);
+    const rotated = await this.prisma.user.updateMany({
+      where: { id: user.id, refreshTokenHash: user.refreshTokenHash, deletedAt: null },
+      data: { refreshTokenHash: this.hashRefreshToken(tokens.refreshToken) },
+    });
+    if (rotated.count !== 1) {
+      throw new UnauthorizedException('Session expired');
+    }
 
     return tokens;
   }
@@ -406,7 +378,7 @@ export class AuthService {
       where: { email: email.toLowerCase() },
     });
 
-    if (!user) {
+    if (!user || user.deletedAt) {
       // Prevent email enumeration
       return;
     }
@@ -426,10 +398,12 @@ export class AuthService {
   }
 
   async resetPassword(dto: ResetPasswordDto): Promise<void> {
+    if (isRevokedImportPassword(dto.newPassword)) throw new BadRequestException('Choose a different password.');
     const user = await this.prisma.user.findFirst({
       where: {
         passwordResetToken: dto.token,
         passwordResetExpiry: { gt: new Date() },
+        deletedAt: null,
       },
     });
 
@@ -440,8 +414,13 @@ export class AuthService {
     const saltRounds = this.configService.get<number>('app.security.bcryptRounds', 12);
     const passwordHash = await bcrypt.hash(dto.newPassword, saltRounds);
 
-    await this.prisma.user.update({
-      where: { id: user.id },
+    const reset = await this.prisma.user.updateMany({
+      where: {
+        id: user.id,
+        passwordResetToken: dto.token,
+        passwordResetExpiry: { gt: new Date() },
+        deletedAt: null,
+      },
       data: {
         passwordHash,
         passwordResetToken: null,
@@ -451,9 +430,15 @@ export class AuthService {
         lockedUntil: null,
       },
     });
+    if (reset.count !== 1) {
+      throw new BadRequestException('Password reset token is invalid or has expired');
+    }
   }
 
   async verifyEmail(token: string): Promise<void> {
+    if (typeof token !== 'string' || !token) {
+      throw new BadRequestException('Invalid verification token');
+    }
     const user = await this.prisma.user.findFirst({
       where: {
         emailVerifyToken: token,
@@ -476,32 +461,45 @@ export class AuthService {
   }
 
   async generateTotp(userId: string): Promise<{ secret: string; qrCodeDataUrl: string }> {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId }, select: { email: true, twoFaEnabled: true },
+    });
     if (!user) throw new NotFoundException('User not found');
+    if (user.twoFaEnabled) {
+      throw new ConflictException('Two-factor authentication is already enabled.');
+    }
 
     const secret = authenticator.generateSecret();
+    const encryptedSecret = encryptTotpSecret(secret, userId, this.getTotpEncryptionKey());
     const appName = 'ZenHR';
     const otpAuthUrl = authenticator.keyuri(user.email, appName, secret);
     const qrCodeDataUrl = await qrcode.toDataURL(otpAuthUrl);
 
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { twoFaSecret: secret },
+    const pending = await this.prisma.user.updateMany({
+      where: { id: userId, twoFaEnabled: false, deletedAt: null },
+      data: { twoFaSecret: encryptedSecret },
     });
+    if (pending.count === 0) {
+      throw new ConflictException('Two-factor authentication setup changed. Refresh Settings and try again.');
+    }
 
     return { secret, qrCodeDataUrl };
   }
 
   async enableTotp(userId: string, code: string): Promise<{ backupCodes: string[] }> {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId }, select: { twoFaEnabled: true, twoFaSecret: true },
+    });
+    if (user?.twoFaEnabled) {
+      throw new ConflictException('Two-factor authentication is already enabled.');
+    }
     if (!user || !user.twoFaSecret) {
       throw new BadRequestException('Please generate 2FA secret first');
     }
 
-    const isValid = authenticator.verify({
-      token: code,
-      secret: user.twoFaSecret,
-    });
+    const key = this.getTotpEncryptionKey();
+    const secret = this.readTotpSecret(userId, user.twoFaSecret);
+    const isValid = authenticator.verify({ token: code, secret });
 
     if (!isValid) {
       throw new BadRequestException('Invalid verification code');
@@ -516,34 +514,56 @@ export class AuthService {
       hashedCodes.push(await bcrypt.hash(plainCode, 10));
     }
 
-    await this.prisma.user.update({
-      where: { id: userId },
+    const enabled = await this.prisma.user.updateMany({
+      where: { id: userId, twoFaEnabled: false, twoFaSecret: user.twoFaSecret, deletedAt: null },
       data: {
         twoFaEnabled: true,
+        twoFaSecret: isLegacyTotpSecret(user.twoFaSecret) ? encryptTotpSecret(secret, userId, key) : user.twoFaSecret,
         twoFaBackupCodes: hashedCodes,
       },
     });
+    if (enabled.count === 0) {
+      throw new ConflictException('Two-factor authentication setup changed. Refresh Settings and try again.');
+    }
 
     return { backupCodes: plainCodes };
   }
 
   async disableTotp(userId: string, passwordConfirm: string): Promise<void> {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId }, select: { passwordHash: true, twoFaEnabled: true, twoFaSecret: true },
+    });
     if (!user) throw new NotFoundException('User not found');
+    if (!user.twoFaEnabled) throw new ConflictException('Two-factor authentication is already disabled.');
 
-    const isMatch = await bcrypt.compare(passwordConfirm, user.passwordHash);
+    const isMatch = user.passwordHash !== PASSWORD_SETUP_REQUIRED &&
+      !isRevokedImportPassword(passwordConfirm) && await bcrypt.compare(passwordConfirm, user.passwordHash);
     if (!isMatch) {
       throw new UnauthorizedException('Incorrect password');
     }
 
-    await this.prisma.user.update({
-      where: { id: userId },
+    const disabled = await this.prisma.user.updateMany({
+      where: { id: userId, twoFaEnabled: true, twoFaSecret: user.twoFaSecret, passwordHash: user.passwordHash, deletedAt: null },
       data: {
         twoFaEnabled: false,
         twoFaSecret: null,
         twoFaBackupCodes: [],
       },
     });
+    if (disabled.count === 0) {
+      throw new ConflictException('Two-factor authentication setup changed. Refresh Settings and try again.');
+    }
+  }
+
+  async updateLocationConsent(userId: string, companyId: string | null | undefined, locationConsent: boolean) {
+    if (!companyId) throw new ForbiddenException('Attendance preferences require an employee account');
+
+    const result = await this.prisma.employee.updateMany({
+      where: { userId, companyId, deletedAt: null },
+      data: { locationConsent },
+    });
+    if (result.count === 0) throw new NotFoundException('Employee profile not found');
+    return { locationConsent };
   }
 
   async getMe(userId: string, supportModeCompanyId?: string | null) {
@@ -558,8 +578,6 @@ export class AuthService {
         lastLoginAt: true,
         lastLoginIp: true,
         lastLoginUserAgent: true,
-        lastLoginCity: true,
-        lastLoginCountry: true,
         companyId: true,
         company: {
           select: {
@@ -579,6 +597,7 @@ export class AuthService {
             profilePictureUrl: true,
             hireDate: true,
             status: true,
+            locationConsent: true,
             department: { select: { id: true, name: true } },
             designation: { select: { id: true, name: true } },
             team: { select: { id: true, name: true } },
@@ -617,42 +636,12 @@ export class AuthService {
         : user.role === UserRole.OPERATION_MANAGER
         ? 'Manager'
         : '');
-    // Parse coordinates from lastLoginCountry or geoip lookup
-    const cleanIp = (user.lastLoginIp || '127.0.0.1').replace(/^::ffff:/, '');
-    const geo = geoip.lookup(cleanIp);
-    let countryName = user.lastLoginCountry || geo?.country || 'PK';
-    let lastLoginLatitude: number | null = geo?.ll?.[0] ?? 24.8607;
-    let lastLoginLongitude: number | null = geo?.ll?.[1] ?? 67.0011;
-
-    if (user.lastLoginCountry && user.lastLoginCountry.includes('|')) {
-      const [cCode, coordsPart] = user.lastLoginCountry.split('|').map((s) => s.trim());
-      countryName = cCode || 'PK';
-      const [latStr, lngStr] = (coordsPart || '').split(',').map((s) => s.trim());
-      const parsedLat = parseFloat(latStr);
-      const parsedLng = parseFloat(lngStr);
-      if (!Number.isNaN(parsedLat) && !Number.isNaN(parsedLng)) {
-        lastLoginLatitude = parsedLat;
-        lastLoginLongitude = parsedLng;
-      }
-    }
-
-    const cityDisplay =
-      user.lastLoginCity ||
-      geo?.city ||
-      (cleanIp === '127.0.0.1' || cleanIp === '::1' ? 'Local Office Network' : 'Verified Network');
-    const lastLoginLocation = `${cityDisplay}, ${countryName}`;
-
     return {
       ...user,
       firstName,
       lastName,
       avatarUrl: user.employee?.profilePictureUrl || null,
-      lastLoginIp: cleanIp,
-      lastLoginCity: cityDisplay,
-      lastLoginCountry: countryName,
-      lastLoginLatitude,
-      lastLoginLongitude,
-      lastLoginLocation,
+      ...getLoginNetworkLocation(user.lastLoginIp),
       employee: user.employee
         ? {
             ...user.employee,
@@ -682,8 +671,8 @@ export class AuthService {
     companyId: string | null,
     supportModeCompanyId?: string,
   ): Promise<{ accessToken: string; refreshToken: string }> {
-    const accessSecret = this.configService.get<string>('app.jwt.accessSecret');
-    const refreshSecret = this.configService.get<string>('app.jwt.refreshSecret');
+    const accessSecret = this.configService.getOrThrow<string>('app.jwt.accessSecret');
+    const refreshSecret = this.configService.getOrThrow<string>('app.jwt.refreshSecret');
     const accessExpiresIn = this.configService.get<string>('app.jwt.accessExpiresIn', '15m');
     const refreshExpiresIn = this.configService.get<string>('app.jwt.refreshExpiresIn', '7d');
 
@@ -701,7 +690,7 @@ export class AuthService {
         expiresIn: accessExpiresIn,
       }),
       this.jwtService.signAsync(
-        { sub: userId },
+        { sub: userId, jti: crypto.randomUUID() },
         {
           secret: refreshSecret,
           expiresIn: refreshExpiresIn,
@@ -713,25 +702,74 @@ export class AuthService {
   }
 
   private async storeRefreshTokenHash(userId: string, refreshToken: string): Promise<void> {
-    const hash = await bcrypt.hash(refreshToken, 10);
     await this.prisma.user.update({
       where: { id: userId },
-      data: { refreshTokenHash: hash },
+      data: { refreshTokenHash: this.hashRefreshToken(refreshToken) },
     });
   }
 
+  private hashRefreshToken(token: string): string {
+    return `sha256:${crypto.createHash('sha256').update(token).digest('hex')}`;
+  }
+
+  private getTotpEncryptionKey(): Buffer {
+    if (!this.totpEncryptionKey) {
+      throw new ServiceUnavailableException('Two-factor authentication storage is not configured.');
+    }
+    return this.totpEncryptionKey;
+  }
+
+  private readTotpSecret(userId: string, stored: string): string {
+    if (isLegacyTotpSecret(stored)) return stored;
+    const key = this.getTotpEncryptionKey();
+    try {
+      return decryptTotpSecret(stored, userId, key);
+    } catch {
+      this.logger.error('A stored two-factor secret could not be decrypted.');
+      throw new ServiceUnavailableException('Two-factor authentication is temporarily unavailable.');
+    }
+  }
+
+  private async recordFailedAuthentication(userId: string, message: string): Promise<never> {
+    const maxAttempts = this.configService.get<number>('app.security.maxLoginAttempts', 5);
+    const lockoutMinutes = this.configService.get<number>('app.security.lockoutDurationMinutes', 15);
+    const now = new Date();
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      const incremented = await tx.user.updateMany({
+        where: { id: userId, deletedAt: null, OR: [{ lockedUntil: null }, { lockedUntil: { lte: now } }] },
+        data: { failedLoginAttempts: { increment: 1 } },
+      });
+      if (incremented.count === 0) return 'unavailable';
+
+      const locked = await tx.user.updateMany({
+        where: { id: userId, failedLoginAttempts: { gte: maxAttempts } },
+        data: { failedLoginAttempts: 0, lockedUntil: new Date(now.getTime() + lockoutMinutes * 60000) },
+      });
+      return locked.count > 0 ? 'locked' : 'failed';
+    });
+
+    if (outcome === 'locked') {
+      throw new UnauthorizedException(
+        `Account locked for ${lockoutMinutes} minutes due to ${maxAttempts} consecutive failed login attempts.`,
+      );
+    }
+    if (outcome === 'unavailable') {
+      throw new UnauthorizedException('Account is temporarily unavailable for sign-in.');
+    }
+    throw new UnauthorizedException(message);
+  }
+
   private async verifyBackupCode(userId: string, code: string, hashedCodes: string[]): Promise<boolean> {
-    for (let i = 0; i < hashedCodes.length; i++) {
-      const isMatch = await bcrypt.compare(code, hashedCodes[i]);
-      if (isMatch) {
-        const updatedCodes = [...hashedCodes];
-        updatedCodes.splice(i, 1);
-        await this.prisma.user.update({
-          where: { id: userId },
-          data: { twoFaBackupCodes: updatedCodes },
-        });
-        return true;
-      }
+    for (const hash of hashedCodes) {
+      if (!(await bcrypt.compare(code, hash))) continue;
+
+      const removed = await this.prisma.$executeRaw`
+        UPDATE "users"
+        SET "twoFaBackupCodes" = array_remove("twoFaBackupCodes", ${hash}::text),
+            "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "id" = ${userId} AND ${hash}::text = ANY("twoFaBackupCodes")
+      `;
+      return removed === 1;
     }
     return false;
   }

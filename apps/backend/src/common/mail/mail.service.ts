@@ -2,12 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 
-export interface SendMailOptions {
+export type SendMailOptions = {
   to: string;
   subject: string;
-  text?: string;
-  html: string;
-}
+} & ({ text: string; html?: string } | { html: string; text?: string });
 
 @Injectable()
 export class MailService {
