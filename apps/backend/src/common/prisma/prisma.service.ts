@@ -29,7 +29,6 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    * Soft-delete helper: sets deletedAt instead of hard-deleting
    */
   async softDelete(model: string, where: Record<string, unknown>): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (this as any)[model].update({
       where,
       data: { deletedAt: new Date() },

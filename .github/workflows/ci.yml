@@ -55,6 +55,9 @@ jobs:
       - name: Generate Prisma Client
         run: npx prisma generate --schema=./apps/backend/prisma/schema.prisma
 
+      - name: Lint Both Applications
+        run: npm run lint
+
       - name: Backend Typecheck
         run: npm run typecheck --workspace=apps/backend
 
