@@ -29,6 +29,7 @@ export async function signInThroughUi(page: Page, email: string, password: strin
     if (response.status() === 429) {
       const seconds = Number(response.headers()['retry-after-short'] ?? response.headers()['retry-after']);
       if (Number.isFinite(seconds) && seconds >= 0 && seconds <= 60) {
+        console.warn(`Browser sign-in was rate limited. Retrying after ${seconds + 1} seconds.`);
         await new Promise((resolve) => setTimeout(resolve, (seconds + 1) * 1000));
         response = await signIn();
       }

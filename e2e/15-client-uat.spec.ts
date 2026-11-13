@@ -6,6 +6,9 @@ import { openFixtureDatabase } from './fixture-database';
 const teamLead = 'team.lead@acme.com';
 const employee = 'employee@acme.com';
 
+// Allow the shared sign-in helper to honor a full rate-limit window.
+test.describe.configure({ timeout: 120_000 });
+
 async function signIn(page: Page, email: string) {
   await page.context().clearCookies();
   await signInThroughUi(page, email, 'Password@123');
