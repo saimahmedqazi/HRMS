@@ -4,6 +4,32 @@ import { hash } from 'bcrypt';
 import { getAttendanceDay, previousAttendanceDate } from '../apps/backend/src/common/utils/attendance-date';
 import { openFixtureDatabase } from './fixture-database';
 
+test('the shared attendance calendar shows approved leave and history validates its date range', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL, locale: 'en-US', timezoneId: 'America/Los_Angeles' });
+  try {
+    const page = await context.newPage();
+    const day = '2026-11-03';
+    const records = ['PRESENT', 'ON_LEAVE'].map((status) => ({
+      id: status, date: `${day}T00:00:00.000Z`, status, employee: { firstName: 'Fixture', lastName: status },
+    }));
+    await page.route('**/api/v1/**', (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/auth/me')) return route.fulfill({ json: { data: { id: 'fixture-hr', role: 'HR_MANAGER', firstName: 'Fixture', lastName: 'HR', companyId: 'fixture-company' } } });
+      if (path.endsWith('/analytics/overview')) return route.fulfill({ json: { data: { attendanceDate: day } } });
+      return route.fulfill({ json: { data: path.endsWith('/attendance/records') ? records : [] } });
+    });
+    await page.goto('/dashboard/attendance');
+    await expect(page.getByTitle('On Leave', { exact: true })).toHaveText('1 L');
+    await page.goto('/dashboard/attendance/history');
+    await expect(page.getByRole('row').filter({ hasText: 'Fixture ON_LEAVE' })).toContainText('11/3/2026');
+    await page.getByLabel('Start Date').fill(day);
+    await page.getByLabel('End Date').fill('2026-11-02');
+    await expect(page.getByRole('alert').filter({ hasText: 'End date cannot be earlier than start date.' })).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
 test.describe('Daily Punch & Work Timer Lifecycle', () => {
   test.beforeEach(async () => {
     const prisma = openFixtureDatabase();

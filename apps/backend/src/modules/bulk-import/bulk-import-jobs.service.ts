@@ -185,11 +185,14 @@ export class BulkImportJobsService implements OnModuleInit, OnModuleDestroy {
           });
           if (!claimed.count) throw new Error('Import progress changed.');
           await this.imports.importEmployee(tx, companyId, row.employee);
-        });
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
       } catch (error) {
         if (!(error instanceof Prisma.PrismaClientKnownRequestError) ||
             !['P2000', 'P2002', 'P2003', 'P2020'].includes(error.code)) throw error;
-        errors.push({ row: row.rowNumber, field: 'general', message: 'Could not import this row. Check the employee details and try again.' });
+        const duplicateCode = error.code === 'P2002' && Array.isArray(error.meta?.target) && error.meta.target.includes('employeeCode');
+        errors.push(duplicateCode
+          ? { row: row.rowNumber, field: 'employeeCode', message: `Employee code ${row.employee.employeeCode} already exists` }
+          : { row: row.rowNumber, field: 'general', message: 'Could not import this row. Check the employee details and try again.' });
         const advanced = await this.prisma.bulkImportJob.updateMany({
           where, data: { cursor: { increment: 1 }, errors },
         });

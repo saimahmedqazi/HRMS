@@ -1,9 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException, ValidationPipe } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { PdfService } from './pdf.service';
 import { PayrollService } from './payroll.service';
+import { CreatePayrollStructureDto } from './dto/create-payroll-structure.dto';
+import type { PayrollComponent } from './payroll-configuration';
 
 describe('PayrollService', () => {
   let service: PayrollService;
@@ -32,7 +34,7 @@ describe('PayrollService', () => {
       payslip: {
         upsert: jest.fn(),
         findFirst: jest.fn(),
-        findMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       notification: {
         create: jest.fn(),
@@ -40,6 +42,8 @@ describe('PayrollService', () => {
       company: {
         findUnique: jest.fn(),
       },
+      $queryRaw: jest.fn(),
+      $transaction: jest.fn((callback: (tx: typeof prisma) => unknown) => callback(prisma)),
     };
 
     pdfService = {
@@ -61,7 +65,7 @@ describe('PayrollService', () => {
   describe('calculatePayrollFigures', () => {
     it('should accurately compute allowances, progressive taxes, and net salary', () => {
       const baseSalary = 50000;
-      const components = [
+      const components: PayrollComponent[] = [
         { name: 'Transport', type: 'ALLOWANCE', value: 2000, isPercentage: false },
         { name: 'Bonus Pct', type: 'ALLOWANCE', value: 10, isPercentage: true }, // 5000
         { name: 'Health Insurance', type: 'DEDUCTION', value: 1000, isPercentage: false },
@@ -84,6 +88,52 @@ describe('PayrollService', () => {
       expect(result.deductions).toBe(1000);
       expect(result.taxAmount).toBe(2600);
       expect(result.netSalary).toBe(53400);
+    });
+  });
+
+  describe('salary package validation', () => {
+    const pipe = new ValidationPipe({
+      transform: true,
+      transformOptions: { enableImplicitConversion: true },
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    });
+    const packageData = { name: 'Fixture package', baseSalary: 1000, components: [] };
+
+    it.each([{ isDefault: 'false' }, { baseSalary: true }])('rejects coercion of %j', async (override) => {
+      await expect(pipe.transform({ ...packageData, ...override }, { type: 'body', metatype: CreatePayrollStructureDto }))
+        .rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it.each([
+      ['negative deduction', { components: [{ name: 'Adjustment', type: 'DEDUCTION', value: -100, isPercentage: false }] }, 'Salary component 1'],
+      ['string percentage flag', { components: [{ name: 'Adjustment', type: 'ALLOWANCE', value: 100, isPercentage: 'false' }] }, 'Salary component 1'],
+      ['malformed tax rules', { taxRules: { brackets: { min: 0, max: null, rate: 0.1 } } }, 'array of brackets'],
+      ['overlapping brackets', { taxRules: { brackets: [{ min: 0, max: 1000, rate: 0.1 }, { min: 500, max: null, rate: 0.2 }] } }, 'must not overlap'],
+      ['excessive tax rate', { taxRules: { brackets: [{ min: 0, max: null, rate: 10 }] } }, 'rate between 0 and 1'],
+      ['base salary overflow', { baseSalary: 10_000_000_000 }, 'outside the supported range'],
+    ] as const)('rejects %s before opening a write transaction', async (_label, override, error) => {
+      const dto = await pipe.transform({ ...packageData, ...override }, { type: 'body', metatype: CreatePayrollStructureDto });
+      await expect(service.createStructure(mockCompanyId, dto)).rejects.toThrow(error);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('preserves valid adjacent brackets and an explicitly tax-free package', async () => {
+      const taxRules = { brackets: [{ min: 500, max: null, rate: 0.2 }, { min: 0, max: 500, rate: 0.1 }] };
+      const components = [{ name: 'Travel', type: 'ALLOWANCE', value: 100, isPercentage: false }];
+      const dto = await pipe.transform({ ...packageData, components, taxRules }, { type: 'body', metatype: CreatePayrollStructureDto });
+      await service.createStructure(mockCompanyId, dto);
+      await service.createStructure(mockCompanyId, { ...packageData, taxRules: { brackets: [] } });
+      expect(prisma.payrollStructure.create).toHaveBeenNthCalledWith(1, { data: expect.objectContaining({ components, taxRules }) });
+      expect(prisma.payrollStructure.create).toHaveBeenNthCalledWith(2, { data: expect.objectContaining({ taxRules: { brackets: [] } }) });
+      expect(service.calculatePayrollFigures(1000, [], taxRules).taxAmount).toBe(150);
+      expect(service.calculatePayrollFigures(1000, [], { brackets: [] }).taxAmount).toBe(0);
+    });
+
+    it('rejects legacy invalid rules before calculating or writing a payslip', async () => {
+      prisma.payrollStructure.findFirst.mockResolvedValue({ id: 'invalid', components: [], taxRules: { brackets: 12 } });
+      await expect(service.executePayrollRun(mockCompanyId, mockUserId, { month: 11, year: 2026 })).rejects.toThrow('array of brackets');
+      expect(prisma.payslip.upsert).not.toHaveBeenCalled();
     });
   });
 
@@ -111,6 +161,26 @@ describe('PayrollService', () => {
       expect(result.processedEmployees).toBe(2);
       expect(prisma.payslip.upsert).toHaveBeenCalledTimes(2);
       expect(prisma.notification.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('notifies only newly issued payslips and corrections that change net pay', async () => {
+      prisma.payrollStructure.findFirst.mockResolvedValue({ id: 'struct-1', components: [], taxRules: { brackets: [] } });
+      prisma.employee.findMany.mockResolvedValue([
+        { id: 'emp-1', userId: 'unchanged', baseSalary: 50000 },
+        { id: 'emp-2', userId: 'corrected', baseSalary: 60000 },
+        { id: 'emp-3', userId: 'first-issue', baseSalary: 70000 },
+      ]);
+      prisma.payslip.findMany.mockResolvedValue([
+        { employeeId: 'emp-1', status: 'GENERATED', netSalary: 50000 },
+        { employeeId: 'emp-2', status: 'GENERATED', netSalary: 55000 },
+        { employeeId: 'emp-3', status: 'DRAFT', netSalary: 70000 },
+      ]);
+      prisma.payslip.upsert.mockResolvedValue({ id: 'payslip' });
+
+      await service.executePayrollRun(mockCompanyId, mockUserId, { month: 11, year: 2026 });
+
+      expect(prisma.notification.create.mock.calls.map(([call]: [{ data: { userId: string } }]) => call.data.userId))
+        .toEqual(['corrected', 'first-issue']);
     });
   });
 

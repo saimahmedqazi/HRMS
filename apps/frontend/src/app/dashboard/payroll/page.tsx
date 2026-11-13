@@ -36,12 +36,10 @@ export default function PayrollDashboardPage() {
 
   // Execute Payroll Run Mutation
   const executeMutation = useMutation({
-    mutationFn: () =>
-      api.post('/payroll/runs', {
-        month: runMonth,
-        year: runYear,
-      }),
-    onSuccess: () => {
+    mutationFn: (period: { month: number; year: number }) => api.post('/payroll/runs', period),
+    onSuccess: (_, period) => {
+      setSelectedMonth(period.month);
+      setSelectedYear(period.year);
       queryClient.invalidateQueries({ queryKey: ['payroll-payslips'] });
       setModalOpen(false);
     },
@@ -82,7 +80,12 @@ export default function PayrollDashboardPage() {
             Bulk Payslips PDF
           </a>
           <button
-            onClick={() => setModalOpen(true)}
+            onClick={() => {
+              executeMutation.reset();
+              setRunMonth(selectedMonth);
+              setRunYear(selectedYear);
+              setModalOpen(true);
+            }}
             className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg bg-primary-600 hover:bg-primary-700 text-white shadow-sm"
           >
             <Play className="w-4 h-4" />
@@ -258,6 +261,7 @@ export default function PayrollDashboardPage() {
               </h3>
               <button
                 onClick={() => setModalOpen(false)}
+                disabled={executeMutation.isPending}
                 className="text-gray-400 hover:text-gray-600 text-lg leading-none"
               >
                 &times;
@@ -267,16 +271,17 @@ export default function PayrollDashboardPage() {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                executeMutation.mutate();
+                executeMutation.mutate({ month: runMonth, year: runYear });
               }}
               className="mt-4 space-y-4 text-sm"
             >
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold uppercase text-gray-500 mb-1">
+                  <label htmlFor="payroll-run-month" className="block text-xs font-semibold uppercase text-gray-500 mb-1">
                     Month
                   </label>
                   <select
+                    id="payroll-run-month"
                     value={runMonth}
                     onChange={(e) => setRunMonth(Number(e.target.value))}
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-xs bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
@@ -289,10 +294,11 @@ export default function PayrollDashboardPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold uppercase text-gray-500 mb-1">
+                  <label htmlFor="payroll-run-year" className="block text-xs font-semibold uppercase text-gray-500 mb-1">
                     Year
                   </label>
                   <select
+                    id="payroll-run-year"
                     value={runYear}
                     onChange={(e) => setRunYear(Number(e.target.value))}
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-xs bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
@@ -311,10 +317,17 @@ export default function PayrollDashboardPage() {
                 all active personnel, generating payslips and triggering notifications.
               </div>
 
+              {executeMutation.isError && (
+                <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+                  {executeMutation.error.message}
+                </p>
+              )}
+
               <div className="flex justify-end gap-3 pt-3 border-t border-gray-200 dark:border-gray-800">
                 <button
                   type="button"
                   onClick={() => setModalOpen(false)}
+                  disabled={executeMutation.isPending}
                   className="px-4 py-2 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
                 >
                   Cancel

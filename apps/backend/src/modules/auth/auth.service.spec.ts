@@ -5,11 +5,20 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { MailService } from '../../common/mail/mail.service';
 import { DataScopeService } from '../../common/services/data-scope.service';
-import { ConflictException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, UnauthorizedException, ValidationPipe } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'crypto';
 import { UserRole } from '@prisma/client';
 import * as passwordPolicy from '../../common/utils/password-policy';
+import { RegisterCompanyDto } from './dto/register-company.dto';
+
+const registration = {
+  companyName: 'Acme Corp',
+  adminEmail: 'admin@acme.com',
+  adminPassword: 'Password123',
+  adminFirstName: 'John',
+  adminLastName: 'Doe',
+};
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -90,6 +99,25 @@ describe('AuthService', () => {
   });
 
   describe('registerCompany', () => {
+    const pipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true });
+    const validate = (input: RegisterCompanyDto) => pipe.transform(input, { type: 'body', metatype: RegisterCompanyDto });
+
+    it.each(['companyName', 'adminFirstName', 'adminLastName'] as const)('rejects a blank %s', async (field) => {
+      await expect(validate({ ...registration, [field]: '  \t  ' })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('trims names before storage', async () => {
+      await expect(validate({ ...registration, companyName: '  Acme Corp  ', adminFirstName: ' John ', adminLastName: ' Doe ' }))
+        .resolves.toMatchObject(registration);
+    });
+
+    it.each(['a'.repeat(73), `${'é'.repeat(36)}a`])('rejects passwords over 72 UTF-8 bytes before any database work', async (password) => {
+      await expect(service.registerCompany({ ...registration, adminPassword: password })).rejects.toThrow('at most 72 bytes');
+      await expect(service.resetPassword({ token: 'fixture-token', newPassword: password })).rejects.toThrow('at most 72 bytes');
+      expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+      expect(mockPrisma.user.findFirst).not.toHaveBeenCalled();
+    });
+
     it('should throw ConflictException if email is already taken', async () => {
       mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'existing-id' });
 
@@ -119,13 +147,7 @@ describe('AuthService', () => {
       mockPrisma.employee.create.mockResolvedValueOnce({ id: 'emp-1' });
       mockPrisma.user.update.mockResolvedValueOnce({});
 
-      const result = await service.registerCompany({
-        companyName: 'Acme Corp',
-        adminEmail: 'admin@acme.com',
-        adminPassword: 'Password123',
-        adminFirstName: 'John',
-        adminLastName: 'Doe',
-      });
+      const result = await service.registerCompany({ ...registration, adminPassword: 'é'.repeat(36) });
 
       expect(result.accessToken).toBe('mock-jwt-token');
       expect(result.user.email).toBe('admin@acme.com');

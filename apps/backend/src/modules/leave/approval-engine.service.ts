@@ -1,5 +1,8 @@
 import { Injectable, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { ApprovalStatus, UserRole } from '@prisma/client';
+import { getProbationEndDate, parseEmployeeDate } from '../../common/utils/employee-dates';
+
+const CALENDAR_DAY_MS = 86_400_000;
 
 export interface RequesterContext {
   id: string; // employeeId
@@ -39,8 +42,7 @@ export class ApprovalEngineService {
     }
 
     if (employee.role === UserRole.EMPLOYEE && employee.status === 'ON_PROBATION') {
-      const hireTime = new Date(employee.hireDate).getTime();
-      const probationEnd = new Date(hireTime + 90 * 24 * 60 * 60 * 1000);
+      const probationEnd = getProbationEndDate(employee.hireDate);
       const now = new Date();
 
       if (now < probationEnd) {
@@ -87,6 +89,7 @@ export class ApprovalEngineService {
           requester.deptManagerUserId ||
           requester.reportingManagerUserId ||
           companyAdminUserId ||
+          hrManagerUserId ||
           null;
 
         // Step 2: HR Manager
@@ -122,7 +125,6 @@ export class ApprovalEngineService {
       }
     }
 
-    // Auto-skip if requester is the assigned step 1 approver
     if (step1ApproverId && step1ApproverId === requester.userId) {
       step1Status = ApprovalStatus.SKIPPED;
     }
@@ -134,6 +136,8 @@ export class ApprovalEngineService {
     ) {
       step2Status = ApprovalStatus.SKIPPED;
     }
+
+    if (!step1ApproverId && step2ApproverId) step1Status = ApprovalStatus.SKIPPED;
 
     return {
       step1ApproverId,
@@ -185,17 +189,19 @@ export class ApprovalEngineService {
    * Computes the total inclusive calendar days between two dates.
    */
   calculateTotalDays(startDate: string | Date, endDate: string | Date): number {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-
-    start.setHours(0, 0, 0, 0);
-    end.setHours(0, 0, 0, 0);
+    const start = typeof startDate === 'string' ? parseEmployeeDate(startDate) : new Date(startDate);
+    const end = typeof endDate === 'string' ? parseEmployeeDate(endDate) : new Date(endDate);
+    if (!start || !end || !Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+      throw new BadRequestException('Enter valid start and end calendar dates.');
+    }
+    start.setUTCHours(0, 0, 0, 0);
+    end.setUTCHours(0, 0, 0, 0);
 
     const diff = end.getTime() - start.getTime();
     if (diff < 0) {
       throw new BadRequestException('End date cannot be earlier than start date.');
     }
 
-    return Math.floor(diff / (1000 * 60 * 60 * 24)) + 1;
+    return diff / CALENDAR_DAY_MS + 1;
   }
 }

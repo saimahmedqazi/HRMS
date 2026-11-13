@@ -2,7 +2,6 @@ import {
   Controller,
   Get,
   Post,
-  Body,
   Headers,
   HttpCode,
   RawBodyRequest,
@@ -38,12 +37,8 @@ export class SubscriptionsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.COMPANY_ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Create Stripe Checkout session for upgrading to Premium' })
-  async createCheckoutSession(
-    @CurrentUser() user: any,
-    @Body('returnUrl') returnUrl: string,
-  ) {
-    const targetUrl = returnUrl || 'http://localhost:3000/dashboard/billing';
-    return this.subscriptionsService.createCheckoutSession(user.companyId, targetUrl);
+  async createCheckoutSession(@CurrentUser() user: any) {
+    return this.subscriptionsService.createCheckoutSession(user.companyId);
   }
 
   @Post('portal-session')
@@ -51,12 +46,8 @@ export class SubscriptionsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.COMPANY_ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Create Stripe Customer Portal session for billing management' })
-  async createCustomerPortalSession(
-    @CurrentUser() user: any,
-    @Body('returnUrl') returnUrl: string,
-  ) {
-    const targetUrl = returnUrl || 'http://localhost:3000/dashboard/billing';
-    return this.subscriptionsService.createCustomerPortalSession(user.companyId, targetUrl);
+  async createCustomerPortalSession(@CurrentUser() user: any) {
+    return this.subscriptionsService.createCustomerPortalSession(user.companyId);
   }
 
   @Public()

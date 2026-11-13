@@ -1,5 +1,35 @@
 import { test, expect } from '@playwright/test';
 
+test('Billing waits for subscription details and can recover from a failed request', async ({ page }) => {
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    json: { data: { id: 'fixture-admin', role: 'COMPANY_ADMIN', companyId: 'fixture-company' } },
+  }));
+  await page.route('**/api/v1/auth/me/modules', (route) => route.fulfill({ json: { data: { allowedModules: ['billing'] } } }));
+  await page.route('**/api/v1/notifications', (route) => route.fulfill({ json: { data: [] } }));
+  await page.route('**/api/v1/subscriptions/current', (route) => route.fulfill({
+    json: { data: { tier: 'PREMIUM', status: 'ACTIVE' } },
+  }));
+  let finishRequest!: () => void;
+  const firstRequest = new Promise<void>((resolve) => { finishRequest = resolve; });
+  await page.route('**/api/v1/subscriptions/current', async (route) => {
+    await firstRequest;
+    await route.fulfill({ status: 503, json: { message: 'Unavailable' } });
+  }, { times: 1 });
+
+  try {
+    await page.goto('/dashboard/billing');
+    await expect(page.getByText('Loading subscription details…')).toBeVisible();
+    await expect(page.getByText('BASIC PLAN', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Billing Portal' })).toHaveCount(0);
+  } finally {
+    finishRequest();
+  }
+  await expect(page.getByText('Subscription details couldn’t load.')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Upgrade to Premium/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByText('PREMIUM PLAN', { exact: true })).toBeVisible();
+});
+
 test.describe('Company Admin (CEO) End-to-End Suite', () => {
   test.beforeEach(async ({ page }) => {
     await page.context().clearCookies();

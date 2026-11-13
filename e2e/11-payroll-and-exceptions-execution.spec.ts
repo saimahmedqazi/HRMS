@@ -1,6 +1,35 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Payroll Execution & Exceptions Management Lifecycle', () => {
+  test('shows payroll errors and opens the completed pay period after a retry', async ({ page }) => {
+    const failure = 'Tax brackets must not overlap.';
+    let attempts = 0;
+    await page.route('**/api/v1/**', (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/auth/me')) return route.fulfill({ json: { data: {
+        id: 'fixture-hr', email: 'fixture@example.test', firstName: 'Fixture', lastName: 'HR',
+        companyId: 'fixture-company', role: 'HR_MANAGER',
+      } } });
+      if (path.endsWith('/payroll/runs') && route.request().method() === 'POST') {
+        attempts++;
+        return attempts === 1
+          ? route.fulfill({ status: 400, json: { message: failure } })
+          : route.fulfill({ status: 201, json: { data: {} } });
+      }
+      return route.fulfill({ json: { data: [] } });
+    });
+
+    await page.goto('/dashboard/payroll');
+    await page.getByRole('button', { name: 'Execute Payroll Run' }).click();
+    await page.getByLabel('Month', { exact: true }).selectOption('2');
+    await page.getByLabel('Year', { exact: true }).selectOption('2025');
+    await page.getByRole('button', { name: 'Start Execution' }).click();
+    await expect(page.getByRole('alert').filter({ hasText: failure })).toBeVisible();
+    await page.getByRole('button', { name: 'Start Execution' }).click();
+    await expect(page.getByText('Period: 2/2025')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Execute Monthly Payroll' })).toHaveCount(0);
+  });
+
   test('HR Manager executes Monthly Payroll Run -> Employee verifies issued Payslip -> HR inspects Exceptions Queue', async ({ page }) => {
     const signOut = async () => {
       await page.getByTitle('Sign out', { exact: true }).click();

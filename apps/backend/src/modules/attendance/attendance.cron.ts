@@ -48,12 +48,13 @@ export class AttendanceCronService {
       const shiftDay = date.getUTCDay() || 7;
       const defaultShift = company.shifts.find((shift) => shift.isDefault);
 
-      // Find all active employees in this company
+      // Hire dates use UTC calendar dates, while the workday comes from the tenant's timezone.
       const employees = await this.prisma.employee.findMany({
         where: {
           companyId: company.id,
           status: { in: ['ACTIVE', 'ON_PROBATION'] },
           deletedAt: null,
+          hireDate: { lt: local.date },
         },
         include: {
           shifts: {
@@ -74,7 +75,7 @@ export class AttendanceCronService {
         const record = await this.prisma.attendanceRecord.findUnique({
           where: { companyId_employeeId_date: key },
         });
-        if (record?.checkInTime || record?.status === AttendanceStatus.HOLIDAY || record?.status === AttendanceStatus.WEEKEND) continue;
+        if (record && (record.checkInTime || !record.markedBySystem || record.status !== AttendanceStatus.ABSENT)) continue;
 
         // Check if employee has approved leave covering today
         const approvedLeave = await this.prisma.leaveRequest.findFirst({
@@ -108,15 +109,16 @@ export class AttendanceCronService {
             ? 'Automatically marked ON_LEAVE from approved leave schedule'
             : 'Automatically marked ABSENT after shift cutoff without a check-in',
         };
-        const updated = await this.prisma.attendanceRecord.updateMany({
+        const updated = approvedLeave ? await this.prisma.attendanceRecord.updateMany({
           where: {
             ...key,
             checkInTime: null,
-            status: { notIn: [AttendanceStatus.HOLIDAY, AttendanceStatus.WEEKEND] },
+            markedBySystem: true,
+            status: AttendanceStatus.ABSENT,
           },
           data,
-        });
-        const count = updated.count || (await this.prisma.attendanceRecord.createMany({
+        }) : null;
+        const count = updated?.count || (await this.prisma.attendanceRecord.createMany({
           data: { ...key, ...data },
           skipDuplicates: true,
         })).count;

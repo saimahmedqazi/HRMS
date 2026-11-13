@@ -50,8 +50,43 @@ describe('AttendanceCronService', () => {
       data: expect.objectContaining({ companyId, employeeId: 'night', date, status: AttendanceStatus.ABSENT }),
       skipDuplicates: true,
     });
-    expect(db.attendanceRecord.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ companyId, employeeId: 'night', date, checkInTime: null }),
+    expect(db.attendanceRecord.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('converts system absences to approved leave and skips manually marked records', async () => {
+    jest.setSystemTime(new Date('2026-11-10T19:00:00Z'));
+    db.attendanceRecord.findUnique.mockResolvedValueOnce({ status: AttendanceStatus.ABSENT, markedBySystem: false });
+    await service.handleNightlyAbsenceJob();
+    expect(db.attendanceRecord.createMany).not.toHaveBeenCalled();
+
+    db.attendanceRecord.findUnique.mockResolvedValueOnce({ status: AttendanceStatus.ABSENT, markedBySystem: true });
+    db.leaveRequest.findFirst.mockResolvedValueOnce({ id: 'approved' });
+    db.attendanceRecord.updateMany.mockResolvedValueOnce({ count: 1 });
+    await service.handleNightlyAbsenceJob();
+    expect(db.attendanceRecord.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { companyId, employeeId: 'day', date, checkInTime: null, markedBySystem: true, status: AttendanceStatus.ABSENT },
+      data: expect.objectContaining({ status: AttendanceStatus.ON_LEAVE }),
     }));
+  });
+
+  it('only considers employees hired by the end of the tenant workday being closed', async () => {
+    jest.setSystemTime(new Date('2026-11-10T19:00:00Z')); // November 11 in Kathmandu
+    const hires = [
+      { id: 'first-day', hireDate: new Date('2026-11-10T16:00:00Z'), shifts: [] },
+      { id: 'next-day', hireDate: new Date('2026-11-11T00:00:00Z'), shifts: [] },
+      { id: 'future', hireDate: new Date('2026-12-01T00:00:00Z'), shifts: [] },
+    ];
+    db.employee.findMany.mockImplementationOnce(async ({ where }) =>
+      hires.filter(({ hireDate }) => !where.hireDate || hireDate < where.hireDate.lt),
+    );
+    await service.handleNightlyAbsenceJob();
+    expect(db.employee.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ companyId, hireDate: { lt: new Date('2026-11-11') } }),
+    }));
+    expect(db.attendanceRecord.createMany).toHaveBeenCalledTimes(1);
+    expect(db.attendanceRecord.createMany).toHaveBeenCalledWith({
+      data: expect.objectContaining({ companyId, employeeId: 'first-day', date, status: AttendanceStatus.ABSENT }),
+      skipDuplicates: true,
+    });
   });
 });

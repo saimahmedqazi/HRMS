@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common';
 import {
   ApprovalStatus,
+  AttendanceStatus,
+  EmployeeStatus,
   LeaveStatus,
   LeaveRequest,
   LeaveType,
@@ -24,6 +26,18 @@ import { ApprovalEngineService, RequesterContext } from './approval-engine.servi
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { ApproveStepDto } from './dto/approve-step.dto';
 import { UpdateLeaveTypeDto } from './dto/update-leave-type.dto';
+import { PASSWORD_SETUP_REQUIRED } from '@common/utils/password-policy';
+
+const availableApprover = {
+  deletedAt: null,
+  NOT: [
+    { passwordHash: PASSWORD_SETUP_REQUIRED },
+    { employee: { is: { OR: [
+      { deletedAt: { not: null } },
+      { status: { in: [EmployeeStatus.SUSPENDED, EmployeeStatus.TERMINATED, EmployeeStatus.RESIGNED] } },
+    ] } } },
+  ],
+} satisfies Prisma.UserWhereInput;
 
 const leaveEmployee = {
   id: true,
@@ -35,6 +49,23 @@ const leaveEmployee = {
   team: { select: { id: true, name: true } },
   user: { select: { id: true, email: true, role: true } },
 } as const;
+
+type LeaveBalanceDays = { year: number; days: number };
+
+function splitLeaveBalanceDays(start: Date, end: Date, totalDays: number): LeaveBalanceDays[] {
+  const result: LeaveBalanceDays[] = [];
+  const cursor = new Date(start);
+  for (let year = start.getUTCFullYear(); year < end.getUTCFullYear(); year++) {
+    const nextYear = new Date(cursor);
+    nextYear.setUTCFullYear(year + 1, 0, 1);
+    const days = (nextYear.getTime() - cursor.getTime()) / 86_400_000;
+    result.push({ year, days });
+    totalDays -= days;
+    cursor.setTime(nextYear.getTime());
+  }
+  result.push({ year: end.getUTCFullYear(), days: totalDays });
+  return result;
+}
 
 @Injectable()
 export class LeaveService {
@@ -95,6 +126,48 @@ export class LeaveService {
       }
       throw error;
     }
+  }
+
+  private async settleLeaveBalances(
+    tx: Prisma.TransactionClient,
+    request: Pick<LeaveRequest, 'companyId' | 'employeeId' | 'startDate' | 'totalDays' | 'balanceDaysByYear'> & {
+      leaveTypeSetting: { leaveType: LeaveType };
+    },
+    approved: boolean,
+  ): Promise<void> {
+    // Older requests reserved every day against their original start-year balance.
+    const allocations = (request.balanceDaysByYear as LeaveBalanceDays[] | null) ?? [
+      { year: request.startDate.getFullYear(), days: request.totalDays },
+    ];
+    for (const { year, days } of allocations) {
+      await tx.leaveBalance.updateMany({
+        where: {
+          companyId: request.companyId, employeeId: request.employeeId,
+          leaveType: request.leaveTypeSetting.leaveType, year,
+        },
+        data: { pending: { decrement: days }, ...(approved && { used: { increment: days } }) },
+      });
+    }
+  }
+
+  private async markApprovedLeaveAttendance(
+    tx: Prisma.TransactionClient,
+    request: Pick<LeaveRequest, 'companyId' | 'employeeId' | 'startDate' | 'endDate'>,
+  ): Promise<void> {
+    const { companyId, employeeId, startDate, endDate } = request;
+    const data = { status: AttendanceStatus.ON_LEAVE, markedBySystem: true };
+    const records: Prisma.AttendanceRecordCreateManyInput[] = [];
+    for (let day = startDate.getTime(); day <= endDate.getTime(); day += 86_400_000) {
+      records.push({ companyId, employeeId, date: new Date(day), ...data });
+    }
+    await tx.attendanceRecord.createMany({ data: records, skipDuplicates: true });
+    await tx.attendanceRecord.updateMany({
+      where: {
+        companyId, employeeId, date: { gte: startDate, lte: endDate },
+        checkInTime: null, markedBySystem: true, status: AttendanceStatus.ABSENT,
+      },
+      data: { ...data, notes: null },
+    });
   }
 
   /**
@@ -193,7 +266,7 @@ export class LeaveService {
 
     const resolvedEmployeeId = emp.id;
     const targetYear = year || new Date().getFullYear();
-    const settings = await this.ensureDefaultLeaveTypes(companyId);
+    const settings = (await this.ensureDefaultLeaveTypes(companyId)).filter((setting) => setting.isActive);
 
     if (settings.length > 0) {
       await this.prisma.leaveBalance.createMany({
@@ -238,7 +311,6 @@ export class LeaveService {
         user: true,
         department: true,
         team: true,
-        reportingManager: true,
       },
     });
 
@@ -268,6 +340,11 @@ export class LeaveService {
 
     // 5. Calculate total days
     const totalDays = this.approvalEngine.calculateTotalDays(dto.startDate, dto.endDate);
+    const startDate = new Date(dto.startDate);
+    const endDate = new Date(dto.endDate);
+    startDate.setUTCHours(0, 0, 0, 0);
+    endDate.setUTCHours(0, 0, 0, 0);
+    const balanceDaysByYear = splitLeaveBalanceDays(startDate, endDate, totalDays);
 
     if (setting.requiresMedicalCert && !file) {
       throw new BadRequestException(
@@ -275,34 +352,22 @@ export class LeaveService {
       );
     }
 
-    // Resolve reporting line approvers
-    let leadUserId: string | null = null;
-    if (employee.team?.leadId) {
-      const leadEmp = await this.prisma.employee.findUnique({
-        where: { id: employee.team.leadId, companyId, deletedAt: null },
-      });
-      leadUserId = leadEmp?.userId || null;
-    }
-
-    let deptManagerUserId: string | null = null;
-    if (employee.department?.managerId) {
-      const mgrEmp = await this.prisma.employee.findUnique({
-        where: { id: employee.department.managerId, companyId, deletedAt: null },
-      });
-      deptManagerUserId = mgrEmp?.userId || null;
-    }
-
-    const reportingManager = employee.reportingManager;
-    const reportingManagerUserId = reportingManager?.companyId === companyId && !reportingManager.deletedAt
-      ? reportingManager.userId
-      : null;
-
-    const hrUser = await this.prisma.user.findFirst({
-      where: { companyId, role: UserRole.HR_MANAGER },
+    const reportingIds = [employee.team?.leadId, employee.department?.managerId, employee.reportingManagerId]
+      .filter((id): id is string => Boolean(id));
+    const candidates = await this.prisma.user.findMany({
+      where: {
+        ...availableApprover, companyId, id: { not: userId },
+        OR: [
+          { role: { in: [UserRole.HR_MANAGER, UserRole.COMPANY_ADMIN] } },
+          { role: { in: [UserRole.TEAM_LEAD, UserRole.DEPARTMENT_MANAGER] }, employee: { is: { id: { in: reportingIds } } } },
+        ],
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true, role: true, employee: { select: { id: true } } },
     });
-    const ceoUser = await this.prisma.user.findFirst({
-      where: { companyId, role: UserRole.COMPANY_ADMIN },
-    });
+    const reportingUser = (id?: string | null) => id ? candidates.find((candidate) => candidate.employee?.id === id)?.id : undefined;
+    const hrUser = candidates.find(({ role }) => role === UserRole.HR_MANAGER);
+    const ceoUser = candidates.find(({ role }) => role === UserRole.COMPANY_ADMIN);
 
     const requesterContext: RequesterContext = {
       id: employee.id,
@@ -310,9 +375,9 @@ export class LeaveService {
       status: employee.status,
       hireDate: employee.hireDate,
       role: employee.user.role,
-      leadUserId,
-      deptManagerUserId,
-      reportingManagerUserId,
+      leadUserId: reportingUser(employee.team?.leadId),
+      deptManagerUserId: reportingUser(employee.department?.managerId),
+      reportingManagerUserId: reportingUser(employee.reportingManagerId),
     };
 
     const approvers = this.approvalEngine.resolveApprovers(
@@ -324,12 +389,15 @@ export class LeaveService {
     const isAutoApproved =
       approvers.step1Status === ApprovalStatus.SKIPPED &&
       approvers.step2Status === ApprovalStatus.SKIPPED;
+    if ((approvers.step1Status === ApprovalStatus.PENDING && !approvers.step1ApproverId) ||
+        (approvers.step2Status === ApprovalStatus.PENDING && !approvers.step2ApproverId)) {
+      throw new BadRequestException('No eligible leave approver is available. Contact your company administrator.');
+    }
 
     const balanceKey = {
       companyId,
       employeeId: employee.id,
       leaveType: setting.leaveType,
-      year: new Date(dto.startDate).getFullYear(),
     };
     const prescriptionFolder = `zenhr/companies/${companyId}/prescriptions`;
     const medicalCertUrl = file
@@ -337,31 +405,34 @@ export class LeaveService {
       : undefined;
 
     const leaveRequest = await this.prisma.$transaction(async (tx) => {
-      await tx.leaveBalance.createMany({
-        data: { ...balanceKey, allocated: setting.annualAllocation },
-        skipDuplicates: true,
-      });
-
-      // PostgreSQL rechecks the balance predicate after any competing write commits.
-      const reserved = await tx.$executeRaw`
-        UPDATE "leave_balances"
-        SET "pending" = "pending" + ${isAutoApproved ? 0 : totalDays},
-            "used" = "used" + ${isAutoApproved ? totalDays : 0},
-            "updatedAt" = CURRENT_TIMESTAMP
-        WHERE "companyId" = ${balanceKey.companyId}
-          AND "employeeId" = ${balanceKey.employeeId}
-          AND "leaveType" = ${balanceKey.leaveType}::"LeaveType"
-          AND "year" = ${balanceKey.year}
-          AND "allocated" + "carried" - "used" - "pending" >= ${totalDays}
-      `;
-      if (reserved === 0) {
-        const balance = await tx.leaveBalance.findUnique({
-          where: { companyId_employeeId_leaveType_year: balanceKey },
+      for (const { year, days } of balanceDaysByYear) {
+        const yearlyKey = { ...balanceKey, year };
+        await tx.leaveBalance.createMany({
+          data: { ...yearlyKey, allocated: setting.annualAllocation },
+          skipDuplicates: true,
         });
-        const availableDays = balance ? balance.allocated + balance.carried - balance.used - balance.pending : 0;
-        throw new BadRequestException(
-          `Insufficient leave balance. Requested: ${totalDays} days, Available: ${availableDays} days.`,
-        );
+
+        // PostgreSQL rechecks the balance predicate after any competing write commits.
+        const reserved = await tx.$executeRaw`
+          UPDATE "leave_balances"
+          SET "pending" = "pending" + ${isAutoApproved ? 0 : days},
+              "used" = "used" + ${isAutoApproved ? days : 0},
+              "updatedAt" = CURRENT_TIMESTAMP
+          WHERE "companyId" = ${balanceKey.companyId}
+            AND "employeeId" = ${balanceKey.employeeId}
+            AND "leaveType" = ${balanceKey.leaveType}::"LeaveType"
+            AND "year" = ${year}
+            AND "allocated" + "carried" - "used" - "pending" >= ${days}
+        `;
+        if (reserved === 0) {
+          const balance = await tx.leaveBalance.findUnique({
+            where: { companyId_employeeId_leaveType_year: yearlyKey },
+          });
+          const availableDays = balance ? balance.allocated + balance.carried - balance.used - balance.pending : 0;
+          throw new BadRequestException(
+            `Insufficient leave balance for ${year}. Requested: ${days} days, Available: ${availableDays} days.`,
+          );
+        }
       }
 
       const created = await tx.leaveRequest.create({
@@ -369,9 +440,10 @@ export class LeaveService {
           companyId,
           employeeId: employee.id,
           leaveTypeSettingId: setting.id,
-          startDate: new Date(dto.startDate),
-          endDate: new Date(dto.endDate),
+          startDate,
+          endDate,
           totalDays,
+          balanceDaysByYear,
           reason: dto.reason,
           medicalCertUrl,
           status: isAutoApproved ? LeaveStatus.APPROVED : LeaveStatus.PENDING,
@@ -396,6 +468,8 @@ export class LeaveService {
           },
         },
       });
+
+      if (isAutoApproved) await this.markApprovedLeaveAttendance(tx, created);
 
       // In-app notification for Step 1 approver
       const targetApproverId =
@@ -520,8 +594,6 @@ export class LeaveService {
       throw new ForbiddenException('You are not authorized to approve Step 1 of this request.');
     }
 
-    const currentYear = new Date(request.startDate).getFullYear();
-
     if (dto.decision === 'REJECT') {
       return this.prisma.$transaction(async (tx) => {
         const updated = await this.updatePendingLeaveRequest(tx, request, {
@@ -531,18 +603,7 @@ export class LeaveService {
           status: LeaveStatus.REJECTED,
         });
 
-        // Restore pending days
-        await tx.leaveBalance.updateMany({
-          where: {
-            companyId,
-            employeeId: request.employeeId,
-            leaveType: request.leaveTypeSetting.leaveType,
-            year: currentYear,
-          },
-          data: {
-            pending: { decrement: request.totalDays },
-          },
-        });
+        await this.settleLeaveBalances(tx, request, false);
 
         await tx.notification.create({
           data: {
@@ -574,19 +635,8 @@ export class LeaveService {
       });
 
       if (isFinal) {
-        // Move from pending to used
-        await tx.leaveBalance.updateMany({
-          where: {
-            companyId,
-            employeeId: request.employeeId,
-            leaveType: request.leaveTypeSetting.leaveType,
-            year: currentYear,
-          },
-          data: {
-            pending: { decrement: request.totalDays },
-            used: { increment: request.totalDays },
-          },
-        });
+        await this.settleLeaveBalances(tx, request, true);
+        await this.markApprovedLeaveAttendance(tx, request);
 
         await tx.notification.create({
           data: {
@@ -600,11 +650,21 @@ export class LeaveService {
         });
       } else {
         // Notify Step 2 approver
-        if (request.step2ApproverId) {
+        const eligible = await tx.user.findMany({
+          where: {
+            ...availableApprover, companyId, id: { not: request.employee.userId },
+            role: { in: [UserRole.HR_MANAGER, UserRole.COMPANY_ADMIN] },
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          select: { id: true, role: true },
+        });
+        const recipient = eligible.find(({ id }) => id === request.step2ApproverId) ??
+          eligible.find(({ role }) => role === UserRole.HR_MANAGER) ?? eligible[0];
+        if (recipient) {
           await tx.notification.create({
             data: {
               companyId,
-              userId: request.step2ApproverId,
+              userId: recipient.id,
               type: NotificationType.LEAVE_SUBMITTED,
               title: 'Leave Request Awaiting Final Approval (Step 2)',
               body: `A leave request from ${request.employee.firstName} ${request.employee.lastName} passed Step 1 and requires HR approval.`,
@@ -652,8 +712,6 @@ export class LeaveService {
       throw new ForbiddenException('You are not authorized to approve Step 2 of this request.');
     }
 
-    const currentYear = new Date(request.startDate).getFullYear();
-
     if (dto.decision === 'REJECT') {
       return this.prisma.$transaction(async (tx) => {
         const updated = await this.updatePendingLeaveRequest(tx, request, {
@@ -663,18 +721,7 @@ export class LeaveService {
           status: LeaveStatus.REJECTED,
         });
 
-        // Restore pending days
-        await tx.leaveBalance.updateMany({
-          where: {
-            companyId,
-            employeeId: request.employeeId,
-            leaveType: request.leaveTypeSetting.leaveType,
-            year: currentYear,
-          },
-          data: {
-            pending: { decrement: request.totalDays },
-          },
-        });
+        await this.settleLeaveBalances(tx, request, false);
 
         await tx.notification.create({
           data: {
@@ -703,19 +750,8 @@ export class LeaveService {
         finalApprovedAt: new Date(),
       });
 
-      // Move pending to used
-      await tx.leaveBalance.updateMany({
-        where: {
-          companyId,
-          employeeId: request.employeeId,
-          leaveType: request.leaveTypeSetting.leaveType,
-          year: currentYear,
-        },
-        data: {
-          pending: { decrement: request.totalDays },
-          used: { increment: request.totalDays },
-        },
-      });
+      await this.settleLeaveBalances(tx, request, true);
+      await this.markApprovedLeaveAttendance(tx, request);
 
       await tx.notification.create({
         data: {
@@ -757,8 +793,6 @@ export class LeaveService {
       throw new BadRequestException('Only pending leave requests can be cancelled.');
     }
 
-    const currentYear = new Date(request.startDate).getFullYear();
-
     return this.prisma.$transaction(async (tx) => {
       const updated = await this.updatePendingLeaveRequest(tx, request, {
         status: LeaveStatus.CANCELLED,
@@ -766,17 +800,7 @@ export class LeaveService {
         cancelledById: userId,
       });
 
-      await tx.leaveBalance.updateMany({
-        where: {
-          companyId,
-          employeeId: employee.id,
-          leaveType: request.leaveTypeSetting.leaveType,
-          year: currentYear,
-        },
-        data: {
-          pending: { decrement: request.totalDays },
-        },
-      });
+      await this.settleLeaveBalances(tx, request, false);
 
       return updated;
     });

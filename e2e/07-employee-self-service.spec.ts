@@ -1,5 +1,40 @@
 import { test, expect } from '@playwright/test';
 
+test('Mobile navigation contains keyboard focus and returns it when dismissed', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/login');
+  await page.locator('input[type=email]').fill('employee@acme.com');
+  await page.locator('input[type=password]').fill('Password@123');
+  await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+  await page.waitForURL('**/dashboard');
+
+  const menuButton = page.getByRole('button', { name: 'Open menu' });
+  const drawer = page.getByRole('dialog', { name: 'Dashboard navigation' });
+  await expect(menuButton).toHaveAttribute('aria-expanded', 'false');
+  await page.keyboard.press('Tab');
+  await expect(menuButton).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(drawer.getByRole('button', { name: 'Close menu' })).toBeFocused();
+  await expect(drawer.getByRole('link', { name: 'My Attendance' })).toBeVisible();
+  await page.keyboard.press('Tab');
+  await expect(drawer.getByRole('link', { name: 'Dashboard', exact: true })).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(drawer.getByRole('button', { name: 'Close menu' })).toBeFocused();
+  const backgroundMenu = page.locator('header button[aria-controls="mobile-dashboard-navigation"]');
+  await backgroundMenu.evaluate((button: HTMLButtonElement) => button.focus());
+  await expect(drawer.getByRole('button', { name: 'Close menu' })).toBeFocused();
+
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+  await expect(menuButton).toBeFocused();
+  await expect(menuButton).toHaveAttribute('aria-expanded', 'false');
+
+  await menuButton.click();
+  await drawer.getByRole('link', { name: 'My Attendance' }).click();
+  await expect(page).toHaveURL(/\/dashboard\/my-attendance$/);
+  await expect(drawer).toBeHidden();
+});
+
 test.describe('Employee Self-Service & Tier Gating Suite', () => {
   test('Regular Employee: Workplace, My Attendance, My Leave, My Payslips, Work Timer, and Profile with Login IP Telemetry', async ({ page }) => {
     await page.context().clearCookies();
@@ -67,5 +102,18 @@ test.describe('Employee Self-Service & Tier Gating Suite', () => {
     await expect(page.locator('button:has-text("Upgrade to Premium")')).toBeVisible();
     await expect(page.locator('text=Up to 25 Employees')).toBeVisible();
     await expect(page.locator('text=Locked').first()).toBeVisible();
+
+    await page.getByRole('button', { name: /Upgrade to Premium/ }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Stripe is simulated in this local demo' })).toBeVisible();
+    await expect(page).toHaveURL(/\/dashboard\/billing$/);
+    await expect(page.getByText('BASIC PLAN', { exact: true })).toBeVisible();
+
+    await page.route('**/api/v1/subscriptions/portal-session', (route) => route.fulfill({
+      status: 503,
+      json: { message: 'The Stripe billing portal is unavailable. Contact your platform administrator.' },
+    }));
+    await page.getByRole('button', { name: 'Billing Portal' }).click();
+    await expect(page.getByRole('alert').filter({ hasText: 'The Stripe billing portal is unavailable' })).toBeVisible();
+    await expect(page.getByText('Stripe is simulated in this local demo', { exact: false })).toBeHidden();
   });
 });

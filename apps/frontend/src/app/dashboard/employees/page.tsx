@@ -45,6 +45,7 @@ interface EmployeesResponse {
 export default function EmployeesPage() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const companyId = user?.supportModeCompanyId ?? user?.companyId;
   const canOnboard =
     user?.role === 'SUPER_ADMIN' ||
     user?.role === 'COMPANY_ADMIN' ||
@@ -60,30 +61,33 @@ export default function EmployeesPage() {
     employeeCode: string;
     email: string;
     tempPassword?: string;
+    welcomeEmailSent: boolean;
   } | null>(null);
 
   // Form State
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
+  const [hireDate, setHireDate] = useState('');
   const [role, setRole] = useState('EMPLOYEE');
   const [departmentId, setDepartmentId] = useState('');
   const [designationId, setDesignationId] = useState('');
 
   // Fetch departments for dropdown
   const { data: deptData } = useQuery({
-    queryKey: ['departments'],
+    queryKey: ['departments', user?.id, companyId],
     queryFn: () => api.get<any[]>('/departments'),
   });
 
   const { data: desigData } = useQuery({
-    queryKey: ['designations'],
+    queryKey: ['designations', user?.id, companyId],
     queryFn: () => api.get<any[]>('/designations'),
   });
 
   // Fetch employees list
-  const { data, isLoading } = useQuery({
-    queryKey: ['employees', search, statusFilter, deptFilter, page],
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
+    queryKey: ['employees', user?.id, companyId, search, statusFilter, deptFilter, page],
+    retry: false,
     queryFn: () => {
       const params = new URLSearchParams();
       if (search) params.append('search', search);
@@ -102,6 +106,7 @@ export default function EmployeesPage() {
         firstName,
         lastName,
         email,
+        hireDate: hireDate || undefined,
         role,
         departmentId: departmentId || undefined,
         designationId: designationId || undefined,
@@ -112,6 +117,7 @@ export default function EmployeesPage() {
       setFirstName('');
       setLastName('');
       setEmail('');
+      setHireDate('');
     },
   });
 
@@ -133,6 +139,7 @@ export default function EmployeesPage() {
         {canOnboard && (
           <button
             onClick={() => {
+              onboardMutation.reset();
               setCreatedCredentials(null);
               setShowOnboardModal(true);
             }}
@@ -196,6 +203,18 @@ export default function EmployeesPage() {
       {/* Employee Cards Grid */}
       {isLoading ? (
         <p className="text-sm text-zinc-500">Loading employees...</p>
+      ) : isError && !data ? (
+        <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <p role="alert">The employee list couldn’t load.</p>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            disabled={isFetching}
+            className="mt-3 rounded-lg border border-zinc-300 px-4 py-2 font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            {isFetching ? 'Retrying…' : 'Try again'}
+          </button>
+        </div>
       ) : employees.length === 0 ? (
         <div className="rounded-xl border border-dashed border-zinc-300 p-12 text-center dark:border-zinc-700">
           <Users className="mx-auto h-10 w-10 text-zinc-400" />
@@ -203,7 +222,7 @@ export default function EmployeesPage() {
             No employees found
           </p>
           <p className="text-xs text-zinc-500">
-            Try adjusting your search filters or click "Onboard Employee" to add one.
+            {canOnboard ? 'Try adjusting your filters or onboard an employee.' : 'Try adjusting your search filters.'}
           </p>
         </div>
       ) : (
@@ -306,7 +325,11 @@ export default function EmployeesPage() {
                   Employee Successfully Onboarded!
                 </h2>
                 <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-left text-xs dark:border-zinc-800 dark:bg-zinc-800/50">
-                  <p className="mb-1 text-zinc-500">Share these initial credentials with the employee:</p>
+                  <p role="status" className="mb-1 text-zinc-600 dark:text-zinc-300">
+                    {createdCredentials.welcomeEmailSent
+                      ? 'The mail server accepted the welcome email.'
+                      : 'The welcome email could not be sent. Share these initial credentials securely with the employee.'}
+                  </p>
                   <p><strong>Employee Code:</strong> {createdCredentials.employeeCode}</p>
                   <p><strong>Email:</strong> {createdCredentials.email}</p>
                   <p><strong>Temporary Password:</strong> <code className="rounded bg-zinc-200 px-1 py-0.5 dark:bg-zinc-700">{createdCredentials.tempPassword}</code></p>
@@ -394,11 +417,24 @@ export default function EmployeesPage() {
                       ))}
                     </select>
                   </div>
-                  <div className="col-span-2">
-                    <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                  <div>
+                    <label htmlFor="onboard-hire-date" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                      Hire Date
+                    </label>
+                    <input
+                      id="onboard-hire-date"
+                      type="date"
+                      value={hireDate}
+                      onChange={(e) => setHireDate(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="onboard-role" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                       System Role
                     </label>
                     <select
+                      id="onboard-role"
                       value={role}
                       onChange={(e) => setRole(e.target.value)}
                       className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
@@ -410,9 +446,15 @@ export default function EmployeesPage() {
                     </select>
                   </div>
                 </div>
+                {onboardMutation.isError && (
+                  <p role="alert" className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+                    {onboardMutation.error.message}
+                  </p>
+                )}
                 <div className="mt-6 flex justify-end gap-2">
                   <button
                     onClick={() => setShowOnboardModal(false)}
+                    disabled={onboardMutation.isPending}
                     className="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300"
                   >
                     Cancel

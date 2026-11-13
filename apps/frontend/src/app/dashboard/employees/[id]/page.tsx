@@ -3,7 +3,7 @@
 import React, { useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, API_PREFIX } from '@/lib/api';
+import { api, ApiError, API_PREFIX } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
@@ -69,10 +69,11 @@ export default function EmployeeDetailPage() {
   const initialDemoValues = useRef<Record<string, string>>({});
 
   // Fetch employee details
-  const { data, isLoading } = useQuery({
-    queryKey: ['employee', id],
+  const { data, error, isLoading, isFetching, refetch } = useQuery({
+    queryKey: ['employee', id, user?.id, user?.supportModeCompanyId ?? user?.companyId],
     queryFn: () => api.get<any>(`/employees/${id}`),
     enabled: !!id,
+    retry: false,
   });
 
   const emp = data;
@@ -223,7 +224,21 @@ export default function EmployeeDetailPage() {
   }
 
   if (!emp) {
-    return <p className="text-sm text-zinc-500">Employee profile not found.</p>;
+    if (!error || (error instanceof ApiError && error.status === 404)) {
+      return <p className="text-sm text-zinc-500">Employee profile not found.</p>;
+    }
+    if (error instanceof ApiError && error.status === 403) {
+      return <p role="alert" className="text-sm text-zinc-500">You don’t have access to this employee profile.</p>;
+    }
+    return (
+      <section className="rounded-xl border border-zinc-200 bg-white p-6 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+        <p role="alert">The employee profile couldn’t load.</p>
+        <button type="button" onClick={() => void refetch()} disabled={isFetching}
+          className="mt-3 rounded-lg border border-zinc-300 px-4 py-2 font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
+          {isFetching ? 'Retrying…' : 'Try again'}
+        </button>
+      </section>
+    );
   }
 
   const loginIp = emp.user?.lastLoginIp ?? 'Unavailable';
@@ -295,7 +310,7 @@ export default function EmployeeDetailPage() {
                 )}
                 <span className="flex items-center gap-1">
                   <Calendar className="h-3.5 w-3.5" /> Hired{' '}
-                  {new Date(emp.hireDate).toLocaleDateString()}
+                  {new Date(emp.hireDate).toLocaleDateString(undefined, { timeZone: 'UTC' })}
                 </span>
               </div>
             </div>
@@ -408,7 +423,7 @@ export default function EmployeeDetailPage() {
               <div className="flex justify-between py-2.5">
                 <dt className="text-zinc-500">Probation End Date</dt>
                 <dd className="font-medium text-zinc-900 dark:text-zinc-100">
-                  {emp.probationEndDate ? new Date(emp.probationEndDate).toLocaleDateString() : 'N/A'}
+                  {emp.probationEndDate ? new Date(emp.probationEndDate).toLocaleDateString(undefined, { timeZone: 'UTC' }) : 'N/A'}
                 </dd>
               </div>
             </dl>

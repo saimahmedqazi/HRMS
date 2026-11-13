@@ -151,6 +151,9 @@ describe('ApprovalEngineService', () => {
     it('should compute inclusive day count accurately', () => {
       expect(service.calculateTotalDays('2026-11-10', '2026-11-10')).toBe(1);
       expect(service.calculateTotalDays('2026-11-10', '2026-11-12')).toBe(3);
+      expect(service.calculateTotalDays('2026-03-08', '2026-03-10')).toBe(3);
+      expect(service.calculateTotalDays('2026-12-31', '2027-01-01')).toBe(2);
+      expect(() => service.calculateTotalDays('2026-02-30', '2026-03-02')).toThrow('valid start and end calendar dates');
     });
 
     it('should throw BadRequestException if end date is before start date', () => {

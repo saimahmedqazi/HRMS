@@ -1,14 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { useRoleSession } from './role-session';
 
 test.describe('Role 1: Super Admin Comprehensive Test Suite (10 Tests)', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.context().clearCookies();
-    await page.goto('/login');
-    await page.fill('input[type="email"]', 'superadmin@zenhr.com');
-    await page.fill('input[type="password"]', 'SuperAdmin@123');
-    await page.click('button[type="submit"]');
-    await page.waitForURL('**/dashboard', { timeout: 15000 });
-  });
+  useRoleSession('superadmin@zenhr.com', 'SuperAdmin@123');
 
   test('SA-01: Platform Command Center renders Global Executive KPIs', async ({ page }) => {
     await expect(page.locator('h1')).toContainText('Platform Master Console');

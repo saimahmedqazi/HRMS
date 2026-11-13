@@ -25,7 +25,7 @@ export class MailService {
         auth: { user, pass },
       });
     } else {
-      this.logger.warn('Mail transporter unconfigured; emails will be logged to console.');
+      this.logger.warn('Mail transporter unconfigured; outgoing email is unavailable.');
     }
   }
 
@@ -36,18 +36,18 @@ export class MailService {
 
     if (!this.transporter) {
       this.logger.log(`[DEV MAIL] To: ${options.to} | Subject: ${options.subject}`);
-      return true;
+      return false;
     }
 
     try {
-      await this.transporter.sendMail({
+      const result = await this.transporter.sendMail({
         from,
         to: options.to,
         subject: options.subject,
         text: options.text,
         html: options.html,
       });
-      return true;
+      return (result.accepted?.length ?? 0) > 0;
     } catch (error) {
       this.logger.error(`Failed to send email to ${options.to}`, error);
       return false;

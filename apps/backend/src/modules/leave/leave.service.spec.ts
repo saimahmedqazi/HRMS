@@ -39,12 +39,14 @@ describe('LeaveService', () => {
         create: jest.fn(),
         update: jest.fn(),
       },
+      attendanceRecord: { createMany: jest.fn(), updateMany: jest.fn() },
       employee: {
         findFirst: jest.fn(),
         findUnique: jest.fn(),
       },
       user: {
         findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       notification: {
         create: jest.fn(),
@@ -170,6 +172,19 @@ describe('LeaveService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
+    it('rejects a request without an eligible approver before reserving balance', async () => {
+      prisma.employee.findFirst.mockResolvedValue({ id: mockEmployeeId, userId: mockUserId, user: { role: UserRole.EMPLOYEE } });
+      prisma.leaveTypeSetting.findFirst.mockResolvedValue({ id: 'annual', isActive: true, leaveType: LeaveType.ANNUAL });
+      approvalEngine.resolveApprovers.mockReturnValueOnce({
+        step1ApproverId: null, step1Status: ApprovalStatus.PENDING,
+        step2ApproverId: null, step2Status: ApprovalStatus.PENDING,
+      });
+      await expect(service.createLeaveRequest(mockCompanyId, mockUserId, {
+        leaveTypeSettingId: 'annual', startDate: '2026-11-10', endDate: '2026-11-12',
+      })).rejects.toThrow('No eligible leave approver');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
     it('should successfully submit request with prescription, incrementing pending balance and notifying approver', async () => {
       const mockEmployee = {
         id: mockEmployeeId,
@@ -182,7 +197,7 @@ describe('LeaveService', () => {
         team: { leadId: 'lead-1' },
       };
       prisma.employee.findFirst.mockResolvedValue(mockEmployee);
-      prisma.employee.findUnique.mockResolvedValue({ id: 'lead-1', userId: 'lead-user-id' });
+      prisma.user.findMany.mockResolvedValue([{ id: 'lead-user-id', role: UserRole.TEAM_LEAD, employee: { id: 'lead-1' } }]);
 
       prisma.leaveTypeSetting.findFirst.mockResolvedValue({
         id: 'setting-sick',
@@ -235,6 +250,7 @@ describe('LeaveService', () => {
       });
       expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
       expect(prisma.notification.create).toHaveBeenCalled();
+      expect(approvalEngine.resolveApprovers).toHaveBeenCalledWith(expect.objectContaining({ leadUserId: 'lead-user-id' }), undefined, undefined);
       expect(result.id).toBe('req-1');
     });
 
@@ -277,6 +293,7 @@ describe('LeaveService', () => {
         employee: { userId: mockUserId, firstName: 'Alice', lastName: 'Smith', user: { role: UserRole.EMPLOYEE } },
       };
       prisma.leaveRequest.findFirst.mockResolvedValue(mockRequest);
+      prisma.user.findMany.mockResolvedValueOnce([{ id: 'fallback-hr', role: UserRole.HR_MANAGER }]);
       prisma.leaveRequest.update.mockResolvedValue({
         ...mockRequest,
         step1Status: ApprovalStatus.APPROVED,
@@ -291,7 +308,7 @@ describe('LeaveService', () => {
       );
 
       expect(prisma.leaveRequest.update).toHaveBeenCalled();
-      expect(prisma.notification.create).toHaveBeenCalled();
+      expect(prisma.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({ userId: 'fallback-hr' }) });
       expect(result.step1Status).toBe(ApprovalStatus.APPROVED);
     });
 
@@ -342,6 +359,7 @@ describe('LeaveService', () => {
         step1Status: ApprovalStatus.APPROVED,
         step2Status: ApprovalStatus.PENDING,
         startDate: new Date('2026-11-10'),
+        endDate: new Date('2026-11-12'),
         leaveTypeSetting: { leaveType: LeaveType.CASUAL },
         employee: { userId: mockUserId, firstName: 'Alice', lastName: 'Smith', user: { role: UserRole.EMPLOYEE } },
       };

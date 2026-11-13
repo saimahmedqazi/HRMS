@@ -52,6 +52,27 @@ test.describe('Authentication & Access Control Flows', () => {
     await expect(page.getByText('Password must be at least 8 characters', { exact: true })).toBeVisible();
   });
 
+  test('Registration and password reset explain invalid names and oversized passwords', async ({ page }) => {
+    const longPassword = 'é'.repeat(37);
+    await page.route('**/api/v1/auth/{me,refresh}', (route) => route.fulfill({ status: 401, json: {} }));
+    await page.goto('/register');
+    await page.locator('[name="companyName"]').fill('   ');
+    await page.locator('[name="adminFirstName"]').fill('  ');
+    await page.locator('[name="adminLastName"]').fill('  ');
+    await page.locator('[name="adminEmail"]').fill('registration-fixture@example.test');
+    await page.locator('[name="adminPassword"]').fill(longPassword);
+    await page.getByRole('button', { name: 'Complete Registration' }).click();
+    await expect(page.getByText('Company name must be at least 2 characters')).toBeVisible();
+    await expect(page.getByText('First name is required')).toBeVisible();
+    await expect(page.getByText('Last name is required')).toBeVisible();
+    await expect(page.getByText('Password must be at most 72 bytes in UTF-8.')).toBeVisible();
+
+    await page.goto('/reset-password?token=fixture');
+    await page.locator('#new-password').fill(longPassword);
+    await page.getByRole('button', { name: 'Reset Password' }).click();
+    await expect(page.getByText('Password must be at most 72 bytes in UTF-8.')).toBeVisible();
+  });
+
   test('Login and verify dashboard access for all roles', async ({ page }) => {
     const credentials = [
       { email: 'superadmin@zenhr.com', password: 'SuperAdmin@123', expectedHeader: 'Platform Master Console' },

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth, type UserRole } from '@/lib/auth-context';
@@ -18,6 +18,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const { user, isLoading } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -44,9 +45,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950">
-      <Sidebar isOpen={mobileMenuOpen} onClose={() => setMobileMenuOpen(false)} />
+      <Sidebar isOpen={mobileMenuOpen} onClose={closeMobileMenu} />
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
-        <Header onMenuClick={() => setMobileMenuOpen(true)} />
+        <Header onMenuClick={() => setMobileMenuOpen(true)} mobileMenuOpen={mobileMenuOpen} />
         <SupportModeBanner />
         <main className="flex-1 overflow-y-auto p-4 md:p-6 min-w-0">
           {canOpenRoute ? children : (

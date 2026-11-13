@@ -10,6 +10,7 @@ describe('SubscriptionsService', () => {
   let service: SubscriptionsService;
   let prisma: any;
   let mailService: any;
+  let config: Record<string, string>;
 
   const mockCompanyId = 'company-123';
   const webhookSecret = 'local-test-signing-secret';
@@ -21,6 +22,11 @@ describe('SubscriptionsService', () => {
   }
 
   beforeEach(async () => {
+    config = {
+      'app.stripe.webhookSecret': webhookSecret,
+      'app.nodeEnv': 'development',
+      'app.frontendUrl': 'https://zenhr.example.test',
+    };
     prisma = {
       subscription: {
         findUnique: jest.fn(),
@@ -59,13 +65,36 @@ describe('SubscriptionsService', () => {
         {
           provide: ConfigService,
           useValue: {
-            get: (key: string) => key === 'app.stripe.webhookSecret' ? webhookSecret : undefined,
+            get: (key: string, fallback?: string) => config[key] ?? fallback,
           },
         },
       ],
     }).compile();
 
     service = module.get<SubscriptionsService>(SubscriptionsService);
+  });
+
+  describe('billing actions', () => {
+    it('reports unavailable Stripe actions in production without creating subscription records', async () => {
+      config['app.nodeEnv'] = 'production';
+      await expect(service.createCheckoutSession(mockCompanyId)).rejects.toMatchObject({ status: 503 });
+      await expect(service.createCustomerPortalSession(mockCompanyId)).rejects.toMatchObject({ status: 503 });
+      expect(prisma.subscription.create).not.toHaveBeenCalled();
+    });
+
+    it('uses the configured billing page for local demo redirects', async () => {
+      const checkout = await service.createCheckoutSession(mockCompanyId);
+      const portal = await service.createCustomerPortalSession(mockCompanyId);
+      expect(checkout).toMatchObject({ mode: 'sandbox', url: expect.stringMatching(/^https:\/\/zenhr\.example\.test\/dashboard\/billing\?session_id=/) });
+      expect(portal).toMatchObject({ mode: 'sandbox', url: expect.stringMatching(/^https:\/\/zenhr\.example\.test\/dashboard\/billing\?portal=/) });
+    });
+
+    it('explains why the portal cannot open for a company without a Stripe customer', async () => {
+      config.STRIPE_SECRET_KEY = 'sk_test_fixture';
+      const stripeService = new SubscriptionsService(prisma, new ConfigService(config), mailService);
+      prisma.subscription.findUnique.mockResolvedValue({ id: 'sub-1', stripeCustomerId: null });
+      await expect(stripeService.createCustomerPortalSession(mockCompanyId)).rejects.toThrow('once your company has a Stripe billing account');
+    });
   });
 
   describe('ensureSubscription', () => {

@@ -73,6 +73,7 @@ Sign out before switching roles, or open a separate private browser window for t
 | Acme Employee | Check in under **Attendance** and submit a remote-work request. Verify that the new request appears with a pending status. |
 | Acme Employee and Team Lead | Create a resource request as the employee. Check that Tina can act on the eligible reportee request and that approval controls are absent on her own request. |
 | Acme Team Lead | Compare dashboard and Attendance totals for the same day. Open a direct report’s profile and add an emergency contact. Reload to confirm it saved. |
+| Acme HR Manager | Onboard a synthetic employee from **Employees**. With SMTP unconfigured, the confirmation explains that the welcome email could not be sent and shows the temporary credentials. Use them to sign in as the new employee in a separate browser session. |
 | Acme HR Manager | In **Bulk Import**, download the spreadsheet template, add a row with a unique email and employee code, preview it, and confirm the import. Reload to check that the result remains available. |
 | Platform Operation Manager and Globex Company Admin | Check that the platform account has read-only company access and that Globex employee screens contain only Globex records. |
 | Acme HR Manager or Company Admin | Open the notification bell after an applicable workflow, mark items as read, and reload to check that the read status persists. |
@@ -87,13 +88,23 @@ The seeded accounts and core workflows work with the copied local environment. C
 |---|---|
 | Actual PDF upload and download | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. In Cloudinary, enable **Allow delivery of PDF and ZIP files** if required. The local storage simulation verifies application records and workflow. [Cloudinary delivery options](https://cloudinary.com/documentation/image_delivery_options) |
 | Live AI answers | `GEMINI_API_KEY`. `GEMINI_MODEL` is optional. The local demo uses built-in HR policy responses when the key is blank. |
-| Stripe checkout and webhooks | A Stripe test-mode `STRIPE_SECRET_KEY`, `STRIPE_BASIC_PRICE_ID`, `STRIPE_PREMIUM_PRICE_ID`, and `STRIPE_WEBHOOK_SECRET` for events forwarded to `/api/v1/subscriptions/webhook`. |
+| Stripe checkout and webhooks | A Stripe test-mode `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` for events forwarded to `/api/v1/subscriptions/webhook`. Activate the customer portal in the Stripe test account to test billing management after checkout. |
 | Email delivery and password setup links | `MAIL_HOST`, `MAIL_PORT`, `MAIL_SECURE`, `MAIL_USER`, `MAIL_PASSWORD`, and `MAIL_FROM_ADDRESS`. Use a test SMTP inbox for demo recipients. |
 | Authenticator setup | Generate a local key with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"` and save it as `TOTP_ENCRYPTION_KEY`. Keep the same key across restarts. |
 
 ## 7. Run tests or stop the demo
 
-For backend tests, run `npm run test --workspace=apps/backend -- --runInBand`. For browser tests, leave both servers running, run `npx playwright install chromium`, and set `ZENHR_E2E_DATABASE_URL` to the local demo database URL shown above. In PowerShell use `$env:ZENHR_E2E_DATABASE_URL = $env:DATABASE_URL`. On macOS or Linux use `export ZENHR_E2E_DATABASE_URL="$DATABASE_URL"`. Run `npm run test:e2e -- --project chromium`. The browser suite creates and changes fixture records, so use a disposable demo database.
+For backend tests, run `npm run test --workspace=apps/backend -- --runInBand`. For browser tests, leave both servers running and run `npx playwright install chromium`. In the terminal where you will run Playwright, set the fixture database URL directly.
+
+```powershell
+$env:ZENHR_E2E_DATABASE_URL = 'postgresql://zenhr:zenhr_secret@localhost:5432/zenhr_db?schema=public'
+```
+
+```bash
+export ZENHR_E2E_DATABASE_URL='postgresql://zenhr:zenhr_secret@localhost:5432/zenhr_db?schema=public'
+```
+
+Run `npm run test:e2e -- --project chromium`. The browser suite creates and changes fixture records, so use a disposable demo database.
 
 If setup fails, run `docker compose ps` to check both containers. For port conflicts, stop the local service occupying the listed port or update the Compose port and its matching environment variable together. If PowerShell blocks `npm.ps1`, use `npm.cmd` and `npx.cmd`.
 

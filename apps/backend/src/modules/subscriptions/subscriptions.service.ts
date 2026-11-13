@@ -35,7 +35,9 @@ export class SubscriptionsService {
     if (stripeKey && !stripeKey.includes('mock')) {
       this.stripe = new Stripe(stripeKey, { apiVersion: '2024-06-20' as any });
     } else {
-      this.logger.warn('Stripe secret key unconfigured; operating in deterministic sandbox simulation mode.');
+      this.logger.warn(this.configService.get<string>('app.nodeEnv') === 'production'
+        ? 'Stripe secret key unconfigured; payment actions are unavailable.'
+        : 'Stripe secret key unconfigured; using the local billing simulation.');
     }
   }
 
@@ -155,21 +157,25 @@ export class SubscriptionsService {
   /**
    * Generate Stripe Checkout Session URL for plan upgrade.
    */
-  async createCheckoutSession(companyId: string, returnUrl: string) {
+  async createCheckoutSession(companyId: string) {
+    if (!companyId) throw new BadRequestException('A company account is required to start checkout.');
     const company = await this.prisma.company.findUnique({ where: { id: companyId } });
     if (!company) throw new NotFoundException('Company not found.');
 
-    const sub = await this.ensureSubscription(companyId);
+    const returnUrl = this.billingReturnUrl();
 
     if (!this.stripe) {
-      // Deterministic Sandbox mock URL
+      if (this.configService.get<string>('app.nodeEnv') === 'production') {
+        throw new ServiceUnavailableException('Stripe checkout is unavailable. Contact your platform administrator.');
+      }
       return {
         url: `${returnUrl}?session_id=mock_checkout_premium_${Date.now()}`,
         mode: 'sandbox',
       };
     }
 
-    const session = await (this.stripe.checkout.sessions.create as any)({
+    await this.ensureSubscription(companyId);
+    const params: StripeType.Checkout.SessionCreateParams & { payment_method_types: ['card'] } = {
       payment_method_types: ['card'],
       mode: 'subscription',
       line_items: [
@@ -189,30 +195,44 @@ export class SubscriptionsService {
       metadata: { companyId },
       success_url: `${returnUrl}?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${returnUrl}?cancelled=true`,
-    });
+    };
+    const session = await this.stripe.checkout.sessions.create(params);
 
+    if (!session.url) throw new ServiceUnavailableException('Stripe did not return a checkout link. Please try again.');
     return { url: session.url, mode: 'live' };
   }
 
   /**
    * Generate Stripe Customer Portal URL for payment method management.
    */
-  async createCustomerPortalSession(companyId: string, returnUrl: string) {
-    const sub = await this.ensureSubscription(companyId);
+  async createCustomerPortalSession(companyId: string) {
+    if (!companyId) throw new BadRequestException('A company account is required to open the billing portal.');
+    const returnUrl = this.billingReturnUrl();
 
-    if (!this.stripe || !sub.stripeCustomerId) {
+    if (!this.stripe) {
+      if (this.configService.get<string>('app.nodeEnv') === 'production') {
+        throw new ServiceUnavailableException('The Stripe billing portal is unavailable. Contact your platform administrator.');
+      }
       return {
         url: `${returnUrl}?portal=mock_management_${Date.now()}`,
         mode: 'sandbox',
       };
     }
 
+    const sub = await this.ensureSubscription(companyId);
+    if (!sub.stripeCustomerId) {
+      throw new BadRequestException('The billing portal becomes available once your company has a Stripe billing account.');
+    }
     const session = await this.stripe.billingPortal.sessions.create({
       customer: sub.stripeCustomerId,
       return_url: returnUrl,
     });
 
     return { url: session.url, mode: 'live' };
+  }
+
+  private billingReturnUrl(): string {
+    return new URL('/dashboard/billing', this.configService.get<string>('app.frontendUrl', 'http://localhost:3000')).href;
   }
 
   /**

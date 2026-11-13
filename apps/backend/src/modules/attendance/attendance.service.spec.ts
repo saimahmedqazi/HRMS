@@ -75,6 +75,28 @@ describe('AttendanceService', () => {
     jest.clearAllMocks();
   });
 
+  describe('createRemotePermission', () => {
+    it.each([
+      ['2026-02-30', '2026-03-02', 'Fixture', 'valid start and end dates'],
+      ['2026-03-02', 'invalid', 'Fixture', 'valid start and end dates'],
+      ['2026-03-02T00:00:00Z', '2026-03-02', 'Fixture', 'valid start and end dates'],
+      ['2026-03-02', '2026-03-01', 'Fixture', 'earlier than start date'],
+      ['2026-03-02', '2026-03-02', '   ', 'Enter a reason'],
+    ])('rejects invalid input before writing (%s, %s)', async (startDate, endDate, reason, error) => {
+      await expect(service.createRemotePermission({ startDate, endDate, reason }, mockEmployeeUser)).rejects.toThrow(error);
+      expect(mockPrisma.remoteWorkPermission.create).not.toHaveBeenCalled();
+    });
+
+    it('stores a same-day request at UTC midnight', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-1' });
+      await service.createRemotePermission({ startDate: '2028-02-29', endDate: '2028-02-29', reason: ' Fixture ' }, mockEmployeeUser);
+      expect(mockPrisma.remoteWorkPermission.create).toHaveBeenCalledWith({ data: {
+        companyId: 'comp-1', employeeId: 'emp-1', startDate: new Date('2028-02-29'),
+        endDate: new Date('2028-02-29'), reason: 'Fixture', status: RemoteWorkStatus.PENDING,
+      } });
+    });
+  });
+
   describe('checkIn', () => {
     it('should throw ConflictException if already checked in today', async () => {
       mockPrisma.employee.findFirst.mockResolvedValueOnce({
@@ -302,6 +324,22 @@ describe('AttendanceService', () => {
   });
 
   describe('listAttendanceRecords (Data Scope Enforcement)', () => {
+    it.each([
+      { startDate: '2026-02-30' }, { endDate: 'invalid' },
+      { startDate: '2026-11-03', endDate: '2026-11-02' },
+    ])('rejects invalid date filters before querying attendance %j', async (filter) => {
+      await expect(service.listAttendanceRecords(mockEmployeeUser, filter)).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.attendanceRecord.findMany).not.toHaveBeenCalled();
+    });
+
+    it('queries the same UTC calendar day at both inclusive bounds', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-self-1' });
+      await service.listAttendanceRecords(mockEmployeeUser, { startDate: '2026-11-03', endDate: '2026-11-03' });
+      expect(mockPrisma.attendanceRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ date: { gte: new Date('2026-11-03'), lte: new Date('2026-11-03') } }),
+      }));
+    });
+
     it('should prevent EMPLOYEE from overriding SELF scope via filter.employeeId', async () => {
       mockPrisma.employee.findFirst.mockResolvedValueOnce({
         id: 'emp-self-1',

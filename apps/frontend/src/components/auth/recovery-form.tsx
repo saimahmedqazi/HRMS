@@ -34,6 +34,10 @@ export function RecoveryForm({ initialToken, resetOnly = false }: {
   const handleConfirmReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (new TextEncoder().encode(newPassword).length > 72) {
+      setError('Password must be at most 72 bytes in UTF-8.');
+      return;
+    }
     setIsLoading(true);
     try {
       await api.post('/auth/reset-password', {

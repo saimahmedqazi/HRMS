@@ -103,3 +103,78 @@ test('HR downloads the bulk template and an imported employee sets their own pas
     }
   }
 });
+
+test('manual onboarding skips a bulk-imported code and allocates distinct codes concurrently', async ({ request }) => {
+  const prisma = openFixtureDatabase();
+  const suffix = randomUUID().slice(0, 12);
+  const adminEmail = `onboarding-admin-${suffix}@example.test`;
+
+  try {
+    const registration = await request.post('/api/v1/auth/register', { data: {
+      companyName: `Onboarding Fixture ${suffix}`,
+      adminFirstName: 'Fixture', adminLastName: 'Admin', adminEmail,
+      adminPassword: 'OnboardingFixture@123',
+    } });
+    expect(registration.status()).toBe(201);
+    const { companyId } = (await registration.json()).data.user;
+    const [sick, annual] = await Promise.all([
+      prisma.leaveTypeSetting.findUniqueOrThrow({ where: { companyId_leaveType: { companyId, leaveType: 'SICK' } } }),
+      prisma.leaveTypeSetting.findUniqueOrThrow({ where: { companyId_leaveType: { companyId, leaveType: 'ANNUAL' } } }),
+    ]);
+    expect((await request.patch(`/api/v1/leave/types/${sick.id}`, { data: { annualAllocation: 3 } })).ok()).toBe(true);
+    expect((await request.patch(`/api/v1/leave/types/${annual.id}`, { data: { isActive: false } })).ok()).toBe(true);
+
+    const workbook = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.aoa_to_sheet([
+      ['firstName', 'lastName', 'email', 'employeeCode', 'hireDate'],
+      ['Imported', 'Fixture', `onboarding-import-${suffix}@example.test`, 'EMP-003', '2025-01-15'],
+    ]), 'Employees');
+    const submitted = await request.post('/api/v1/employees/bulk/execute', { multipart: { file: {
+      name: 'onboarding-fixture.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      buffer: xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' }),
+    } } });
+    expect(submitted.status()).toBe(202);
+    const { id } = (await submitted.json()).data;
+    await expect.poll(async () => {
+      const result = await request.get(`/api/v1/employees/bulk/jobs/${id}`);
+      return (await result.json()).data;
+    }).toMatchObject({ status: 'COMPLETED', importedCount: 1 });
+
+    const responses = await Promise.all([1, 2, 3].map((index) => request.post('/api/v1/employees', { data: {
+      firstName: 'Manual', lastName: 'Fixture', email: `onboarding-manual-${suffix}-${index}@example.test`,
+    } })));
+    expect(responses.map((response) => response.status())).toEqual([201, 201, 201]);
+    const codes = await Promise.all(responses.map(async (response) => (await response.json()).data.employeeCode));
+    expect(codes.sort()).toEqual(['EMP-004', 'EMP-005', 'EMP-006']);
+
+    const employees = await prisma.employee.findMany({
+      where: { companyId, employeeCode: { in: ['EMP-003', ...codes] } },
+      include: { leaveBalances: { orderBy: { leaveType: 'asc' } }, shifts: true },
+    });
+    const shift = await prisma.shift.findFirstOrThrow({ where: { companyId, isDefault: true } });
+    const year = new Date().getFullYear();
+    expect(employees).toHaveLength(4);
+    for (const employee of employees) {
+      expect(employee.leaveBalances).toMatchObject([{ leaveType: 'CASUAL', year, allocated: 10 }, { leaveType: 'SICK', year, allocated: 3 }]);
+      expect(employee.shifts).toMatchObject([{ shiftId: shift.id }]);
+    }
+    const importedEmployee = employees.find(({ employeeCode }) => employeeCode === 'EMP-003')!;
+    const balances = await request.get(`/api/v1/leave/balances?employeeId=${importedEmployee.id}`);
+    expect(balances.ok()).toBe(true);
+    expect((await balances.json()).data.map(({ leaveType }: { leaveType: string }) => leaveType).sort()).toEqual(['CASUAL', 'SICK']);
+  } finally {
+    try {
+      const company = await prisma.company.findUnique({ where: { email: adminEmail }, select: { id: true } });
+      if (company) {
+        await prisma.$transaction([
+          prisma.employee.deleteMany({ where: { companyId: company.id } }),
+          prisma.user.deleteMany({ where: { companyId: company.id } }),
+          prisma.company.delete({ where: { id: company.id } }),
+        ]);
+      }
+    } finally {
+      await prisma.$disconnect();
+    }
+  }
+});

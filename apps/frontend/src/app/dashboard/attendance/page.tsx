@@ -231,9 +231,6 @@ export default function AttendanceDashboardPage() {
       setRemoteReason('');
       alert('Remote work request submitted successfully.');
     },
-    onError: (err: any) => {
-      alert(err?.response?.data?.message || err?.message || 'Failed to submit remote work request.');
-    },
   });
 
   const step1ApproveMutation = useMutation({
@@ -767,6 +764,7 @@ export default function AttendanceDashboardPage() {
                 (r) => r.status === 'ABSENT',
               ).length;
               const dayReview = dayRecords.filter((r) => r.status === 'ABSENT_PENDING_REVIEW').length;
+              const dayOnLeave = dayRecords.filter((r) => r.status === 'ON_LEAVE').length;
               const singleStatus = dayRecords[0]?.status ?? (isToday ? attendance?.status : null);
 
               let cellBadge = null;
@@ -778,6 +776,7 @@ export default function AttendanceDashboardPage() {
                     </span>
                     {dayAbsent > 0 && <span title="Absent" className="rounded bg-rose-100 px-1 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">{dayAbsent} A</span>}
                     {dayReview > 0 && <span title="Pending review" className="rounded bg-amber-100 px-1 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">{dayReview} R</span>}
+                    {dayOnLeave > 0 && <span title="On Leave" className="rounded bg-indigo-100 px-1 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">{dayOnLeave} L</span>}
                   </div>
                 );
               } else if (singleStatus) {
@@ -961,7 +960,10 @@ export default function AttendanceDashboardPage() {
           </div>
           <button
             type="button"
-            onClick={() => setShowRemoteModal(true)}
+            onClick={() => {
+              createRemoteMutation.reset();
+              setShowRemoteModal(true);
+            }}
             className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500"
           >
             <Plus className="h-3.5 w-3.5" /> New Remote Work Request
@@ -1010,7 +1012,7 @@ export default function AttendanceDashboardPage() {
                         </span>
                       </td>
                       <td className="py-2.5 px-3 font-semibold text-zinc-700 dark:text-zinc-300">
-                        {new Date(perm.startDate).toLocaleDateString()} — {new Date(perm.endDate).toLocaleDateString()}
+                        {new Date(perm.startDate).toLocaleDateString(undefined, { timeZone: 'UTC' })} — {new Date(perm.endDate).toLocaleDateString(undefined, { timeZone: 'UTC' })}
                       </td>
                       <td className="py-2.5 px-3 text-zinc-600 dark:text-zinc-400 max-w-xs truncate">
                         {perm.reason}
@@ -1074,6 +1076,7 @@ export default function AttendanceDashboardPage() {
               <button
                 type="button"
                 onClick={() => setShowRemoteModal(false)}
+                disabled={createRemoteMutation.isPending}
                 className="text-zinc-400 hover:text-zinc-600 text-lg leading-none"
               >
                 &times;
@@ -1108,6 +1111,7 @@ export default function AttendanceDashboardPage() {
                 <input
                   type="date"
                   required
+                  min={remoteStartDate || undefined}
                   value={remoteEndDate}
                   onChange={(e) => setRemoteEndDate(e.target.value)}
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
@@ -1120,6 +1124,7 @@ export default function AttendanceDashboardPage() {
                 </label>
                 <textarea
                   required
+                  maxLength={500}
                   rows={3}
                   value={remoteReason}
                   onChange={(e) => setRemoteReason(e.target.value)}
@@ -1128,10 +1133,14 @@ export default function AttendanceDashboardPage() {
                 />
               </div>
 
+              {createRemoteMutation.isError && (
+                <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">{createRemoteMutation.error.message}</p>
+              )}
               <div className="flex justify-end gap-2 pt-3 border-t border-zinc-200 dark:border-zinc-800">
                 <button
                   type="button"
                   onClick={() => setShowRemoteModal(false)}
+                  disabled={createRemoteMutation.isPending}
                   className="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300"
                 >
                   Cancel

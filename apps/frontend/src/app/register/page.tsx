@@ -10,12 +10,13 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 const registerSchema = z.object({
-  companyName: z.string().min(2, 'Company name must be at least 2 characters'),
+  companyName: z.string().trim().min(2, 'Company name must be at least 2 characters'),
   companyEmail: z.string().email().optional().or(z.literal('')),
-  adminFirstName: z.string().min(1, 'First name is required'),
-  adminLastName: z.string().min(1, 'Last name is required'),
+  adminFirstName: z.string().trim().min(1, 'First name is required'),
+  adminLastName: z.string().trim().min(1, 'Last name is required'),
   adminEmail: z.string().email('Please enter a valid email address'),
-  adminPassword: z.string().min(8, 'Password must be at least 8 characters'),
+  adminPassword: z.string().min(8, 'Password must be at least 8 characters')
+    .refine((password) => new TextEncoder().encode(password).length <= 72, 'Password must be at most 72 bytes in UTF-8.'),
 });
 
 type RegisterFormData = z.infer<typeof registerSchema>;

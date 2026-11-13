@@ -63,6 +63,7 @@ describe('EmployeesService', () => {
       findFirst: jest.fn(),
       delete: jest.fn(),
     },
+    $queryRaw: jest.fn(),
     $transaction: jest.fn((callback: any): any => callback(mockPrisma)),
   };
 
@@ -101,6 +102,18 @@ describe('EmployeesService', () => {
   });
 
   describe('onboardEmployee', () => {
+    it.each([
+      { hireDate: '2026-02-30' },
+      { hireDate: 'not-a-date' },
+      { dateOfBirth: '1995-02-29' },
+      { dateOfBirth: '2099-01-01' },
+    ])('rejects invalid dates before creating an employee %j', async (dates) => {
+      await expect(service.onboardEmployee({
+        firstName: 'QA', lastName: 'Employee', email: 'employee@example.test', ...dates,
+      }, mockAdminUser)).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
     it('rejects roles outside the tenant onboarding role list before writing a user', async () => {
       await expect(service.onboardEmployee({
         firstName: 'QA',
@@ -126,9 +139,15 @@ describe('EmployeesService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
-    it('should onboard employee, create user, default shift, and leave balances', async () => {
+    it.each([
+      { lastCode: 'EMP-005', nextCode: 'EMP-006', welcomeEmailSent: true },
+      { lastCode: 'emp-006', nextCode: 'EMP-007', welcomeEmailSent: false },
+    ])('onboards with $nextCode when the last employee uses $lastCode', async ({ lastCode, nextCode, welcomeEmailSent }) => {
+      mockMailService.sendMail.mockResolvedValueOnce(welcomeEmailSent);
       mockPrisma.user.findUnique.mockResolvedValueOnce(null);
-      mockPrisma.employee.count.mockResolvedValueOnce(5);
+      mockPrisma.employee.findMany.mockResolvedValueOnce([
+        'EMP-001', 'EMP-002', 'EMP-003', 'EMP-004', lastCode,
+      ].map((employeeCode) => ({ employeeCode })));
       mockPrisma.user.create.mockResolvedValueOnce({
         id: 'new-user-id',
         email: 'sarah@acme.com',
@@ -136,7 +155,7 @@ describe('EmployeesService', () => {
       });
       mockPrisma.employee.create.mockResolvedValueOnce({
         id: 'new-emp-id',
-        employeeCode: 'EMP-006',
+        employeeCode: nextCode,
         firstName: 'Sarah',
         lastName: 'Connor',
         status: EmployeeStatus.ON_PROBATION,
@@ -153,11 +172,18 @@ describe('EmployeesService', () => {
           firstName: 'Sarah',
           lastName: 'Connor',
           email: 'sarah@acme.com',
+          hireDate: '2025-01-15',
+          salary: 0,
         },
         mockAdminUser,
       );
 
-      expect(result.employeeCode).toBe('EMP-006');
+      expect(result.employeeCode).toBe(nextCode);
+      expect(result.welcomeEmailSent).toBe(welcomeEmailSent);
+      expect(result.tempPassword).toBeTruthy();
+      expect(mockPrisma.employee.findMany).toHaveBeenCalledWith({
+        where: { companyId: mockAdminUser.companyId }, select: { employeeCode: true },
+      });
       expect(result.status).toBe(EmployeeStatus.ON_PROBATION);
       expect(mockPrisma.employeeShift.create).toHaveBeenCalledWith({
         data: { companyId: mockAdminUser.companyId, employeeId: 'new-emp-id', shiftId: 'default-shift', effectiveFrom: expect.any(Date) },
@@ -165,8 +191,11 @@ describe('EmployeesService', () => {
       expect(mockPrisma.employee.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            employeeCode: 'EMP-006',
+            employeeCode: nextCode,
             firstName: 'Sarah',
+            hireDate: new Date('2025-01-15'),
+            probationEndDate: new Date('2025-04-15'),
+            baseSalary: 0,
             status: EmployeeStatus.ON_PROBATION,
           }),
         }),

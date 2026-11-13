@@ -5,11 +5,14 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { NotificationType, UserRole } from '@prisma/client';
+import { NotificationType, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { PdfService } from './pdf.service';
 import { CreatePayrollStructureDto } from './dto/create-payroll-structure.dto';
 import { ExecutePayrollRunDto } from './dto/execute-payroll-run.dto';
+import { DEFAULT_TAX_BRACKETS, PayrollComponent, PayrollTaxRules, readPayrollConfiguration, validatePayrollAmounts } from './payroll-configuration';
+
+const PAYROLL_TRANSACTION = { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 60_000 };
 
 @Injectable()
 export class PayrollService {
@@ -23,14 +26,19 @@ export class PayrollService {
   /**
    * Ensure default salary structure exists for the company.
    */
-  async ensureDefaultStructure(companyId: string) {
-    const existing = await this.prisma.payrollStructure.findFirst({
+  private async lockPayroll(tx: Prisma.TransactionClient, companyId: string): Promise<void> {
+    await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${`zenhr-payroll:${companyId}`}, 0))`;
+  }
+
+  private async ensureDefaultStructure(tx: Prisma.TransactionClient, companyId: string) {
+    const existing = await tx.payrollStructure.findFirst({
       where: { companyId, isDefault: true, deletedAt: null },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
 
     if (existing) return existing;
 
-    return this.prisma.payrollStructure.create({
+    return tx.payrollStructure.create({
       data: {
         companyId,
         name: 'Default Standard Package',
@@ -40,13 +48,7 @@ export class PayrollService {
           { name: 'Transport Allowance', type: 'ALLOWANCE', value: 2000, isPercentage: false },
           { name: 'Provident Fund / Insurance', type: 'DEDUCTION', value: 1500, isPercentage: false },
         ],
-        taxRules: {
-          brackets: [
-            { min: 0, max: 30000, rate: 0 },
-            { min: 30000, max: 80000, rate: 0.1 },
-            { min: 80000, max: null, rate: 0.2 },
-          ],
-        },
+        taxRules: { brackets: DEFAULT_TAX_BRACKETS },
         isDefault: true,
       },
     });
@@ -56,34 +58,45 @@ export class PayrollService {
    * List all payroll structures for a company.
    */
   async getStructures(companyId: string) {
-    await this.ensureDefaultStructure(companyId);
-    return this.prisma.payrollStructure.findMany({
+    const query = {
       where: { companyId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
-    });
+    } satisfies Prisma.PayrollStructureFindManyArgs;
+    const existing = await this.prisma.payrollStructure.findMany(query);
+    if (existing.some((structure) => structure.isDefault)) return existing;
+
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockPayroll(tx, companyId);
+      await this.ensureDefaultStructure(tx, companyId);
+      return tx.payrollStructure.findMany(query);
+    }, PAYROLL_TRANSACTION);
   }
 
   /**
    * Create a new custom payroll structure.
    */
   async createStructure(companyId: string, dto: CreatePayrollStructureDto) {
-    if (dto.isDefault) {
-      await this.prisma.payrollStructure.updateMany({
-        where: { companyId },
-        data: { isDefault: false },
+    validatePayrollAmounts([dto.baseSalary]);
+    const configuration = readPayrollConfiguration(dto.components, dto.taxRules);
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockPayroll(tx, companyId);
+      if (dto.isDefault) {
+        await tx.payrollStructure.updateMany({
+          where: { companyId, isDefault: true },
+          data: { isDefault: false },
+        });
+      }
+      return tx.payrollStructure.create({
+        data: {
+          companyId,
+          name: dto.name,
+          baseSalary: dto.baseSalary,
+          components: configuration.components,
+          taxRules: configuration.taxRules,
+          isDefault: dto.isDefault ?? false,
+        },
       });
-    }
-
-    return this.prisma.payrollStructure.create({
-      data: {
-        companyId,
-        name: dto.name,
-        baseSalary: dto.baseSalary,
-        components: dto.components as any,
-        taxRules: dto.taxRules,
-        isDefault: dto.isDefault ?? false,
-      },
-    });
+    }, PAYROLL_TRANSACTION);
   }
 
   /**
@@ -91,16 +104,16 @@ export class PayrollService {
    */
   calculatePayrollFigures(
     baseSalary: number,
-    components: any[] = [],
-    taxRules?: any,
+    components: PayrollComponent[] = [],
+    taxRules?: PayrollTaxRules,
   ) {
     let allowances = 0;
     let deductions = 0;
 
     for (const comp of components) {
       const amount = comp.isPercentage
-        ? (baseSalary * Number(comp.value)) / 100
-        : Number(comp.value);
+        ? (baseSalary * comp.value) / 100
+        : comp.value;
 
       if (comp.type === 'ALLOWANCE') {
         allowances += amount;
@@ -114,31 +127,31 @@ export class PayrollService {
 
     // Progressive tax calculation
     let taxAmount = 0;
-    const brackets = taxRules?.brackets || [
-      { min: 0, max: 30000, rate: 0 },
-      { min: 30000, max: 80000, rate: 0.1 },
-      { min: 80000, max: null, rate: 0.2 },
-    ];
+    const brackets = taxRules?.brackets ?? DEFAULT_TAX_BRACKETS;
 
     for (const bracket of brackets) {
       if (taxableIncome > bracket.min) {
         const upper = bracket.max !== null ? Math.min(taxableIncome, bracket.max) : taxableIncome;
         const taxablePortion = upper - bracket.min;
         if (taxablePortion > 0) {
-          taxAmount += taxablePortion * Number(bracket.rate);
+          taxAmount += taxablePortion * bracket.rate;
         }
       }
     }
 
     const netSalary = Math.max(0, grossSalary - deductions - taxAmount);
 
-    return {
+    const amounts = {
       baseSalary,
       allowances: Math.round(allowances * 100) / 100,
       bonuses: 0,
       deductions: Math.round(deductions * 100) / 100,
       taxAmount: Math.round(taxAmount * 100) / 100,
       netSalary: Math.round(netSalary * 100) / 100,
+    };
+    validatePayrollAmounts(Object.values(amounts));
+    return {
+      ...amounts,
       breakdown: {
         components,
         grossSalary,
@@ -156,19 +169,23 @@ export class PayrollService {
     userId: string,
     dto: ExecutePayrollRunDto,
   ) {
-    const defaultStructure = await this.ensureDefaultStructure(companyId);
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockPayroll(tx, companyId);
+      return this.writePayrollRun(tx, companyId, userId, dto);
+    }, PAYROLL_TRANSACTION);
+  }
 
-    const employees = await this.prisma.employee.findMany({
+  private async writePayrollRun(tx: Prisma.TransactionClient, companyId: string, userId: string, dto: ExecutePayrollRunDto) {
+    const defaultStructure = await this.ensureDefaultStructure(tx, companyId);
+    const configuration = readPayrollConfiguration(defaultStructure.components, defaultStructure.taxRules);
+
+    const employees = await tx.employee.findMany({
       where: {
         companyId,
         status: { in: ['ACTIVE', 'ON_PROBATION'] },
         deletedAt: null,
       },
-      include: {
-        user: true,
-        department: true,
-        designation: true,
-      },
+      select: { id: true, userId: true, baseSalary: true },
     });
 
     if (employees.length === 0) {
@@ -177,6 +194,13 @@ export class PayrollService {
 
     const createdPayslips = [];
     let totalNet = 0;
+    const period = { companyId, month: dto.month, year: dto.year };
+    const existing = await tx.payslip.findMany({
+      where: period,
+      select: { employeeId: true, status: true, netSalary: true },
+    });
+    const previousPayslips = new Map(existing.map((payslip) => [payslip.employeeId, payslip]));
+    const generatedAt = new Date();
 
     for (const employee of employees) {
       const baseSalary = employee.baseSalary
@@ -185,48 +209,29 @@ export class PayrollService {
 
       const figures = this.calculatePayrollFigures(
         baseSalary,
-        defaultStructure.components as any[],
-        defaultStructure.taxRules,
+        configuration.components,
+        configuration.taxRules,
       );
 
-      const payslip = await this.prisma.payslip.upsert({
+      const values = {
+        ...figures,
+        payrollStructureId: defaultStructure.id,
+        status: 'GENERATED',
+        generatedAt,
+        generatedById: userId,
+      };
+      const payslip = await tx.payslip.upsert({
         where: {
           companyId_employeeId_month_year: {
-            companyId,
+            ...period,
             employeeId: employee.id,
-            month: dto.month,
-            year: dto.year,
           },
         },
-        update: {
-          payrollStructureId: defaultStructure.id,
-          baseSalary: figures.baseSalary,
-          allowances: figures.allowances,
-          bonuses: figures.bonuses,
-          deductions: figures.deductions,
-          taxAmount: figures.taxAmount,
-          netSalary: figures.netSalary,
-          breakdown: figures.breakdown,
-          status: 'GENERATED',
-          generatedAt: new Date(),
-          generatedById: userId,
-        },
+        update: values,
         create: {
-          companyId,
+          ...period,
+          ...values,
           employeeId: employee.id,
-          payrollStructureId: defaultStructure.id,
-          month: dto.month,
-          year: dto.year,
-          baseSalary: figures.baseSalary,
-          allowances: figures.allowances,
-          bonuses: figures.bonuses,
-          deductions: figures.deductions,
-          taxAmount: figures.taxAmount,
-          netSalary: figures.netSalary,
-          breakdown: figures.breakdown,
-          status: 'GENERATED',
-          generatedAt: new Date(),
-          generatedById: userId,
         },
         include: {
           employee: {
@@ -241,8 +246,9 @@ export class PayrollService {
       totalNet += figures.netSalary;
       createdPayslips.push(payslip);
 
-      // In-app Notification for Employee
-      await this.prisma.notification.create({
+      const previous = previousPayslips.get(employee.id);
+      if (previous && previous.status !== 'DRAFT' && Number(previous.netSalary) === figures.netSalary) continue;
+      await tx.notification.create({
         data: {
           companyId,
           userId: employee.userId,

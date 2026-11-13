@@ -13,6 +13,7 @@ describe('BulkImportService', () => {
 
   beforeEach(async () => {
     prisma = {
+      $queryRaw: jest.fn(),
       user: {
         findMany: jest.fn().mockResolvedValue([{ email: 'existing@zenhr.com' }]),
         create: jest.fn().mockResolvedValue({ id: 'user-new' }),
@@ -29,6 +30,9 @@ describe('BulkImportService', () => {
         findUnique: jest.fn().mockResolvedValue({ id: 'desig-eng' }),
         create: jest.fn().mockResolvedValue({ id: 'desig-new' }),
       },
+      shift: { findFirst: jest.fn().mockResolvedValue({ id: 'shift-default' }) },
+      employeeShift: { create: jest.fn().mockResolvedValue({}) },
+      leaveTypeSetting: { findMany: jest.fn().mockResolvedValue([{ leaveType: 'SICK', annualAllocation: 3 }]) },
       leaveBalance: {
         createMany: jest.fn().mockResolvedValue({ count: 3 }),
       },
@@ -107,6 +111,30 @@ describe('BulkImportService', () => {
   });
 
   describe('prepared import rows', () => {
+    it('rejects calendar rollover in CSV and preserves the date of a valid row', async () => {
+      const buffer = Buffer.from([
+        'firstName,lastName,email,employeeCode,hireDate',
+        'Fixture,Invalid,invalid@example.test,EMP-101,2026-02-30',
+        'Fixture,Valid,valid@example.test,EMP-102,2026-02-28',
+      ].join('\n'));
+      const result = await service.prepareImport(mockCompanyId, buffer);
+      expect(result.errors).toMatchObject([{ row: 2, field: 'hireDate' }]);
+      expect(result.validRows[0].employee.hireDate).toBe('2026-02-28T00:00:00.000Z');
+    });
+
+    it.each([false, true])('keeps the calendar day of Excel serial dates with date1904=%s', async (date1904) => {
+      const workbook = xlsx.utils.book_new();
+      workbook.Workbook = { WBProps: { date1904 } };
+      const sheet = xlsx.utils.json_to_sheet([{
+        firstName: 'Fixture', lastName: 'Excel', email: 'excel@example.test',
+        employeeCode: 'EMP-101', hireDate: 46036 - (date1904 ? 1462 : 0),
+      }]);
+      sheet.E2.z = 'yyyy-mm-dd';
+      xlsx.utils.book_append_sheet(workbook, sheet, 'Employees');
+      const result = await service.prepareImport(mockCompanyId, xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' }));
+      expect(result.errors).toEqual([]);
+      expect(result.validRows[0].employee.hireDate).toBe('2026-01-14T00:00:00.000Z');
+    });
     it('reports an invalid salary and preserves a zero salary in valid rows', async () => {
       const common = { firstName: 'Alice', lastName: 'Smith', hireDate: '2026-01-15' };
       const buffer = createMockExcelBuffer([
@@ -154,7 +182,26 @@ describe('BulkImportService', () => {
         data: expect.objectContaining({ passwordHash: PASSWORD_SETUP_REQUIRED }),
       }));
       expect(prisma.employee.create).toHaveBeenCalled();
-      expect(prisma.leaveBalance.createMany).toHaveBeenCalled();
+      expect(prisma.leaveTypeSetting.findMany).toHaveBeenCalledWith({
+        where: { companyId: mockCompanyId, isActive: true },
+        select: { leaveType: true, annualAllocation: true },
+      });
+      expect(prisma.leaveBalance.createMany).toHaveBeenCalledWith({ data: [{
+        companyId: mockCompanyId, employeeId: 'emp-new', leaveType: 'SICK', year: new Date().getFullYear(), allocated: 3,
+      }] });
+      expect(prisma.employeeShift.create).toHaveBeenCalledWith({ data: {
+        companyId: mockCompanyId, employeeId: 'emp-new', shiftId: 'shift-default', effectiveFrom: expect.any(Date),
+      } });
+    });
+
+    it('leaves unconfigured shifts and allowances for the company to set', async () => {
+      prisma.shift.findFirst.mockResolvedValueOnce(null);
+      prisma.leaveTypeSetting.findMany.mockResolvedValueOnce([]);
+      await service.importEmployee(prisma, mockCompanyId, {
+        firstName: 'Fixture', lastName: 'Import', email: 'fixture@example.test', employeeCode: 'EMP-101', hireDate: '2025-01-15',
+      });
+      expect(prisma.employeeShift.create).not.toHaveBeenCalled();
+      expect(prisma.leaveBalance.createMany).not.toHaveBeenCalled();
     });
   });
 });

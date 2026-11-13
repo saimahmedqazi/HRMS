@@ -6,14 +6,16 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { formatWorkDuration } from '@/lib/attendance-duration';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { ArrowLeft, Calendar, Search } from 'lucide-react';
+import { ArrowLeft, Calendar } from 'lucide-react';
 
 export default function AttendanceHistoryPage() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const invalidRange = Boolean(startDate && endDate && endDate < startDate);
 
-  const { data: recordsData, isLoading } = useQuery({
+  const { data: recordsData, isLoading, isError, error } = useQuery({
     queryKey: ['attendance-records', startDate, endDate],
+    enabled: !invalidRange,
     queryFn: () => {
       const params = new URLSearchParams();
       if (startDate) params.append('startDate', startDate);
@@ -48,22 +50,25 @@ export default function AttendanceHistoryPage() {
       {/* Date Filter Bar */}
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
         <div>
-          <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+          <label htmlFor="history-start-date" className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
             Start Date
           </label>
           <input
             type="date"
+            id="history-start-date"
             value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
             className="mt-1 block rounded-lg border border-zinc-300 px-3 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800"
           />
         </div>
         <div>
-          <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+          <label htmlFor="history-end-date" className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
             End Date
           </label>
           <input
             type="date"
+            id="history-end-date"
+            min={startDate || undefined}
             value={endDate}
             onChange={(e) => setEndDate(e.target.value)}
             className="mt-1 block rounded-lg border border-zinc-300 px-3 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800"
@@ -101,6 +106,12 @@ export default function AttendanceHistoryPage() {
               <tr>
                 <td colSpan={6} className="py-6 text-center text-sm text-zinc-500">
                   Loading attendance records...
+                </td>
+              </tr>
+            ) : invalidRange || isError ? (
+              <tr>
+                <td colSpan={6} className="py-6 text-center text-sm text-rose-700 dark:text-rose-300">
+                  <span role="alert">{invalidRange ? 'End date cannot be earlier than start date.' : error?.message}</span>
                 </td>
               </tr>
             ) : records.length === 0 ? (

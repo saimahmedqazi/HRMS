@@ -18,6 +18,8 @@ zenhr/
 
 Use the [client handoff](CLIENT_HANDOFF.md) to download the repository, run it locally, sign in with demo accounts, and test the main workflows.
 
+`CLIENT_HANDOFF.md` supersedes the archived Word and PDF release handoffs. Use Node.js 24 and the setup commands in the repository guide.
+
 ### Environment Variables
 
 Copy and configure:

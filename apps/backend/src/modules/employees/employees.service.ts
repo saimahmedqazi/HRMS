@@ -8,17 +8,21 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { lockEmployeeOnboarding } from '../../common/prisma/employee-onboarding-lock';
+import { initializeEmployeePolicies } from '../../common/prisma/initialize-employee-policies';
 import { DataScopeService } from '../../common/services/data-scope.service';
 import { MailService } from '../../common/mail/mail.service';
 import { StorageService, DEFAULT_IMAGE_MIMES, DEFAULT_DOCUMENT_MIMES } from '../../common/storage/storage.service';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { getLoginNetworkLocation } from '../../common/utils/login-network-location';
+import { getProbationEndDate, parseEmployeeDate } from '../../common/utils/employee-dates';
 import {
   UserRole,
   Employee,
   EmployeeStatus,
   AuditAction,
   NotificationType,
+  Prisma,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
@@ -205,6 +209,9 @@ export class EmployeesService {
 
     const profile = {
       ...employee,
+      probationEndDate: employee.status === EmployeeStatus.ON_PROBATION
+        ? getProbationEndDate(employee.hireDate)
+        : employee.probationEndDate,
       user: employee.user ? {
         ...employee.user,
         ...getLoginNetworkLocation(employee.user.lastLoginIp),
@@ -226,6 +233,13 @@ export class EmployeesService {
     const role = dto.role || UserRole.EMPLOYEE;
     if (!EMPLOYEE_ONBOARDING_ROLES.includes(role)) {
       throw new ForbiddenException('This role cannot be assigned through employee onboarding');
+    }
+
+    const hireDate = dto.hireDate ? parseEmployeeDate(dto.hireDate) : new Date();
+    if (!hireDate) throw new BadRequestException('Hire date must be a valid calendar date (YYYY-MM-DD).');
+    const dateOfBirth = dto.dateOfBirth ? parseEmployeeDate(dto.dateOfBirth) : null;
+    if (dto.dateOfBirth && (!dateOfBirth || dateOfBirth.getTime() > Date.now())) {
+      throw new BadRequestException('Date of birth must be a valid date that is not in the future.');
     }
 
     // 1. Check email uniqueness
@@ -266,17 +280,22 @@ export class EmployeesService {
       if (!manager) throw new BadRequestException('Reporting manager not found in this company');
     }
 
-    // 4. Generate next employee code
-    const count = await this.prisma.employee.count({ where: { companyId } });
-    const employeeCode = `EMP-${String(count + 1).padStart(3, '0')}`;
-
-    // 5. Generate random initial password
+    // Generate the initial password before opening the database transaction.
     const tempPassword = `ZenHR@${crypto.randomBytes(3).toString('hex')}!`;
     const passwordHash = await bcrypt.hash(tempPassword, 10);
     const dataScope = this.dataScopeService.getScope(role);
 
-    // 6. Execute atomic creation
     const result = await this.prisma.$transaction(async (tx) => {
+      await lockEmployeeOnboarding(tx, companyId);
+      const existingEmployees = await tx.employee.findMany({ where: { companyId }, select: { employeeCode: true } });
+      const usedCodes = new Set(existingEmployees.map(({ employeeCode }) => employeeCode.toUpperCase()));
+      let employeeNumber = existingEmployees.length + 1;
+      let employeeCode = `EMP-${String(employeeNumber).padStart(3, '0')}`;
+      while (usedCodes.has(employeeCode)) {
+        employeeNumber++;
+        employeeCode = `EMP-${String(employeeNumber).padStart(3, '0')}`;
+      }
+
       // Create user account
       const newUser = await tx.user.create({
         data: {
@@ -298,62 +317,30 @@ export class EmployeesService {
           firstName: dto.firstName,
           lastName: dto.lastName,
           phone: dto.phone,
-          dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : null,
+          dateOfBirth,
           gender: dto.gender,
           nationality: dto.nationality,
           address: dto.address,
           city: dto.city,
           country: dto.country,
-          hireDate: dto.hireDate ? new Date(dto.hireDate) : new Date(),
-          probationEndDate: new Date(Date.now() + 90 * 86400000), // 3 months default
+          hireDate,
+          probationEndDate: getProbationEndDate(hireDate),
           status: EmployeeStatus.ON_PROBATION,
           departmentId: dto.departmentId,
           designationId: dto.designationId,
           teamId: dto.teamId,
           reportingManagerId: dto.reportingManagerId,
-          baseSalary: dto.salary ? dto.salary : undefined,
+          baseSalary: dto.salary,
         },
       });
 
-      // Assign default shift if one exists
-      const defaultShift = await tx.shift.findFirst({
-        where: { companyId, isDefault: true },
-      });
-      if (defaultShift) {
-        await tx.employeeShift.create({
-          data: {
-            companyId,
-            employeeId: employee.id,
-            shiftId: defaultShift.id,
-            effectiveFrom: new Date(),
-          },
-        });
-      }
-
-      // Initialize leave balances for all active leave types
-      const leaveTypes = await tx.leaveTypeSetting.findMany({
-        where: { companyId, isActive: true },
-      });
-      if (leaveTypes.length > 0) {
-        await tx.leaveBalance.createMany({
-          data: leaveTypes.map((lt) => ({
-            companyId,
-            employeeId: employee.id,
-            leaveType: lt.leaveType,
-            year: new Date().getFullYear(),
-            allocated: lt.annualAllocation,
-            used: 0,
-            pending: 0,
-            carried: 0,
-          })),
-        });
-      }
+      await initializeEmployeePolicies(tx, companyId, employee.id);
 
       return { user: newUser, employee, tempPassword };
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
 
     // Send welcome credentials email
-    await this.mailService.sendMail({
+    const welcomeEmailSent = await this.mailService.sendMail({
       to: dto.email,
       subject: 'Welcome to ZenHR — Your Account Credentials',
       html: `
@@ -377,6 +364,7 @@ export class EmployeesService {
       role: result.user.role,
       status: result.employee.status,
       tempPassword: result.tempPassword,
+      welcomeEmailSent,
     };
   }
 

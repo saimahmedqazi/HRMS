@@ -8,8 +8,11 @@ on:
 
 jobs:
   test-and-verify:
-    name: Lint, Typecheck & Test Suite
+    name: Typecheck, Build & Test
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://zenhr:zenhr_password@127.0.0.1:5432/zenhr_test?schema=public
+      REDIS_URL: redis://127.0.0.1:6379
 
     services:
       postgres:
@@ -58,19 +61,40 @@ jobs:
       - name: Frontend Typecheck
         run: npm run typecheck --workspace=apps/frontend
 
-      - name: Verify PostgreSQL Tenant Constraints
+      - name: Migrate and Seed Test Database
         env:
-          DATABASE_URL: postgresql://zenhr:zenhr_password@localhost:5432/zenhr_test?schema=public
-          ZENHR_E2E_DATABASE_URL: postgresql://zenhr:zenhr_password@localhost:5432/zenhr_test?schema=public
+          NODE_ENV: test
         run: |
           npm run prisma:migrate:deploy --workspace=apps/backend
           npm run prisma:seed --workspace=apps/backend
-          npm run test:e2e -- e2e/16-tenant-relationships.spec.ts
 
-      - name: Execute Full Monorepo Test Suite
-        env:
-          DATABASE_URL: postgresql://zenhr:zenhr_password@localhost:5432/zenhr_test?schema=public
-          REDIS_URL: redis://localhost:6379
-          JWT_ACCESS_SECRET: test-jwt-access-secret-minimum-32-chars-long
-          JWT_REFRESH_SECRET: test-jwt-refresh-secret-minimum-32-chars-long
+      - name: Backend Unit Tests
         run: npm run test --workspace=apps/backend -- --runInBand --coverage
+
+      - name: Build Both Applications
+        env:
+          NEXT_PUBLIC_API_URL: http://127.0.0.1:4000
+        run: npm run build
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser and PostgreSQL Regression Tests
+        env:
+          API_BIND_HOST: 127.0.0.1
+          FRONTEND_URL: http://localhost:3000
+        run: |
+          export ZENHR_E2E_DATABASE_URL="$DATABASE_URL"
+          (cd apps/backend && NODE_ENV=development exec node dist/src/main.js) > "$RUNNER_TEMP/zenhr-api.log" 2>&1 &
+          api_pid=$!
+          (cd apps/frontend && exec node ../../node_modules/next/dist/bin/next start --hostname localhost) > "$RUNNER_TEMP/zenhr-web.log" 2>&1 &
+          web_pid=$!
+          trap 'kill "$api_pid" "$web_pid" 2>/dev/null || true' EXIT
+
+          if ! curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 --max-time 2 http://127.0.0.1:4000/api/docs > /dev/null ||
+             ! curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 --max-time 2 http://localhost:3000/login > /dev/null; then
+            cat "$RUNNER_TEMP/zenhr-api.log" "$RUNNER_TEMP/zenhr-web.log"
+            exit 1
+          fi
+
+          npm run test:e2e -- --project chromium

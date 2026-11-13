@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useRef, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
@@ -57,30 +57,42 @@ interface SidebarProps {
   onClose?: () => void;
 }
 
+const desktopViewport = '(min-width: 768px)';
+
+function subscribeToViewport(onChange: () => void) {
+  const viewport = window.matchMedia(desktopViewport);
+  viewport.addEventListener('change', onChange);
+  return () => viewport.removeEventListener('change', onChange);
+}
+
 export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
   const { user, allowedModules, logout } = useAuth();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const isDesktop = useSyncExternalStore(
+    subscribeToViewport,
+    () => window.matchMedia(desktopViewport).matches,
+    () => true,
+  );
+
+  useEffect(() => {
+    if (isDesktop && isOpen) {
+      onClose?.();
+      return;
+    }
+    const dialog = dialogRef.current;
+    if (isOpen && dialog && !dialog.open) dialog.showModal();
+    if (!isOpen && dialog?.open) dialog.close();
+  }, [isOpen, isDesktop, onClose]);
 
   // Filter navigation items strictly based on server-driven allowedModules manifest
   const visibleNavItems = ALL_NAV_ITEMS.filter((item) =>
     allowedModules.includes(item.id),
   );
 
-  return (
+  const panelClass = 'flex h-full w-64 shrink-0 select-none flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900';
+  const content = (
     <>
-      {/* Mobile backdrop */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm md:hidden"
-          onClick={onClose}
-        />
-      )}
-
-      <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 flex flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shrink-0 select-none transition-transform duration-300 ease-in-out md:static md:translate-x-0 ${
-          isOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'
-        }`}
-      >
       {/* Brand & Organization Header */}
       <div className="flex h-16 items-center gap-3 border-b border-slate-200 px-6 dark:border-slate-800">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 text-white font-bold text-lg shadow-md shadow-blue-500/20">
@@ -94,11 +106,12 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             {user?.role ? user.role.replace(/_/g, ' ') : 'USER'}
           </span>
         </div>
-        {onClose && (
+        {!isDesktop && onClose && (
           <button
+            type="button"
             onClick={onClose}
             className="ml-auto rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 md:hidden"
-            title="Close menu"
+            aria-label="Close menu"
           >
             ✕
           </button>
@@ -115,7 +128,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             <Link
               key={item.id}
               href={item.href}
-              onClick={onClose}
+              onClick={isDesktop ? undefined : onClose}
               className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
                 isActive
                   ? 'bg-blue-600 text-white shadow-sm'
@@ -152,7 +165,26 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
           </p>
         )}
       </div>
-    </aside>
     </>
+  );
+
+  return isDesktop ? (
+    <aside className={`${panelClass} hidden md:flex`}>{content}</aside>
+  ) : (
+    <dialog
+      ref={dialogRef}
+      id="mobile-dashboard-navigation"
+      aria-label="Dashboard navigation"
+      className="fixed inset-y-0 left-0 right-auto m-0 h-full max-h-none max-w-full bg-transparent p-0 shadow-2xl backdrop:bg-slate-900/50 backdrop:backdrop-blur-sm md:hidden"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose?.();
+      }}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose?.();
+      }}
+    >
+      <div className={panelClass}>{content}</div>
+    </dialog>
   );
 }

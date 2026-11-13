@@ -1,17 +1,11 @@
 import { test, expect } from '@playwright/test';
+import { useRoleSession } from './role-session';
 import * as path from 'path';
 
 test.describe('Role 5: Department Manager Comprehensive Test Suite (10 Tests)', () => {
   const screenshotsDir = path.join(process.cwd(), 'e2e', 'screenshots');
 
-  test.beforeEach(async ({ page }) => {
-    await page.context().clearCookies();
-    await page.goto('/login');
-    await page.fill('input[type="email"]', 'eng.manager@acme.com');
-    await page.fill('input[type="password"]', 'Password@123');
-    await page.click('button[type="submit"]');
-    await page.waitForURL('**/dashboard', { timeout: 15000 });
-  });
+  useRoleSession('eng.manager@acme.com', 'Password@123');
 
   test('DM-01: Department Management Dashboard displays department KPIs & headcount', async ({ page }) => {
     await expect(page.locator('h1')).toContainText('Department Management Dashboard');

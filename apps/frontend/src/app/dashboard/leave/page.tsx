@@ -17,6 +17,15 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 
+interface LeaveTypeSetting {
+  id: string;
+  leaveType: string;
+  annualAllocation: number;
+  isActive: boolean;
+  requiresReason: boolean;
+  requiresMedicalCert: boolean;
+}
+
 export default function LeaveDashboardPage() {
   const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
@@ -24,7 +33,7 @@ export default function LeaveDashboardPage() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [reason, setReason] = useState('');
-  const [file, setFile] = useState<File | null>(null);
+  const [attachment, setAttachment] = useState<{ settingId: string; file: File } | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
 
   // 1. Fetch current user & profile
@@ -34,17 +43,11 @@ export default function LeaveDashboardPage() {
   });
 
   // 2. Fetch leave types
-  const { data: leaveTypes = [], isLoading: loadingTypes } = useQuery({
+  const { data: leaveTypes = [], isError: leaveTypesFailed, isSuccess: leaveTypesLoaded } = useQuery({
     queryKey: ['leave-types'],
-    queryFn: () => api.get<any[]>('/leave/types'),
+    queryFn: () => api.get<LeaveTypeSetting[]>('/leave/types'),
+    select: (settings) => settings.filter((setting) => setting.isActive),
   });
-
-  // Keep selectedSettingId in sync when leave types load
-  React.useEffect(() => {
-    if (!selectedSettingId && leaveTypes.length > 0) {
-      setSelectedSettingId(leaveTypes[0].id);
-    }
-  }, [leaveTypes, selectedSettingId]);
 
   // 3. Fetch balances
   const { data: balances = [], isLoading: loadingBalances } = useQuery({
@@ -74,6 +77,7 @@ export default function LeaveDashboardPage() {
         (probationEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
       );
       probationEndFormatted = probationEnd.toLocaleDateString('en-US', {
+        timeZone: 'UTC',
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -82,9 +86,10 @@ export default function LeaveDashboardPage() {
   }
 
   // Selected leave type setting
-  const activeSetting = leaveTypes.find((t) => t.id === selectedSettingId);
-  const isSickLeave =
-    activeSetting?.leaveType === 'SICK' || activeSetting?.requiresMedicalCert;
+  const activeSetting = leaveTypes.find((setting) => setting.id === selectedSettingId) ?? leaveTypes[0];
+  const showMedicalUpload = activeSetting?.leaveType === 'SICK' || activeSetting?.requiresMedicalCert;
+  const file = attachment && attachment.settingId === activeSetting?.id ? attachment.file : null;
+  const canRequestLeave = !isUnderProbation && leaveTypes.length > 0;
 
   // Calculate day count
   const calculateDays = () => {
@@ -99,17 +104,17 @@ export default function LeaveDashboardPage() {
   // Create Leave Request Mutation
   const createMutation = useMutation({
     mutationFn: async () => {
-      const finalSettingId = selectedSettingId || leaveTypes[0]?.id;
-      if (!finalSettingId || !startDate || !endDate) {
-        throw new Error('Please fill all required fields');
+      if (!activeSetting || !startDate || !endDate) throw new Error('Please fill all required fields');
+      if (activeSetting.requiresMedicalCert && !file) {
+        throw new Error('Upload a medical prescription or certificate for this leave type.');
       }
 
       const formData = new FormData();
-      formData.append('leaveTypeSettingId', finalSettingId);
+      formData.append('leaveTypeSettingId', activeSetting.id);
       formData.append('startDate', startDate);
       formData.append('endDate', endDate);
       if (reason) formData.append('reason', reason);
-      if (file) formData.append('prescription', file);
+      if (showMedicalUpload && file) formData.append('prescription', file);
 
       return api.post('/leave/requests', formData);
     },
@@ -121,7 +126,7 @@ export default function LeaveDashboardPage() {
       setStartDate('');
       setEndDate('');
       setReason('');
-      setFile(null);
+      setAttachment(null);
       setErrorMessage('');
     },
     onError: (err: any) => {
@@ -154,20 +159,27 @@ export default function LeaveDashboardPage() {
         <div>
           <button
             onClick={() => {
-              if (isUnderProbation) return;
-              if (leaveTypes.length > 0) setSelectedSettingId(leaveTypes[0].id);
+              if (!canRequestLeave) return;
+              setSelectedSettingId(leaveTypes[0].id);
+              setAttachment(null);
+              setErrorMessage('');
               setModalOpen(true);
             }}
-            disabled={isUnderProbation}
+            disabled={!canRequestLeave}
             className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg shadow-sm transition-colors ${
-              isUnderProbation
-                ? 'bg-gray-300 dark:bg-gray-800 text-gray-500 cursor-not-allowed'
-                : 'bg-primary-600 hover:bg-primary-700 text-white'
+              canRequestLeave
+                ? 'bg-primary-600 hover:bg-primary-700 text-white'
+                : 'bg-gray-300 dark:bg-gray-800 text-gray-500 cursor-not-allowed'
             }`}
           >
             <Plus className="w-4 h-4" />
             Request Leave
           </button>
+          {leaveTypes.length === 0 && (leaveTypesLoaded || leaveTypesFailed) && (
+            <p role="status" className="mt-2 text-xs text-gray-600 dark:text-gray-300">
+              {leaveTypesFailed ? 'Leave types could not be loaded.' : 'No leave types are currently available.'}
+            </p>
+          )}
         </div>
       </div>
 
@@ -355,6 +367,8 @@ export default function LeaveDashboardPage() {
               </h3>
               <button
                 onClick={() => setModalOpen(false)}
+                disabled={createMutation.isPending}
+                aria-label="Close leave request"
                 className="text-gray-400 hover:text-gray-600 text-lg leading-none"
               >
                 &times;
@@ -362,7 +376,7 @@ export default function LeaveDashboardPage() {
             </div>
 
             {errorMessage && (
-              <div className="mt-4 p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 rounded-lg text-xs text-rose-700 dark:text-rose-300">
+              <div role="alert" className="mt-4 p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 rounded-lg text-xs text-rose-700 dark:text-rose-300">
                 {errorMessage}
               </div>
             )}
@@ -370,17 +384,23 @@ export default function LeaveDashboardPage() {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
+                setErrorMessage('');
                 createMutation.mutate();
               }}
               className="mt-4 space-y-4 text-sm"
             >
               <div>
-                <label className="block text-xs font-semibold uppercase text-gray-500 mb-1">
+                <label htmlFor="leave-request-type" className="block text-xs font-semibold uppercase text-gray-500 mb-1">
                   Leave Type
                 </label>
                 <select
-                  value={selectedSettingId || (leaveTypes[0]?.id ?? '')}
-                  onChange={(e) => setSelectedSettingId(e.target.value)}
+                  id="leave-request-type"
+                  value={activeSetting?.id ?? ''}
+                  onChange={(e) => {
+                    setSelectedSettingId(e.target.value);
+                    setAttachment(null);
+                    setErrorMessage('');
+                  }}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500"
                   required
                 >
@@ -442,23 +462,27 @@ export default function LeaveDashboardPage() {
                 />
               </div>
 
-              {isSickLeave && (
+              {showMedicalUpload && activeSetting && (
                 <div>
                   <label className="block text-xs font-semibold uppercase text-gray-500 mb-1">
-                    Medical Prescription / Certificate <span className="text-rose-500">*</span>
+                    Medical Prescription / Certificate {activeSetting.requiresMedicalCert
+                      ? <span className="text-rose-500">*</span>
+                      : <span>(optional)</span>}
                   </label>
                   <div className="border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-lg p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-800/50 transition">
                     <input
                       type="file"
                       id="prescription-file"
+                      key={activeSetting.id}
                       accept=".pdf,.png,.jpg,.jpeg"
                       onChange={(e) => {
-                        if (e.target.files?.[0]) setFile(e.target.files[0]);
+                        const selected = e.target.files?.[0];
+                        setAttachment(selected ? { settingId: activeSetting.id, file: selected } : null);
+                        setErrorMessage('');
                       }}
-                      className="hidden"
-                      required={activeSetting?.requiresMedicalCert}
+                      className="peer sr-only"
                     />
-                    <label htmlFor="prescription-file" className="cursor-pointer block">
+                    <label htmlFor="prescription-file" className="block cursor-pointer rounded peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500">
                       <UploadCloud className="w-8 h-8 text-gray-400 mx-auto mb-1" />
                       {file ? (
                         <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
@@ -478,13 +502,14 @@ export default function LeaveDashboardPage() {
                 <button
                   type="button"
                   onClick={() => setModalOpen(false)}
+                  disabled={createMutation.isPending}
                   className="px-4 py-2 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={createMutation.isPending || totalDays <= 0}
+                  disabled={createMutation.isPending || !activeSetting || totalDays <= 0}
                   className="px-4 py-2 text-xs font-medium bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50"
                 >
                   {createMutation.isPending ? 'Submitting...' : 'Submit Leave Request'}

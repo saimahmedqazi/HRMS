@@ -32,17 +32,26 @@ test('Team Lead dashboard and attendance agree on the company day and show the a
   const date = new Date(`${dateIn(timeZone)}T00:00:00.000Z`);
   const lead = await prisma.employee.findFirstOrThrow({ where: { companyId: company.id, user: { email: teamLead } } });
   const report = await prisma.employee.findFirstOrThrow({ where: { companyId: company.id, user: { email: employee } } });
-  const created = await prisma.attendanceRecord.createManyAndReturn({
-    data: [
-      {
-        companyId: company.id, employeeId: lead.id, date,
-        status: 'ABSENT_PENDING_REVIEW',
-        checkInTime: new Date(now.getTime() - 38 * 60_000), checkOutTime: now, workMinutes: 0,
-      },
-      { companyId: company.id, employeeId: report.id, date, status: 'PRESENT', checkInTime: now },
-    ],
-    select: { id: true },
+  const fixtures = [
+    {
+      employeeId: lead.id, status: 'ABSENT_PENDING_REVIEW' as const,
+      checkInTime: new Date(now.getTime() - 38 * 60_000), checkOutTime: now, workMinutes: 0,
+    },
+    { employeeId: report.id, status: 'PRESENT' as const, checkInTime: now, checkOutTime: null, workMinutes: 0 },
+  ];
+  const before = await prisma.attendanceRecord.findMany({
+    where: { companyId: company.id, date, employeeId: { in: fixtures.map(({ employeeId }) => employeeId) } },
+    select: { id: true, status: true, checkInTime: true, checkOutTime: true, workMinutes: true, updatedAt: true },
   });
+  const records = await prisma.$transaction(fixtures.map((fixture) => {
+    const key = { companyId: company.id, employeeId: fixture.employeeId, date };
+    return prisma.attendanceRecord.upsert({
+      where: { companyId_employeeId_date: key },
+      create: { ...key, ...fixture },
+      update: fixture,
+      select: { id: true },
+    });
+  }));
   try {
     await prisma.company.update({ where: { id: company.id }, data: { timezone: timeZone } });
     await signIn(page, teamLead);
@@ -61,8 +70,12 @@ test('Team Lead dashboard and attendance agree on the company day and show the a
     expect(workMinutes).toBeGreaterThanOrEqual(0);
     await expect(row.getByRole('cell').nth(workMinutes)).toHaveText('0m');
   } finally {
+    const existing = new Map(before.map(({ id, ...data }) => [id, data]));
     await prisma.$transaction([
-      prisma.attendanceRecord.deleteMany({ where: { id: { in: created.map(({ id }) => id) } } }),
+      ...records.map(({ id }) => {
+        const data = existing.get(id);
+        return data ? prisma.attendanceRecord.update({ where: { id }, data }) : prisma.attendanceRecord.delete({ where: { id } });
+      }),
       prisma.company.update({ where: { id: company.id }, data: { timezone: company.timezone } }),
     ]);
     await prisma.$disconnect();
@@ -285,24 +298,38 @@ test('Remote work records each approval stage once', async ({ page }) => {
   }
 });
 
-test('Employee can submit remote work and read work-from-home guidance', async ({ page }) => {
-  await signIn(page, employee);
-  await page.goto('/dashboard/my-attendance');
-  await page.getByRole('button', { name: 'New Remote Work Request', exact: true }).click();
-  const date = new Date(Date.now() + 10 * 86400_000).toISOString().slice(0, 10);
-  await page.locator('input[type="date"]').nth(0).fill(date);
-  await page.locator('input[type="date"]').nth(1).fill(date);
-  const reason = `QA home-office request ${randomUUID().slice(0, 8)}`;
-  await page.locator('textarea').fill(reason);
-  page.once('dialog', (dialog) => dialog.accept());
-  await page.getByRole('button', { name: /Submit Request/ }).click();
-  await expect(page.getByRole('row').filter({ hasText: reason })).toContainText('PENDING');
+test('Employee can submit remote work and read work-from-home guidance', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL, timezoneId: 'America/Los_Angeles', locale: 'en-US' });
+  const page = await context.newPage();
+  try {
+    await signIn(page, employee);
+    const invalid = await page.request.post('/api/v1/attendance/remote-permissions', { data: {
+      startDate: '2026-02-30', endDate: '2026-03-02', reason: 'Invalid date fixture',
+    } });
+    expect(invalid.status()).toBe(400);
+    expect((await invalid.json()).message).toContain('valid start and end dates');
+    await page.goto('/dashboard/my-attendance');
+    await page.getByRole('button', { name: 'New Remote Work Request', exact: true }).click();
+    const date = new Date(Date.now() + 10 * 86400_000).toISOString().slice(0, 10);
+    await page.locator('input[type="date"]').nth(0).fill(date);
+    await page.locator('input[type="date"]').nth(1).fill(date);
+    const reason = `QA home-office request ${randomUUID().slice(0, 8)}`;
+    await page.locator('textarea').fill(reason);
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: /Submit Request/ }).click();
+    const row = page.getByRole('row').filter({ hasText: reason });
+    await expect(row).toContainText('PENDING');
+    const formatted = new Date(date).toLocaleDateString('en-US', { timeZone: 'UTC' });
+    await expect(row).toContainText(`${formatted} — ${formatted}`);
 
-  await page.goto('/dashboard/ai-assistant');
-  const prompt = page.getByPlaceholder('Ask a question about HR policies, leave balances, or workflows...');
-  await prompt.fill('How do I apply to work from home?');
-  await prompt.press('Enter');
-  await expect(page.getByText(/New Remote Work Request/)).toBeVisible();
+    await page.goto('/dashboard/ai-assistant');
+    const prompt = page.getByPlaceholder('Ask a question about HR policies, leave balances, or workflows...');
+    await prompt.fill('How do I apply to work from home?');
+    await prompt.press('Enter');
+    await expect(page.getByText(/New Remote Work Request/)).toBeVisible();
+  } finally {
+    await context.close();
+  }
 });
 
 test('Employee can save and clear personal information while HR-managed fields stay protected', async ({ page }) => {

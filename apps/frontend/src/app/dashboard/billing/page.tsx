@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   CreditCard,
@@ -18,25 +19,34 @@ import {
 } from 'lucide-react';
 
 export default function BillingDashboardPage() {
+  const { user } = useAuth();
   const [errorMessage, setErrorMessage] = useState('');
+  const [demoMessage, setDemoMessage] = useState('');
+  const startPaymentAction = () => {
+    setErrorMessage('');
+    setDemoMessage('');
+  };
+  const openPaymentLink = ({ url, mode }: { url: string; mode: 'live' | 'sandbox' }) => {
+    if (mode === 'sandbox') {
+      setDemoMessage('Stripe is simulated in this local demo. Your subscription and payment details are unchanged.');
+      return;
+    }
+    window.location.assign(url);
+  };
 
   // Fetch current subscription
-  const { data: subscription, isLoading } = useQuery({
-    queryKey: ['subscription-current'],
+  const { data: subscription, isPending, refetch, isFetching } = useQuery({
+    queryKey: ['subscription-current', user?.id, user?.supportModeCompanyId ?? user?.companyId],
     queryFn: () => api.get<any>('/subscriptions/current'),
+    retry: false,
   });
 
   // Create Checkout Session Mutation
   const checkoutMutation = useMutation({
     mutationFn: () =>
-      api.post<{ url: string }>('/subscriptions/checkout-session', {
-        returnUrl: typeof window !== 'undefined' ? window.location.href : '',
-      }),
-    onSuccess: (data: any) => {
-      if (data?.url) {
-        window.location.href = data.url;
-      }
-    },
+      api.post<{ url: string; mode: 'live' | 'sandbox' }>('/subscriptions/checkout-session', {}),
+    onMutate: startPaymentAction,
+    onSuccess: openPaymentLink,
     onError: (err: any) => {
       setErrorMessage(err.message || 'Failed to initiate checkout session.');
     },
@@ -45,39 +55,58 @@ export default function BillingDashboardPage() {
   // Create Customer Portal Mutation
   const portalMutation = useMutation({
     mutationFn: () =>
-      api.post<{ url: string }>('/subscriptions/portal-session', {
-        returnUrl: typeof window !== 'undefined' ? window.location.href : '',
-      }),
-    onSuccess: (data: any) => {
-      if (data?.url) {
-        window.location.href = data.url;
-      }
-    },
+      api.post<{ url: string; mode: 'live' | 'sandbox' }>('/subscriptions/portal-session', {}),
+    onMutate: startPaymentAction,
+    onSuccess: openPaymentLink,
     onError: (err: any) => {
       setErrorMessage(err.message || 'Failed to open customer portal.');
     },
   });
 
-  const isPremium = subscription?.tier === 'PREMIUM';
+  const heading = (
+    <div>
+      <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+        Billing & Subscription Plans
+      </h1>
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        Manage your SaaS subscription tier, payment credentials, and enterprise entitlements.
+      </p>
+    </div>
+  );
+
+  if (!subscription) {
+    return (
+      <div className="space-y-6">
+        {heading}
+        <section className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-700 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">
+          {isPending ? (
+            <p role="status">Loading subscription details…</p>
+          ) : (
+            <>
+              <p role="alert">Subscription details couldn’t load.</p>
+              <button type="button" onClick={() => void refetch()} disabled={isFetching}
+                className="mt-3 rounded-lg border border-gray-300 px-4 py-2 font-medium hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:hover:bg-gray-800">
+                {isFetching ? 'Retrying…' : 'Try again'}
+              </button>
+            </>
+          )}
+        </section>
+      </div>
+    );
+  }
+
+  const isPremium = subscription.tier === 'PREMIUM';
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
-          Billing & Subscription Plans
-        </h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          Manage your SaaS subscription tier, payment credentials, and enterprise entitlements.
-        </p>
-      </div>
-
+      {heading}
       {errorMessage && (
-        <div className="p-4 bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 rounded-xl text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2">
+        <div role="alert" className="p-4 bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 rounded-xl text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
           <span>{errorMessage}</span>
         </div>
       )}
+      {demoMessage && <p role="status" className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200">{demoMessage}</p>}
 
       {/* Current Plan Status Card */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6 shadow-sm space-y-5">
@@ -94,9 +123,9 @@ export default function BillingDashboardPage() {
                     : 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
                 }`}
               >
-                {subscription?.tier || 'BASIC'} PLAN
+                {subscription.tier} PLAN
               </span>
-              <StatusBadge status={subscription?.status || 'ACTIVE'} />
+              <StatusBadge status={subscription.status} />
             </div>
 
             <p className="text-xs text-gray-500 mt-2">

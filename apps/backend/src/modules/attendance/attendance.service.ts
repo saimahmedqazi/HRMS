@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { getCompanyAttendanceTime } from '../../common/utils/attendance-date';
+import { parseEmployeeDate } from '../../common/utils/employee-dates';
 import { findCurrentPunch, resolveEmployeeAttendanceDay, shiftStandardMinutes } from '../../common/utils/attendance-shift';
 import { normalizeIpAddress } from '../../common/utils/request-ip';
 import { rethrowMissingRecordAsConflict } from '../../common/utils/prisma-conflict';
@@ -267,6 +268,15 @@ export class AttendanceService {
 
   async listAttendanceRecords(user: AuthenticatedUser, filter: AttendanceFilter = {}) {
     const companyId = this.getEffectiveCompanyId(user);
+    const startDate = filter.startDate ? parseEmployeeDate(filter.startDate) : undefined;
+    const endDate = filter.endDate ? parseEmployeeDate(filter.endDate) : undefined;
+    if ((filter.startDate && (!startDate || filter.startDate.length !== 10)) ||
+        (filter.endDate && (!endDate || filter.endDate.length !== 10))) {
+      throw new BadRequestException('Attendance filters require valid dates in YYYY-MM-DD format.');
+    }
+    if (startDate && endDate && endDate < startDate) {
+      throw new BadRequestException('End date cannot be earlier than start date.');
+    }
     const scopeFilter = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
 
     const whereClause: any = {
@@ -283,11 +293,11 @@ export class AttendanceService {
           }
         : {}),
       ...(filter.status ? { status: filter.status } : {}),
-      ...(filter.startDate || filter.endDate
+      ...(startDate || endDate
         ? {
             date: {
-              ...(filter.startDate ? { gte: new Date(filter.startDate) } : {}),
-              ...(filter.endDate ? { lte: new Date(filter.endDate) } : {}),
+              gte: startDate,
+              lte: endDate,
             },
           }
         : {}),
@@ -389,9 +399,16 @@ export class AttendanceService {
     const companyId = this.getEffectiveCompanyId(user);
     const userId = (user.id || user.sub)!;
 
-    if (new Date(dto.endDate) < new Date(dto.startDate)) {
+    const startDate = parseEmployeeDate(dto.startDate);
+    const endDate = parseEmployeeDate(dto.endDate);
+    if (!startDate || !endDate || dto.startDate.length !== 10 || dto.endDate.length !== 10) {
+      throw new BadRequestException('Enter valid start and end dates in YYYY-MM-DD format.');
+    }
+    if (endDate < startDate) {
       throw new BadRequestException('End date cannot be earlier than start date');
     }
+    const reason = dto.reason.trim();
+    if (!reason) throw new BadRequestException('Enter a reason for the remote work request.');
 
     const employee = await this.prisma.employee.findFirst({
       where: { userId, companyId, deletedAt: null },
@@ -402,9 +419,9 @@ export class AttendanceService {
       data: {
         companyId,
         employeeId: employee.id,
-        startDate: new Date(dto.startDate),
-        endDate: new Date(dto.endDate),
-        reason: dto.reason,
+        startDate,
+        endDate,
+        reason,
         status: RemoteWorkStatus.PENDING,
       },
     });

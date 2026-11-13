@@ -4,9 +4,12 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import * as xlsx from 'xlsx';
-import { DataScope, EmployeeStatus, LeaveType, Prisma, UserRole } from '@prisma/client';
+import { DataScope, EmployeeStatus, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { lockEmployeeOnboarding } from '@common/prisma/employee-onboarding-lock';
+import { initializeEmployeePolicies } from '@common/prisma/initialize-employee-policies';
 import { PASSWORD_SETUP_REQUIRED } from '@common/utils/password-policy';
+import { getProbationEndDate, parseEmployeeDate } from '@common/utils/employee-dates';
 
 export type RowError = {
   row: number;
@@ -46,13 +49,14 @@ export class BulkImportService {
   /**
    * Parse workbook from buffer.
    */
-  private parseWorkbook(buffer: Buffer): WorksheetRow[] {
+  private parseWorkbook(buffer: Buffer): { rows: WorksheetRow[]; date1904: boolean } {
     try {
-      const workbook = xlsx.read(buffer, { type: 'buffer', cellDates: true });
+      const workbook = xlsx.read(buffer, { type: 'buffer', raw: true });
       const sheetName = workbook.SheetNames[0];
-      if (!sheetName) return [];
-      const sheet = workbook.Sheets[sheetName];
-      return xlsx.utils.sheet_to_json<WorksheetRow>(sheet);
+      return {
+        rows: sheetName ? xlsx.utils.sheet_to_json<WorksheetRow>(workbook.Sheets[sheetName]) : [],
+        date1904: workbook.Workbook?.WBProps?.date1904 === true,
+      };
     } catch {
       throw new BadRequestException('Failed to parse the Excel or CSV file.');
     }
@@ -74,7 +78,7 @@ export class BulkImportService {
   }
 
   async prepareImport(companyId: string, workbook: Buffer) {
-    const rawRows = this.parseWorkbook(workbook);
+    const { rows: rawRows, date1904 } = this.parseWorkbook(workbook);
     if (rawRows.length === 0) {
       throw new BadRequestException('Uploaded spreadsheet contains no data rows.');
     }
@@ -138,18 +142,21 @@ export class BulkImportService {
         hasError = true;
       }
 
-      let hireDateStr = '';
       const rawHireDate = row.hireDate ?? row.HireDate ?? row['Hire Date'];
-      if (rawHireDate instanceof Date && !isNaN(rawHireDate.getTime())) {
-        hireDateStr = rawHireDate.toISOString();
-      } else if (typeof rawHireDate === 'number') {
-        const d = new Date(Math.round((rawHireDate - 25569) * 86400 * 1000));
-        if (!isNaN(d.getTime())) hireDateStr = d.toISOString();
-      } else if (typeof rawHireDate === 'string' && rawHireDate.trim() && !isNaN(Date.parse(rawHireDate))) {
-        hireDateStr = new Date(rawHireDate).toISOString();
+      let hireDate: Date | undefined;
+      if (typeof rawHireDate === 'number') {
+        const parts: { y: number; m: number; d: number } | null = xlsx.SSF.parse_date_code(rawHireDate, { date1904 });
+        if (parts) {
+          const year = String(parts.y).padStart(4, '0');
+          const month = String(parts.m).padStart(2, '0');
+          const day = String(parts.d).padStart(2, '0');
+          hireDate = parseEmployeeDate(`${year}-${month}-${day}`);
+        }
+      } else if (typeof rawHireDate === 'string') {
+        hireDate = parseEmployeeDate(rawHireDate.trim());
       }
 
-      if (!hireDateStr) {
+      if (!hireDate) {
         errors.push({ row: rowNum, field: 'hireDate', message: 'Valid hire date (YYYY-MM-DD) is required' });
         hasError = true;
       }
@@ -165,7 +172,7 @@ export class BulkImportService {
         hasError = true;
       }
 
-      if (!hasError) {
+      if (!hasError && hireDate) {
         seenEmails.add(email);
         seenCodes.add(employeeCode);
         validRows.push({
@@ -175,7 +182,7 @@ export class BulkImportService {
             lastName,
             email,
             employeeCode,
-            hireDate: hireDateStr,
+            hireDate: hireDate.toISOString(),
             departmentName: (row.departmentName || row.Department || '').toString().trim() || undefined,
             designationName: (row.designationName || row.Designation || '').toString().trim() || undefined,
             baseSalary,
@@ -189,6 +196,7 @@ export class BulkImportService {
   }
 
   async importEmployee(tx: Prisma.TransactionClient, companyId: string, employee: EmployeeImportRow) {
+    await lockEmployeeOnboarding(tx, companyId);
     const {
       firstName, lastName, email, employeeCode, baseSalary, phone,
       departmentName: deptName, designationName: desigName,
@@ -236,7 +244,7 @@ export class BulkImportService {
     });
 
     // Create Employee
-    const probationEnd = new Date(hireDate.getTime() + 90 * 24 * 60 * 60 * 1000);
+    const probationEnd = getProbationEndDate(hireDate);
 
     const emp = await tx.employee.create({
       data: {
@@ -255,14 +263,6 @@ export class BulkImportService {
       },
     });
 
-    // Seed default leave balances
-    const year = hireDate.getFullYear();
-    await tx.leaveBalance.createMany({
-      data: [
-        { companyId, employeeId: emp.id, leaveType: LeaveType.CASUAL, year, allocated: 10 },
-        { companyId, employeeId: emp.id, leaveType: LeaveType.SICK, year, allocated: 14 },
-        { companyId, employeeId: emp.id, leaveType: LeaveType.ANNUAL, year, allocated: 14 },
-      ],
-    });
+    await initializeEmployeePolicies(tx, companyId, emp.id);
   }
 }

@@ -58,8 +58,15 @@ export class AuthService {
       : null;
   }
 
+  private validateNewPassword(password: string): void {
+    if (Buffer.byteLength(password, 'utf8') > 72) {
+      throw new BadRequestException('Password must be at most 72 bytes in UTF-8.');
+    }
+    if (isRevokedImportPassword(password)) throw new BadRequestException('Choose a different password.');
+  }
+
   async registerCompany(dto: RegisterCompanyDto): Promise<TokenResponse> {
-    if (isRevokedImportPassword(dto.adminPassword)) throw new BadRequestException('Choose a different password.');
+    this.validateNewPassword(dto.adminPassword);
     const existing = await this.prisma.user.findUnique({
       where: { email: dto.adminEmail.toLowerCase() },
     });
@@ -400,7 +407,7 @@ export class AuthService {
   }
 
   async resetPassword(dto: ResetPasswordDto): Promise<void> {
-    if (isRevokedImportPassword(dto.newPassword)) throw new BadRequestException('Choose a different password.');
+    this.validateNewPassword(dto.newPassword);
     const user = await this.prisma.user.findFirst({
       where: {
         passwordResetToken: dto.token,

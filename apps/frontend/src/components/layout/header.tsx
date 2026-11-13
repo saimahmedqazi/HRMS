@@ -31,6 +31,7 @@ interface NotificationItem {
 
 interface HeaderProps {
   onMenuClick?: () => void;
+  mobileMenuOpen?: boolean;
 }
 
 const timeAgo = (dateStr: string) => {
@@ -42,7 +43,7 @@ const timeAgo = (dateStr: string) => {
   return `${Math.floor(hours / 24)}d ago`;
 };
 
-export function Header({ onMenuClick }: HeaderProps) {
+export function Header({ onMenuClick, mobileMenuOpen }: HeaderProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [isDark, setIsDark] = useState(false);
@@ -136,6 +137,9 @@ export function Header({ onMenuClick }: HeaderProps) {
           <button
             type="button"
             onClick={onMenuClick}
+            aria-expanded={mobileMenuOpen}
+            aria-controls="mobile-dashboard-navigation"
+            aria-haspopup="dialog"
             className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200 md:hidden"
             title="Open menu"
           >

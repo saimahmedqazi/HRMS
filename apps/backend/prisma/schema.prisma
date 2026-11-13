@@ -674,6 +674,7 @@ model LeaveRequest {
   startDate          DateTime    @db.Date
   endDate            DateTime    @db.Date
   totalDays          Int
+  balanceDaysByYear  Json?
   reason             String?
   medicalCertUrl     String?
   status             LeaveStatus @default(PENDING)
