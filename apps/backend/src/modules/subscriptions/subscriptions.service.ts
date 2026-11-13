@@ -276,6 +276,7 @@ export class SubscriptionsService {
       const paid = {
         status: SubscriptionStatus.ACTIVE,
         failedPaymentCount: 0,
+        lastNotifiedRetry: 0,
         lastFailedReason: null,
         lastFailedPaymentAt: null,
         suspendedAt: null,

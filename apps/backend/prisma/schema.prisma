@@ -836,6 +836,7 @@ model Subscription {
   trialEnd              DateTime?
   cancelAtPeriodEnd     Boolean            @default(false)
   failedPaymentCount    Int                @default(0)
+  lastNotifiedRetry     Int                @default(0)
   lastFailedPaymentAt   DateTime?
   lastFailedReason      String?
   suspendedAt           DateTime?

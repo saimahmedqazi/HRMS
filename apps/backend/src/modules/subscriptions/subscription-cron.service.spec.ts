@@ -53,6 +53,7 @@ describe('SubscriptionCronService', () => {
           id: 'sub-1',
           companyId: mockCompanyId,
           failedPaymentCount: 2,
+          lastFailedPaymentAt: new Date('2026-11-10T00:00:00Z'),
           lastFailedReason: 'Insufficient funds',
           company: { name: 'Acme Inc' },
         },
@@ -68,6 +69,25 @@ describe('SubscriptionCronService', () => {
         }),
       );
       expect(mailService.sendMail).toHaveBeenCalled();
+    });
+
+    it('sends no duplicate notice when the same retry was already claimed', async () => {
+      const failedAt = new Date('2026-11-10T00:00:00Z');
+      prisma.subscription.findMany.mockResolvedValue([
+        { id: 'sub-1', companyId: mockCompanyId, failedPaymentCount: 2, lastFailedPaymentAt: failedAt },
+      ]);
+      prisma.subscription.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+
+      await service.processRenewalRetries();
+      await service.processRenewalRetries();
+
+      expect(prisma.subscription.updateMany).toHaveBeenCalledWith({
+        where: { id: 'sub-1', status: SubscriptionStatus.PAST_DUE, failedPaymentCount: 2,
+          lastFailedPaymentAt: failedAt, lastNotifiedRetry: { lt: 2 } },
+        data: { lastNotifiedRetry: 2 },
+      });
+      expect(prisma.notification.create).toHaveBeenCalledTimes(1);
+      expect(mailService.sendMail).toHaveBeenCalledTimes(1);
     });
   });
 

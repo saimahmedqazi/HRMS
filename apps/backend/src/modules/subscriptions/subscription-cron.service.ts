@@ -39,25 +39,35 @@ export class SubscriptionCronService {
     const pastDueSubs = await this.prisma.subscription.findMany({
       where: {
         status: SubscriptionStatus.PAST_DUE,
-        failedPaymentCount: { lte: 3 },
+        failedPaymentCount: { gte: 1, lte: 3 },
       },
-      include: { company: true },
+      select: { id: true, companyId: true, failedPaymentCount: true, lastFailedPaymentAt: true, lastFailedReason: true },
     });
 
     for (const sub of pastDueSubs) {
       const reason = sub.lastFailedReason || 'Payment declined by financial institution.';
       const retryDay = sub.failedPaymentCount;
 
-      this.logger.warn(
-        `Subscription retry Day +${retryDay} for company ${sub.company.name} (${sub.companyId}). Error: ${reason}`,
-      );
+      const recipient = await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.subscription.updateMany({
+          where: {
+            id: sub.id,
+            status: SubscriptionStatus.PAST_DUE,
+            failedPaymentCount: retryDay,
+            lastFailedPaymentAt: sub.lastFailedPaymentAt,
+            lastNotifiedRetry: { lt: retryDay },
+          },
+          data: { lastNotifiedRetry: retryDay },
+        });
+        if (claimed.count === 0) return null;
 
-      const adminUser = await this.prisma.user.findFirst({
-        where: { companyId: sub.companyId, role: UserRole.COMPANY_ADMIN },
-      });
+        const adminUser = await tx.user.findFirst({
+          where: { companyId: sub.companyId, role: UserRole.COMPANY_ADMIN, deletedAt: null },
+          select: { id: true, email: true },
+        });
+        if (!adminUser) return null;
 
-      if (adminUser) {
-        await this.prisma.notification.create({
+        await tx.notification.create({
           data: {
             companyId: sub.companyId,
             userId: adminUser.id,
@@ -66,9 +76,13 @@ export class SubscriptionCronService {
             body: `Renewal failed (${reason}). Outstanding payments risk account suspension if unpaid.`,
           },
         });
+        return adminUser.email;
+      });
 
+      if (recipient) {
+        this.logger.warn(`Subscription attempt ${retryDay} failed for company ${sub.companyId}: ${reason}`);
         await this.mailService.sendMail({
-          to: adminUser.email,
+          to: recipient,
           subject: `ZenHR Subscription Renewal Attempt ${retryDay} Failed`,
           html: `<p>Payment attempt ${retryDay} of 3 failed for your ZenHR company subscription. Reason: <strong>${reason}</strong>. Please update your payment card immediately to prevent service interruption.</p>`,
         });
