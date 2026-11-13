@@ -52,6 +52,8 @@ export default function EmployeeDetailPage() {
 
   // Document upload state
   const [showDocModal, setShowDocModal] = useState(false);
+  const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
+  const documentDeleteTrigger = useRef<HTMLButtonElement | null>(null);
   const [docName, setDocName] = useState('');
   const [docType, setDocType] = useState('CONTRACT');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -174,6 +176,7 @@ export default function EmployeeDetailPage() {
   const deleteDocMutation = useMutation({
     mutationFn: (docId: string) => api.delete(`/employees/${id}/documents/${docId}`),
     onSuccess: () => {
+      setDocumentToDelete(null);
       queryClient.invalidateQueries({ queryKey: ['employee', id] });
       setFeedback({ type: 'success', message: 'Document deleted successfully.' });
     },
@@ -631,7 +634,7 @@ export default function EmployeeDetailPage() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center justify-end gap-2">
                     <a
                       href={`${API_PREFIX}/employees/${id}/documents/${d.id}/download`}
                       target="_blank"
@@ -640,8 +643,26 @@ export default function EmployeeDetailPage() {
                     >
                       View
                     </a>
+                    {documentToDelete === d.id ? (
+                      <div role="group" aria-label={`Confirm deletion of ${d.name}`} className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs text-zinc-600 dark:text-zinc-300">Permanently delete?</span>
+                        <button type="button" autoFocus disabled={deleteDocMutation.isPending} className="px-2 py-1 text-xs"
+                          onClick={() => {
+                            setDocumentToDelete(null);
+                            requestAnimationFrame(() => documentDeleteTrigger.current?.focus());
+                          }}>Cancel</button>
+                        <button type="button" disabled={deleteDocMutation.isPending} className="rounded bg-red-700 px-2 py-1 text-xs text-white"
+                          onClick={() => deleteDocMutation.mutate(d.id)}>Confirm deletion</button>
+                      </div>
+                    ) : null}
                     <button
-                      onClick={() => deleteDocMutation.mutate(d.id)}
+                      type="button"
+                      hidden={documentToDelete === d.id}
+                      onClick={(event) => {
+                        const trigger = event.currentTarget;
+                        documentDeleteTrigger.current = trigger;
+                        setDocumentToDelete(d.id);
+                      }}
                       disabled={deleteDocMutation.isPending}
                       className="text-zinc-400 hover:text-red-500 transition-colors p-1"
                       title="Delete document"

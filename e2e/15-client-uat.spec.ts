@@ -116,7 +116,14 @@ test('Team Lead can add a reportee’s contact, upload a document, and delete it
   await page.getByRole('button', { name: /^Documents \(/ }).click();
   const card = page.getByRole('heading', { name: doc }).locator('xpath=../../..');
   await expect(card.getByRole('link', { name: 'View' })).toHaveAttribute('href', /\/documents\/[^/]+\/download$/);
-  await card.getByRole('button', { name: `Delete ${doc}`, exact: true }).click();
+  const deleteButton = card.getByRole('button', { name: `Delete ${doc}`, exact: true });
+  const confirmation = card.getByRole('group', { name: `Confirm deletion of ${doc}` });
+  await deleteButton.click();
+  await confirmation.getByRole('button', { name: 'Cancel' }).click();
+  await expect(deleteButton).toBeFocused();
+  await expect(card.getByRole('heading', { name: doc })).toBeVisible();
+  await deleteButton.click();
+  await confirmation.getByRole('button', { name: 'Confirm deletion' }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Document deleted successfully.' })).toBeVisible();
   await expect(page.getByRole('heading', { name: doc })).toHaveCount(0);
   await page.reload();
