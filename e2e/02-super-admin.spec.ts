@@ -1,15 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { useRoleSession } from './role-session';
 
 test.describe('Super Admin End-to-End Suite', () => {
-  test.beforeEach(async ({ page }) => {
-    // Login as Super Admin
-    await page.context().clearCookies();
-    await page.goto('/login');
-    await page.fill('input[type="email"]', 'superadmin@zenhr.com');
-    await page.fill('input[type="password"]', 'SuperAdmin@123');
-    await page.click('button[type="submit"]');
-    await page.waitForURL('**/dashboard', { timeout: 15000 });
-  });
+  useRoleSession('superadmin@zenhr.com', 'SuperAdmin@123');
 
   test('Super Admin Dashboard displays KPIs, Recharts graphs, and billing dates table', async ({ page }) => {
     await expect(page.locator('h1')).toContainText('Platform Master Console');

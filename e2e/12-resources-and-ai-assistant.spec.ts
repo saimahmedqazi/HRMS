@@ -54,7 +54,9 @@ test.describe('Resource Requisitions & Gemini AI Assistant Lifecycle', () => {
     await page.goto('/login');
     await page.fill('input[type="email"]', 'hr@acme.com');
     await page.fill('input[type="password"]', 'Password@123');
+    const hrLogin = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/auth/login');
     await page.click('button[type="submit"]');
+    expect((await hrLogin).status()).toBe(200);
     await page.waitForURL('**/dashboard', { timeout: 15000 });
 
     await page.click('a[href="/dashboard/resources"]');

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { useRoleSession } from './role-session';
 
 test('Billing waits for subscription details and can recover from a failed request', async ({ page }) => {
   await page.route('**/api/v1/auth/me', (route) => route.fulfill({
@@ -31,14 +32,7 @@ test('Billing waits for subscription details and can recover from a failed reque
 });
 
 test.describe('Company Admin (CEO) End-to-End Suite', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.context().clearCookies();
-    await page.goto('/login');
-    await page.fill('input[type="email"]', 'ceo@acme.com');
-    await page.fill('input[type="password"]', 'Password@123');
-    await page.click('button[type="submit"]');
-    await page.waitForURL('**/dashboard', { timeout: 15000 });
-  });
+  useRoleSession('ceo@acme.com', 'Password@123');
 
   test('Executive Dashboard displays KPIs and workforce analytics charts', async ({ page }) => {
     await expect(page.locator('h1')).toContainText('Executive Dashboard');

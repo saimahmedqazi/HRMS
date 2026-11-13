@@ -31,7 +31,9 @@ test.describe('Security & Tenant Registration Lifecycle', () => {
       await page.goto('/login');
       await page.locator('input[type="email"]').fill(email);
       await page.locator('input[type="password"]').fill(password);
+      const login = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/auth/login');
       await page.locator('button[type="submit"]').click();
+      expect((await login).status()).toBe(200);
     };
     const openSecuritySettings = async () => {
       await page.locator('a[href="/dashboard/settings"]').click();

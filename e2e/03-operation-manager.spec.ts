@@ -1,14 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { useRoleSession } from './role-session';
 
 test.describe('Operation Manager End-to-End Suite', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.context().clearCookies();
-    await page.goto('/login');
-    await page.fill('input[type="email"]', 'ops@zenhr.com');
-    await page.fill('input[type="password"]', 'Password@123');
-    await page.click('button[type="submit"]');
-    await page.waitForURL('**/dashboard', { timeout: 15000 });
-  });
+  useRoleSession('ops@zenhr.com', 'Password@123');
 
   test('Operation Manager Dashboard displays platform graphs and billing dates table', async ({ page }) => {
     await expect(page.locator('h1')).toContainText('Operations Command Center');

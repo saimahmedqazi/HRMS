@@ -1,14 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { useRoleSession } from './role-session';
 
 test.describe('HR Manager End-to-End Suite', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.context().clearCookies();
-    await page.goto('/login');
-    await page.fill('input[type="email"]', 'hr@acme.com');
-    await page.fill('input[type="password"]', 'Password@123');
-    await page.click('button[type="submit"]');
-    await page.waitForURL('**/dashboard', { timeout: 15000 });
-  });
+  useRoleSession('hr@acme.com', 'Password@123');
 
   test('HR Operations Hub displays HR-scoped operational metrics', async ({ page }) => {
     await expect(page.locator('h1')).toContainText('HR Operations Hub');
