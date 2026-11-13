@@ -62,6 +62,7 @@ interface AuthContextType {
   user: UserProfile | null;
   allowedModules: string[];
   isLoading: boolean;
+  sessionUnavailable: boolean;
   isAuthenticated: boolean;
   logout: () => Promise<void>;
   refetchUser: () => Promise<void>;
@@ -71,6 +72,7 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   allowedModules: [],
   isLoading: true,
+  sessionUnavailable: false,
   isAuthenticated: false,
   logout: async () => {},
   refetchUser: async () => {},
@@ -113,6 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user: user || null,
         allowedModules: moduleData?.allowedModules || [],
         isLoading: userLoading,
+        sessionUnavailable: !user && !!sessionError && !(sessionError instanceof ApiError && sessionError.status === 401),
         isAuthenticated: !!user,
         logout: async () => {
           await logoutMutation.mutateAsync();

@@ -20,6 +20,7 @@ function refreshSession(): Promise<boolean> {
       credentials: 'include',
     }).then((response) => {
       if (response.ok) sessionVersion += 1;
+      else if (response.status !== 401) throw new ApiError(response.status, 'Unable to refresh the session.');
       return response.ok;
     }).finally(() => {
       refreshInFlight = undefined;

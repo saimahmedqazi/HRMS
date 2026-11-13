@@ -1,6 +1,21 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Authentication & Access Control Flows', () => {
+  test('a temporarily unavailable session can recover from the dashboard', async ({ page }) => {
+    let profileRequests = 0;
+    await page.route('**/api/v1/auth/me', (route) => {
+      if (++profileRequests === 1) return route.fulfill({ status: 401, json: { message: 'Session expired' } });
+      return route.fulfill({ json: { data: { id: 'fixture-hr', role: 'HR_MANAGER', companyId: 'fixture-company' } } });
+    });
+    await page.route('**/api/v1/auth/refresh', (route) => route.fulfill({ status: 503, json: { message: 'Unavailable' } }));
+    await page.route('**/api/v1/auth/me/modules', (route) => route.fulfill({ json: { data: { allowedModules: [] } } }));
+    await page.goto('/dashboard');
+    await expect(page.getByRole('alert').filter({ hasText: 'We couldn’t check your session.' })).toBeVisible();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await page.getByRole('button', { name: 'Try again' }).click();
+    await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toBeVisible();
+  });
+
   test('sign-in loads a fresh profile while the anonymous profile request is pending', async ({ page }) => {
     let signedIn = false;
     let releaseAnonymous!: () => void;

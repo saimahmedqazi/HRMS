@@ -16,15 +16,15 @@ const tenantRouteRoles: Partial<Record<string, readonly UserRole[]>> = {
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, sessionUnavailable, refetchUser } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
 
   useEffect(() => {
-    if (!isLoading && !user) {
+    if (!isLoading && !user && !sessionUnavailable) {
       router.replace('/login');
     }
-  }, [user, isLoading, router]);
+  }, [user, isLoading, sessionUnavailable, router]);
 
   if (isLoading) {
     return (
@@ -34,6 +34,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <p className="text-sm text-slate-500">Loading session...</p>
         </div>
       </div>
+    );
+  }
+
+  if (sessionUnavailable) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-3 p-6 text-center">
+        <p role="alert">We couldn’t check your session. Please try again.</p>
+        <button type="button" onClick={() => void refetchUser()}
+          className="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-medium text-white">
+          Try again
+        </button>
+      </main>
     );
   }
 
