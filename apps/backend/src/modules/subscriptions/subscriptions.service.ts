@@ -313,7 +313,16 @@ export class SubscriptionsService {
       const subscription = invoice.parent?.subscription_details?.subscription ?? invoice.subscription;
       const stripeSubscriptionId = typeof subscription === 'string' ? subscription : subscription?.id;
       const stripeCustomerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;
-      if (!stripeCustomerId || !stripeSubscriptionId) return [];
+      if (!invoice.id || !stripeCustomerId || !stripeSubscriptionId) return [];
+
+      const paymentSucceeded = event.type === 'invoice.payment_succeeded';
+      const invoicePayment = await tx.stripeInvoicePayment.upsert({
+        where: { id: invoice.id },
+        create: { id: invoice.id, paid: paymentSucceeded },
+        update: paymentSucceeded ? { paid: true } : { id: invoice.id },
+        select: { paid: true },
+      });
+      if (!paymentSucceeded && invoicePayment.paid) return [];
 
       const subscriptions = await tx.subscription.findMany({
         where: { stripeCustomerId, stripeSubscriptionId },
@@ -322,7 +331,7 @@ export class SubscriptionsService {
       const emails: string[] = [];
       for (const sub of subscriptions) {
         const where = { id: sub.id, stripeCustomerId, stripeSubscriptionId };
-        if (event.type === 'invoice.payment_succeeded') {
+        if (paymentSucceeded) {
           const updated = await tx.subscription.updateMany({ where, data: paid });
           if (updated.count > 0) await this.restoreBillingLockout(tx, sub.companyId);
           continue;

@@ -854,6 +854,13 @@ model StripeWebhookReceipt {
   @@map("stripe_webhook_receipts")
 }
 
+model StripeInvoicePayment {
+  id   String  @id
+  paid Boolean @default(false)
+
+  @@map("stripe_invoice_payments")
+}
+
 // ============================================================
 // NOTIFICATIONS
 // ============================================================

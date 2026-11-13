@@ -44,6 +44,7 @@ describe('SubscriptionsService', () => {
       stripeWebhookReceipt: {
         createMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      stripeInvoicePayment: { upsert: jest.fn().mockResolvedValue({ paid: false }) },
       auditLog: { create: jest.fn() },
       user: {
         findFirst: jest.fn().mockResolvedValue({ id: 'user-admin', email: 'admin@acme.com' }),
@@ -147,7 +148,7 @@ describe('SubscriptionsService', () => {
         type: 'checkout.session.completed',
         data: {
           object: {
-            customer: 'cus_123',
+            id: 'in_123', customer: 'cus_123',
             subscription: 'sub_123',
             mode: 'subscription',
             payment_status: 'paid',
@@ -188,6 +189,7 @@ describe('SubscriptionsService', () => {
         type: 'invoice.payment_failed',
         data: {
           object: {
+            id: 'in_failed',
             customer: 'cus_123',
             subscription: 'sub_123',
             last_payment_error: { message: 'Card expired' },
@@ -222,7 +224,7 @@ describe('SubscriptionsService', () => {
       await deliverWebhook({
         type: 'invoice.payment_succeeded',
         data: { object: {
-          customer: 'cus_123',
+          id: 'in_123', customer: 'cus_123',
           parent: { subscription_details: { subscription: 'sub_123' } },
         } },
       });
@@ -243,6 +245,26 @@ describe('SubscriptionsService', () => {
         data: { status: CompanyStatus.ACTIVE, suspensionReason: null },
       });
       expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores a late failure for a paid invoice without ignoring other invoices', async () => {
+      prisma.subscription.findMany.mockResolvedValue([{ id: 'sub-1', companyId: mockCompanyId }]);
+      prisma.stripeInvoicePayment.upsert
+        .mockResolvedValueOnce({ paid: true })
+        .mockResolvedValueOnce({ paid: true })
+        .mockResolvedValueOnce({ paid: false });
+      const invoice = { id: 'in_paid', customer: 'cus_123', subscription: 'sub_123' };
+      await deliverWebhook({ id: 'evt_success', type: 'invoice.payment_succeeded', data: { object: invoice } });
+      await deliverWebhook({ id: 'evt_late', type: 'invoice.payment_failed', data: { object: invoice } });
+      expect(prisma.subscription.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.notification.create).not.toHaveBeenCalled();
+      expect(prisma.stripeInvoicePayment.upsert).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        where: { id: 'in_paid' }, update: { id: 'in_paid' },
+      }));
+
+      await deliverWebhook({ id: 'evt_failed', type: 'invoice.payment_failed', data: { object: { ...invoice, id: 'in_other' } } });
+      expect(prisma.subscription.updateMany).toHaveBeenCalledTimes(2);
+      expect(prisma.notification.create).toHaveBeenCalledTimes(1);
     });
 
     it('ignores checkout completion until the session is paid', async () => {
