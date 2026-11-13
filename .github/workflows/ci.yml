@@ -7,6 +7,23 @@ on:
     branches: [main, master]
 
 jobs:
+  frontend-container:
+    name: Frontend Container Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build and Start Frontend Container
+        run: |
+          docker build --file apps/frontend/Dockerfile --tag zenhr-frontend-ci .
+          container=$(docker run --detach --env PORT=3100 --publish 127.0.0.1:3100:3100 zenhr-frontend-ci)
+          trap 'docker logs "$container"; docker rm -f "$container"' EXIT
+          curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 2 --max-time 5 \
+            http://127.0.0.1:3100/login --output "$RUNNER_TEMP/zenhr-container-login.html"
+          grep -q 'Sign in to ZenHR' "$RUNNER_TEMP/zenhr-container-login.html"
+
   test-and-verify:
     name: Typecheck, Build & Test
     runs-on: ubuntu-latest
