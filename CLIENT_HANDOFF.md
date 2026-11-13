@@ -109,3 +109,14 @@ Run `npm run test:e2e -- --project chromium`. The browser suite creates and chan
 If setup fails, run `docker compose ps` to check both containers. For port conflicts, stop the local service occupying the listed port or update the Compose port and its matching environment variable together. If PowerShell blocks `npm.ps1`, use `npm.cmd` and `npx.cmd`.
 
 To stop, press **Ctrl+C** in both app terminals and run `npm run docker:down`. This preserves local data. To start over, use `docker compose down --volumes` only if you intend to delete the local demo database and Redis data, then repeat setup and seeding.
+
+## 8. Optional FYP demo on Vercel with a local API
+
+For a noncommercial demo, deploy the frontend to Vercel Hobby and run the API, PostgreSQL, and Redis on your PC. Use a fresh disposable database, synthetic data, and unique demo credentials. For this public demo, skip the local seed command and use the administrator bootstrap in the [deployment guide](README.md#database-deployment) or register a synthetic company. Published seed credentials are for local testing.
+
+1. Keep the API bound to `127.0.0.1:4000` and keep PostgreSQL and Redis on loopback. Apply migrations, configure the production signing and authenticator keys described in the [deployment guide](README.md), then run `npm run build:backend` and `npm run start:prod --workspace=apps/backend`.
+2. Install `cloudflared` and run `cloudflared tunnel --url http://127.0.0.1:4000`. Copy the temporary HTTPS origin it prints. The tunnel exposes the API to anyone with that URL. [Quick Tunnel setup](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
+3. Import this repo into Vercel. Choose **Next.js**, set **Root Directory** to `apps/frontend`, enable access to files outside that directory, and select **Node.js 24.x**. Set `NEXT_PUBLIC_API_URL` to the tunnel origin without a trailing slash or `/api`, then deploy. Keep database and API secrets on your PC. [Vercel monorepo settings](https://vercel.com/docs/monorepos)
+4. Set `FRONTEND_URL` in the local API environment to the public Vercel origin and restart the API. From the public frontend, sign in, reload the dashboard to verify the session, and complete a workflow with synthetic data before sharing the link.
+
+Keep the PC, API, and tunnel running throughout the demo. Starting a new Quick Tunnel changes its hostname. Update `NEXT_PUBLIC_API_URL` and redeploy the frontend when that happens.
