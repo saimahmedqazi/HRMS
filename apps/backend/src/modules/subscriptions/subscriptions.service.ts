@@ -296,6 +296,8 @@ export class SubscriptionsService {
             tier: SubscriptionTier.PREMIUM,
             stripeCustomerId: session.customer,
             stripeSubscriptionId: session.subscription,
+            latestStripeInvoiceId: null,
+            latestStripeInvoiceAt: null,
           },
         });
         await tx.company.update({
@@ -313,7 +315,7 @@ export class SubscriptionsService {
       const subscription = invoice.parent?.subscription_details?.subscription ?? invoice.subscription;
       const stripeSubscriptionId = typeof subscription === 'string' ? subscription : subscription?.id;
       const stripeCustomerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;
-      if (!invoice.id || !stripeCustomerId || !stripeSubscriptionId) return [];
+      if (!invoice.id || !stripeCustomerId || !stripeSubscriptionId || !Number.isFinite(invoice.created)) return [];
 
       const paymentSucceeded = event.type === 'invoice.payment_succeeded';
       const invoicePayment = await tx.stripeInvoicePayment.upsert({
@@ -329,10 +331,19 @@ export class SubscriptionsService {
         select: { id: true, companyId: true },
       });
       const emails: string[] = [];
+      const invoiceAt = new Date(invoice.created * 1000);
+      const latestInvoice = { latestStripeInvoiceId: invoice.id, latestStripeInvoiceAt: invoiceAt };
       for (const sub of subscriptions) {
-        const where = { id: sub.id, stripeCustomerId, stripeSubscriptionId };
+        const where = {
+          id: sub.id, stripeCustomerId, stripeSubscriptionId,
+          OR: [
+            { latestStripeInvoiceAt: null },
+            { latestStripeInvoiceAt: { lt: invoiceAt } },
+            paymentSucceeded ? latestInvoice : { latestStripeInvoiceAt: invoiceAt },
+          ],
+        };
         if (paymentSucceeded) {
-          const updated = await tx.subscription.updateMany({ where, data: paid });
+          const updated = await tx.subscription.updateMany({ where, data: { ...paid, ...latestInvoice } });
           if (updated.count > 0) await this.restoreBillingLockout(tx, sub.companyId);
           continue;
         }
@@ -343,6 +354,7 @@ export class SubscriptionsService {
             SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING, SubscriptionStatus.PAST_DUE,
           ] } },
           data: {
+            ...latestInvoice,
             status: SubscriptionStatus.PAST_DUE,
             failedPaymentCount: { increment: 1 },
             lastFailedPaymentAt: new Date(event.created * 1000),
