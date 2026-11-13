@@ -85,6 +85,8 @@ jobs:
           FRONTEND_URL: http://localhost:3000
         run: |
           export ZENHR_E2E_DATABASE_URL="$DATABASE_URL"
+          TOTP_ENCRYPTION_KEY=$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))")
+          export TOTP_ENCRYPTION_KEY
           (cd apps/backend && NODE_ENV=development exec node dist/src/main.js) > "$RUNNER_TEMP/zenhr-api.log" 2>&1 &
           api_pid=$!
           (cd apps/frontend && exec node ../../node_modules/next/dist/bin/next start --hostname localhost) > "$RUNNER_TEMP/zenhr-web.log" 2>&1 &
