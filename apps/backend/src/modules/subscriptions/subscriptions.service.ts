@@ -279,6 +279,7 @@ export class SubscriptionsService {
         lastNotifiedRetry: 0,
         lastFailedReason: null,
         lastFailedPaymentAt: null,
+        unpaidSince: null,
         suspendedAt: null,
       };
 
@@ -350,6 +351,7 @@ export class SubscriptionsService {
         }
 
         const reason = invoice.last_payment_error?.message || 'Payment method declined.';
+        const failedAt = new Date(event.created * 1000);
         const updated = await tx.subscription.updateMany({
           where: { ...where, status: { in: [
             SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING, SubscriptionStatus.PAST_DUE,
@@ -358,11 +360,16 @@ export class SubscriptionsService {
             ...latestInvoice,
             status: SubscriptionStatus.PAST_DUE,
             failedPaymentCount: { increment: 1 },
-            lastFailedPaymentAt: new Date(event.created * 1000),
+            lastFailedPaymentAt: failedAt,
             lastFailedReason: reason,
           },
         });
         if (updated.count === 0) continue;
+
+        await tx.subscription.updateMany({
+          where: { id: sub.id, OR: [{ unpaidSince: null }, { unpaidSince: { gt: failedAt } }] },
+          data: { unpaidSince: failedAt },
+        });
 
         const admin = await tx.user.findFirst({
           where: { companyId: sub.companyId, role: UserRole.COMPANY_ADMIN },

@@ -100,7 +100,7 @@ export class SubscriptionCronService {
     const delinquentSubs = await this.prisma.subscription.findMany({
       where: {
         status: SubscriptionStatus.PAST_DUE,
-        lastFailedPaymentAt: { lte: sixtyDaysAgo },
+        unpaidSince: { lte: sixtyDaysAgo },
       },
       include: { company: true },
     });
@@ -112,7 +112,7 @@ export class SubscriptionCronService {
           where: {
             id: sub.id,
             status: SubscriptionStatus.PAST_DUE,
-            lastFailedPaymentAt: { lte: sixtyDaysAgo },
+            unpaidSince: { lte: sixtyDaysAgo },
           },
           data: {
             status: SubscriptionStatus.SUSPENDED,

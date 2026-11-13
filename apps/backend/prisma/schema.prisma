@@ -838,6 +838,7 @@ model Subscription {
   failedPaymentCount    Int                @default(0)
   lastNotifiedRetry     Int                @default(0)
   lastFailedPaymentAt   DateTime?
+  unpaidSince           DateTime?
   lastFailedReason      String?
   suspendedAt           DateTime?
   createdAt             DateTime           @default(now())

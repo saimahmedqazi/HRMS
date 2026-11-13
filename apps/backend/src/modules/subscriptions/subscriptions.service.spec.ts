@@ -204,7 +204,12 @@ describe('SubscriptionsService', () => {
         data: { id: 'evt_test' },
         skipDuplicates: true,
       });
-      expect(prisma.subscription.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.subscription.updateMany).toHaveBeenCalledTimes(2);
+      const failedAt = new Date(1_760_000_000 * 1000);
+      expect(prisma.subscription.updateMany).toHaveBeenCalledWith({
+        where: { id: 'sub-1', OR: [{ unpaidSince: null }, { unpaidSince: { gt: failedAt } }] },
+        data: { unpaidSince: failedAt },
+      });
       expect(prisma.subscription.updateMany).toHaveBeenCalledWith({
         where: expect.objectContaining({ id: 'sub-1', stripeSubscriptionId: 'sub_123' }),
         data: expect.objectContaining({
@@ -234,7 +239,7 @@ describe('SubscriptionsService', () => {
       }));
       expect(prisma.subscription.updateMany).toHaveBeenCalledWith({
         where: expect.objectContaining({ id: 'sub-1', stripeCustomerId: 'cus_123', stripeSubscriptionId: 'sub_123' }),
-        data: expect.objectContaining({ status: SubscriptionStatus.ACTIVE, suspendedAt: null }),
+        data: expect.objectContaining({ status: SubscriptionStatus.ACTIVE, suspendedAt: null, unpaidSince: null }),
       });
       expect(prisma.company.updateMany).toHaveBeenCalledWith({
         where: {
@@ -263,7 +268,7 @@ describe('SubscriptionsService', () => {
       }));
 
       await deliverWebhook({ id: 'evt_failed', type: 'invoice.payment_failed', data: { object: { ...invoice, id: 'in_other' } } });
-      expect(prisma.subscription.updateMany).toHaveBeenCalledTimes(2);
+      expect(prisma.subscription.updateMany).toHaveBeenCalledTimes(3);
       expect(prisma.notification.create).toHaveBeenCalledTimes(1);
     });
 

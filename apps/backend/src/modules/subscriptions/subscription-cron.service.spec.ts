@@ -99,7 +99,8 @@ describe('SubscriptionCronService', () => {
           id: 'sub-1',
           companyId: mockCompanyId,
           status: SubscriptionStatus.PAST_DUE,
-          lastFailedPaymentAt: delinquentDate,
+          unpaidSince: delinquentDate,
+          lastFailedPaymentAt: new Date(),
           company: { id: mockCompanyId, name: 'Acme Inc', status: CompanyStatus.ACTIVE },
         },
       ]);
@@ -111,7 +112,7 @@ describe('SubscriptionCronService', () => {
         where: {
           id: 'sub-1',
           status: SubscriptionStatus.PAST_DUE,
-          lastFailedPaymentAt: { lte: expect.any(Date) },
+          unpaidSince: { lte: expect.any(Date) },
         },
         data: expect.objectContaining({
           status: SubscriptionStatus.SUSPENDED,
