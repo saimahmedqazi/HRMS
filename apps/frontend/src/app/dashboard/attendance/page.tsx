@@ -98,6 +98,7 @@ export default function AttendanceDashboardPage() {
   const [remoteEndDate, setRemoteEndDate] = useState('');
   const [remoteReason, setRemoteReason] = useState('');
   const [selectedMonth, setCalendarMonth] = useState<Date | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Fetch today's attendance
   const { data: attendanceData } = useQuery({
@@ -229,7 +230,7 @@ export default function AttendanceDashboardPage() {
       setRemoteStartDate('');
       setRemoteEndDate('');
       setRemoteReason('');
-      alert('Remote work request submitted successfully.');
+      setActionFeedback({ type: 'success', message: 'Remote work request submitted successfully.' });
     },
   });
 
@@ -237,13 +238,13 @@ export default function AttendanceDashboardPage() {
     mutationFn: (id: string) => api.patch(`/attendance/remote-permissions/${id}/step1`, {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['remote-permissions'] });
-      alert('Step 1 recommendation recorded.');
+      setActionFeedback({ type: 'success', message: 'Step 1 recommendation recorded.' });
     },
     onError: (err) => {
       if (err instanceof ApiError && err.status === 409) {
         void queryClient.invalidateQueries({ queryKey: ['remote-permissions'] });
       }
-      alert(err.message || 'Failed to approve Step 1.');
+      setActionFeedback({ type: 'error', message: err.message || 'Failed to approve Step 1.' });
     },
   });
 
@@ -251,13 +252,13 @@ export default function AttendanceDashboardPage() {
     mutationFn: (id: string) => api.patch(`/attendance/remote-permissions/${id}/step2`, {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['remote-permissions'] });
-      alert('Step 2 approval granted.');
+      setActionFeedback({ type: 'success', message: 'Step 2 approval granted.' });
     },
     onError: (err) => {
       if (err instanceof ApiError && err.status === 409) {
         void queryClient.invalidateQueries({ queryKey: ['remote-permissions'] });
       }
-      alert(err.message || 'Failed to approve Step 2.');
+      setActionFeedback({ type: 'error', message: err.message || 'Failed to approve Step 2.' });
     },
   });
 
@@ -363,6 +364,26 @@ export default function AttendanceDashboardPage() {
 
   return (
     <div className="space-y-6">
+      {actionFeedback && (
+        <div
+          role="alert"
+          className={`flex items-center justify-between rounded-xl px-4 py-3 text-sm shadow-sm ${
+            actionFeedback.type === 'success'
+              ? 'border border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-200'
+              : 'border border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-200'
+          }`}
+        >
+          <span>{actionFeedback.message}</span>
+          <button
+            type="button"
+            onClick={() => setActionFeedback(null)}
+            className="ml-3 text-xs font-semibold underline hover:opacity-80"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Page Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>

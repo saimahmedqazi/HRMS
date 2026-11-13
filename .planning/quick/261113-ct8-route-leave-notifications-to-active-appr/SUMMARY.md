@@ -1,0 +1,5 @@
+# Leave approver availability
+
+**High.** In `leave.service.ts`, suspend a team lead while retaining the reporting assignment, then submit a reportee’s leave. The previous selection could assign and notify the suspended user. Suspending HR after submission could also leave the Step 2 notification addressed to that account. The approval service now scopes candidates to the tenant, checks account availability and role, and routes Step 2 notifications to an eligible fallback. Submission rejects an unstaffed required stage before reserving leave. Existing role guards continue to govern decisions.
+
+Disposable PostgreSQL verified fallback from a suspended lead to the department manager, a Step 2 notification to the company admin after HR became unavailable, successful final approval, and rejection before reservation when no eligible final approver remained. Backend typecheck, build, and 264 Jest tests passed. Remote-work approvals still use their own live reporting checks and were reviewed in source only.

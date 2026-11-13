@@ -68,6 +68,9 @@ export default function EmployeeDetailPage() {
   const [demoSaved, setDemoSaved] = useState(false);
   const initialDemoValues = useRef<Record<string, string>>({});
 
+  // Action feedback notification banner
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
   // Fetch employee details
   const { data, error, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['employee', id, user?.id, user?.supportModeCompanyId ?? user?.companyId],
@@ -148,11 +151,11 @@ export default function EmployeeDetailPage() {
       setContactName('');
       setContactRel('');
       setContactPhone('');
-      alert('Emergency contact added successfully.');
+      setFeedback({ type: 'success', message: 'Emergency contact added successfully.' });
     },
     onError: (err: any) => {
       const msg = err?.response?.data?.message || err?.message || 'Failed to add contact. You may not have permission.';
-      alert(msg);
+      setFeedback({ type: 'error', message: msg });
     },
   });
 
@@ -161,10 +164,10 @@ export default function EmployeeDetailPage() {
       api.delete(`/employees/${id}/emergency-contacts/${contactId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['employee', id] });
-      alert('Emergency contact deleted.');
+      setFeedback({ type: 'success', message: 'Emergency contact deleted successfully.' });
     },
     onError: (err: any) => {
-      alert(err?.response?.data?.message || err?.message || 'Failed to delete emergency contact.');
+      setFeedback({ type: 'error', message: err?.response?.data?.message || err?.message || 'Failed to delete emergency contact.' });
     },
   });
 
@@ -172,10 +175,10 @@ export default function EmployeeDetailPage() {
     mutationFn: (docId: string) => api.delete(`/employees/${id}/documents/${docId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['employee', id] });
-      alert('Document deleted successfully.');
+      setFeedback({ type: 'success', message: 'Document deleted successfully.' });
     },
     onError: (err: any) => {
-      alert(err?.response?.data?.message || err?.message || 'Failed to delete document.');
+      setFeedback({ type: 'error', message: err?.response?.data?.message || err?.message || 'Failed to delete document.' });
     },
   });
 
@@ -190,9 +193,9 @@ export default function EmployeeDetailPage() {
     try {
       await api.post(`/employees/${id}/avatar`, formData);
       queryClient.invalidateQueries({ queryKey: ['employee', id] });
-      alert('Profile avatar updated successfully.');
+      setFeedback({ type: 'success', message: 'Profile avatar updated successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Avatar upload failed');
+      setFeedback({ type: 'error', message: err.message || 'Avatar upload failed' });
       console.error('Avatar upload failed', err);
     }
   };
@@ -212,9 +215,9 @@ export default function EmployeeDetailPage() {
       setShowDocModal(false);
       setSelectedFile(null);
       setDocName('');
-      alert('Document uploaded successfully.');
+      setFeedback({ type: 'success', message: 'Document uploaded successfully.' });
     } catch (err: any) {
-      alert(err.message || 'Document upload failed');
+      setFeedback({ type: 'error', message: err.message || 'Document upload failed' });
       console.error('Document upload failed', err);
     }
   };
@@ -254,6 +257,26 @@ export default function EmployeeDetailPage() {
 
   return (
     <div className="space-y-6">
+      {feedback && (
+        <div
+          role="alert"
+          className={`flex items-center justify-between rounded-xl px-4 py-3 text-sm shadow-sm ${
+            feedback.type === 'success'
+              ? 'border border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-200'
+              : 'border border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-200'
+          }`}
+        >
+          <span>{feedback.message}</span>
+          <button
+            type="button"
+            onClick={() => setFeedback(null)}
+            className="ml-3 text-xs font-semibold underline hover:opacity-80"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Top Banner / Header Card */}
       <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
@@ -563,6 +586,8 @@ export default function EmployeeDetailPage() {
                   <button
                     onClick={() => deleteContactMutation.mutate(c.id)}
                     className="text-zinc-400 hover:text-red-500"
+                    title="Delete contact"
+                    aria-label="Delete contact"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -616,14 +641,11 @@ export default function EmployeeDetailPage() {
                       View
                     </a>
                     <button
-                      onClick={() => {
-                        if (confirm(`Are you sure you want to delete ${d.name}?`)) {
-                          deleteDocMutation.mutate(d.id);
-                        }
-                      }}
+                      onClick={() => deleteDocMutation.mutate(d.id)}
                       disabled={deleteDocMutation.isPending}
                       className="text-zinc-400 hover:text-red-500 transition-colors p-1"
                       title="Delete document"
+                      aria-label={`Delete ${d.name}`}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
