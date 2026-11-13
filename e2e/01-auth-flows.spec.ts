@@ -1,6 +1,38 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Authentication & Access Control Flows', () => {
+  test('sign-in loads a fresh profile while the anonymous profile request is pending', async ({ page }) => {
+    let signedIn = false;
+    let releaseAnonymous!: () => void;
+    const anonymousResponse = new Promise<void>((resolve) => { releaseAnonymous = resolve; });
+    await page.route('**/api/v1/auth/me', async (route) => {
+      if (!signedIn) {
+        await anonymousResponse;
+        await route.fulfill({ status: 401, json: { message: 'Not signed in' } }).catch(() => {});
+        return;
+      }
+      await route.fulfill({ json: { data: { id: 'fixture-hr', role: 'HR_MANAGER', companyId: 'fixture-company' } } });
+    });
+    await page.route('**/api/v1/auth/me/modules', (route) => route.fulfill({ json: { data: { allowedModules: [] } } }));
+    await page.route('**/api/v1/auth/login', (route) => {
+      signedIn = true;
+      return route.fulfill({ json: { data: { user: { id: 'fixture-hr' } } } });
+    });
+
+    const initialProfile = page.waitForRequest('**/api/v1/auth/me');
+    try {
+      await page.goto('/login');
+      await initialProfile;
+      await page.locator('input[type="email"]').fill('qa@example.test');
+      await page.locator('input[type="password"]').fill('fixture-password');
+      await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+      await expect(page).toHaveURL(/\/dashboard$/, { timeout: 25_000 });
+      await expect(page.getByRole('main')).toBeVisible();
+    } finally {
+      releaseAnonymous();
+    }
+  });
+
   test('Login page displays brand, email/password inputs, and navigation links', async ({ page }) => {
     await page.goto('/login');
     await expect(page).toHaveTitle(/ZenHR/i);

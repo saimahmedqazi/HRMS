@@ -86,7 +86,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     refetch: refetchUser,
   } = useQuery({
     queryKey: ['auth', 'me'],
-    queryFn: () => api.get<UserProfile>('/auth/me'),
+    queryFn: ({ signal }) => api.get<UserProfile>('/auth/me', { signal }),
     retry: false,
   });
   const user = sessionError instanceof ApiError && sessionError.status === 401 ? null : cachedUser;
@@ -118,6 +118,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await logoutMutation.mutateAsync();
         },
         refetchUser: async () => {
+          await queryClient.cancelQueries({ queryKey: ['auth', 'me'], exact: true });
           await refetchUser();
           await queryClient.invalidateQueries({ queryKey: ['auth', 'modules'] });
         },
