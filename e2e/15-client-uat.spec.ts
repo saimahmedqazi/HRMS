@@ -95,8 +95,8 @@ test('Team Lead can add a reportee’s contact, upload a document, and delete it
   await page.getByPlaceholder('e.g. Maria Gonzalez').fill(contact);
   await page.getByPlaceholder('e.g. Spouse, Parent, Sibling').fill('Sibling');
   await page.getByPlaceholder('+1-555-0123').fill('+1-555-0100');
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Add Contact', exact: true }).last().click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Emergency contact added successfully.' })).toBeVisible();
   await expect(page.getByText(contact, { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: /^Documents \(/ }).click();
@@ -106,8 +106,8 @@ test('Team Lead can add a reportee’s contact, upload a document, and delete it
   await page.locator('input[type="file"][accept*="application/pdf"]').setInputFiles({
     name: 'contract.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n%%EOF\n'),
   });
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Upload to Cloud Storage', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Document uploaded successfully.' })).toBeVisible();
   await expect(page.getByText(doc, { exact: true })).toBeVisible();
 
   await page.reload();
@@ -116,11 +116,12 @@ test('Team Lead can add a reportee’s contact, upload a document, and delete it
   await page.getByRole('button', { name: /^Documents \(/ }).click();
   const card = page.getByRole('heading', { name: doc }).locator('xpath=../../..');
   await expect(card.getByRole('link', { name: 'View' })).toHaveAttribute('href', /\/documents\/[^/]+\/download$/);
-  const acceptDialog = (dialog: import('@playwright/test').Dialog) => void dialog.accept();
-  page.on('dialog', acceptDialog);
-  await card.getByRole('button', { name: 'Delete document' }).click();
+  await card.getByRole('button', { name: `Delete ${doc}`, exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Document deleted successfully.' })).toBeVisible();
   await expect(page.getByRole('heading', { name: doc })).toHaveCount(0);
-  page.off('dialog', acceptDialog);
+  await page.reload();
+  await page.getByRole('button', { name: /^Documents \(/ }).click();
+  await expect(page.getByRole('heading', { name: doc })).toHaveCount(0);
 });
 
 test('Team Lead actions respect self-approval and HR can reject after Step 1', async ({ page }) => {
