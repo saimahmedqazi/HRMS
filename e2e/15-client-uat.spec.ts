@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, Page, test } from '@playwright/test';
+import { signInThroughUi } from './role-session';
 import { openFixtureDatabase } from './fixture-database';
 
 const teamLead = 'team.lead@acme.com';
@@ -7,11 +8,7 @@ const employee = 'employee@acme.com';
 
 async function signIn(page: Page, email: string) {
   await page.context().clearCookies();
-  await page.goto('/login');
-  await page.locator('input[type="email"]').fill(email);
-  await page.locator('input[type="password"]').fill('Password@123');
-  await page.getByRole('button', { name: 'Sign In', exact: true }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
+  await signInThroughUi(page, email, 'Password@123');
 }
 
 async function getProfileId(page: Page) {
