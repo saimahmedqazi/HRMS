@@ -103,6 +103,10 @@ test.describe('Employee Self-Service & Tier Gating Suite', () => {
     await expect(page.locator('text=Up to 25 Employees')).toBeVisible();
     await expect(page.locator('text=Locked').first()).toBeVisible();
 
+    await page.route('**/api/v1/subscriptions/checkout-session', (route) => route.fulfill({
+      status: 200,
+      json: { url: 'http://localhost:3000/dashboard/billing', mode: 'sandbox' },
+    }));
     await page.getByRole('button', { name: /Upgrade to Premium/ }).click();
     await expect(page.getByRole('status').filter({ hasText: 'Stripe is simulated in this local demo' })).toBeVisible();
     await expect(page).toHaveURL(/\/dashboard\/billing$/);

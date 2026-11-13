@@ -93,7 +93,7 @@ test.describe('Role 7: Employee Comprehensive Test Suite (10 Tests)', () => {
     await expect(page.locator('textarea')).toBeVisible();
 
     // Close modal
-    await page.click('button:has-text("Cancel")');
+    await page.locator('.fixed.inset-0 button:has-text("Cancel")').click();
     await expect(page.locator('h3:has-text("Request Leave")')).toBeHidden();
 
     await page.screenshot({ path: path.join(screenshotsDir, 'em-06-leave-modal.png') });
@@ -163,7 +163,7 @@ test.describe('Role 7: Employee Comprehensive Test Suite (10 Tests)', () => {
     await expect(page.locator('textarea[placeholder*="equipment or software"]')).toBeVisible();
 
     // Close modal
-    await page.click('button:has-text("Cancel")');
+    await page.locator('.fixed.inset-0 button:has-text("Cancel")').click();
     await expect(page.locator('h3:has-text("Request Resource")')).toBeHidden();
 
     await page.screenshot({ path: path.join(screenshotsDir, 'em-09-resource-requisitions.png') });
