@@ -120,3 +120,23 @@ For a noncommercial demo, deploy the frontend to Vercel Hobby and run the API, P
 4. Set `FRONTEND_URL` in the local API environment to the public Vercel origin and restart the API. From the public frontend, sign in, reload the dashboard to verify the session, and complete a workflow with synthetic data before sharing the link.
 
 Keep the PC, API, and tunnel running throughout the demo. Starting a new Quick Tunnel changes its hostname. Update `NEXT_PUBLIC_API_URL` and redeploy the frontend when that happens.
+
+## 9. FYP handoff with a group-owned backend
+
+Use this setup when the group needs access while your PC is off. The group owns the Vercel project, Linux backend host, and database and Redis credentials. It can use a single Linux VM or an existing server that the university provides. The backend needs a stable public HTTPS origin. Keep PostgreSQL and Redis on loopback or a private network, and use synthetic data for the demo.
+
+1. Install Node.js 24 on the backend host and provision PostgreSQL 16 and Redis. Configure `DATABASE_URL`, `REDIS_URL`, `FRONTEND_URL` (the group's Vercel HTTPS origin), `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, and `TOTP_ENCRYPTION_KEY` in the backend environment. See the [deployment guide](README.md#database-deployment) for key generation and administrator bootstrap. Use unique administrator credentials on the hosted instance.
+2. Build and initialize the backend from the repository root. For the first deployment, set `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD` just for the bootstrap command.
+
+   ```bash
+   npm ci --include=dev
+   npm run prisma:generate
+   npm run prisma:migrate:deploy --workspace=apps/backend
+   npm run build:backend
+   npm run auth:bootstrap-admin --workspace=apps/backend
+   npm run start:prod --workspace=apps/backend
+   ```
+
+3. Configure your host's HTTPS reverse proxy to forward requests to the API on port `4000`. If the proxy runs on the same server, set `API_BIND_HOST=127.0.0.1`. Run the backend under a service manager or your hosting provider's process supervisor so it restarts after reboot.
+4. In the group's Vercel project, choose **Next.js**, use `apps/frontend` as the root, select Node.js 24.x, and set **Production** `NEXT_PUBLIC_API_URL` to the backend's public HTTPS origin. Redeploy after saving the variable.
+5. Visit `/api/v1/auth/me` on the Vercel site in a private window. HTTP 401 with JSON confirms the request reaches the backend. Sign in, reload the dashboard to check the session, and complete one tenant workflow. Then hand over the frontend URL and share the demo credentials privately.
