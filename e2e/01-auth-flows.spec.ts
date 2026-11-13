@@ -1,6 +1,20 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Authentication & Access Control Flows', () => {
+  test('sign-in explains when the API proxy returns an error page', async ({ page }) => {
+    await page.route('**/api/v1/auth/me', (route) => route.fulfill({ status: 401, json: { message: 'Not signed in' } }));
+    await page.route('**/api/v1/auth/refresh', (route) => route.fulfill({ status: 401, json: { message: 'Not signed in' } }));
+    await page.route('**/api/v1/auth/login', (route) => route.fulfill({
+      status: 404, contentType: 'text/plain', body: 'The page could not be found\n\nDNS_HOSTNAME_RESOLVED_PRIVATE',
+    }));
+    await page.goto('/login');
+    await page.locator('input[type="email"]').fill('qa@example.test');
+    await page.locator('input[type="password"]').fill('fixture-password');
+    await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+    await expect(page.getByText('The authentication service is unavailable.', { exact: false })).toBeVisible();
+    await expect(page).toHaveURL(/\/login$/);
+  });
+
   test('a temporarily unavailable session can recover from the dashboard', async ({ page }) => {
     let profileRequests = 0;
     await page.route('**/api/v1/auth/me', (route) => {

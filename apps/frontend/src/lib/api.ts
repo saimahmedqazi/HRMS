@@ -53,6 +53,7 @@ export async function apiRequest<T = unknown>(
 ): Promise<T> {
   const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const url = `${API_PREFIX}${path}`;
+  const isPublicAuthRoute = publicAuthRoutes.has(path.split('?')[0]);
 
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
 
@@ -74,12 +75,16 @@ export async function apiRequest<T = unknown>(
   };
   const initialSessionVersion = sessionVersion;
   let response = await fetch(url, requestOptions);
-  if (response.status === 401 && !publicAuthRoutes.has(path.split('?')[0])) {
+  if (response.status === 401 && !isPublicAuthRoute) {
     const refreshed = initialSessionVersion !== sessionVersion || await refreshSession();
     if (refreshed) response = await fetch(url, requestOptions);
   }
 
   const json = await response.json().catch(() => null);
+
+  if (isPublicAuthRoute && json === null) {
+    throw new ApiError(response.status, 'The authentication service is unavailable. Please try again or contact your administrator.');
+  }
 
   if (!response.ok) {
     const errorMessage = json?.message || `Request failed with status ${response.status}`;
