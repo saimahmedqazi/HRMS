@@ -106,6 +106,10 @@ function ImportErrorReport({ errors, preview = false }: { errors: RowError[]; pr
   );
 }
 
+function isUnavailableJob(error: unknown) {
+  return error instanceof ApiError && (error.status === 403 || error.status === 404);
+}
+
 export default function BulkImportDashboardPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -125,13 +129,13 @@ export default function BulkImportDashboardPage() {
     retry: false,
     refetchInterval: (query) => {
       const { data, error } = query.state;
-      if (data?.status === 'COMPLETED' || data?.status === 'FAILED' || (error instanceof ApiError && error.status === 404)) return false;
+      if (data?.status === 'COMPLETED' || data?.status === 'FAILED' || isUnavailableJob(error)) return false;
       return 1000;
     },
   });
   const job = jobQuery.data;
-  const importResult = job?.status === 'COMPLETED' || job?.status === 'FAILED' ? job : null;
-  const missingJob = jobQuery.error instanceof ApiError && jobQuery.error.status === 404;
+  const unavailableJob = isUnavailableJob(jobQuery.error);
+  const importResult = !unavailableJob && (job?.status === 'COMPLETED' || job?.status === 'FAILED') ? job : null;
 
   useEffect(() => {
     if (importResult?.importedCount) void queryClient.invalidateQueries({ queryKey: ['employees'] });
@@ -172,7 +176,7 @@ export default function BulkImportDashboardPage() {
     },
   });
 
-  const pendingJob = Boolean(jobId && !importResult && !missingJob);
+  const pendingJob = Boolean(jobId && !importResult && !unavailableJob);
   const isBusy = previewMutation.isPending || executeMutation.isPending || pendingJob;
   const hasFailures = importResult?.status === 'FAILED' || Boolean(importResult?.failedCount);
 
@@ -207,12 +211,21 @@ export default function BulkImportDashboardPage() {
       )}
 
       {pendingJob && (
-        <p role="status" className="rounded-xl border border-gray-200 p-4 text-sm text-gray-700 dark:border-gray-800 dark:text-gray-200">
-          {jobQuery.isError ? 'Could not check import progress. Retrying…'
-            : job?.status === 'PROCESSING' ? 'Importing employee records…' : 'Employee import queued…'}
-        </p>
+        <div className="rounded-xl border border-gray-200 p-4 text-sm text-gray-700 dark:border-gray-800 dark:text-gray-200">
+          <p role="status">
+            {jobQuery.isError ? 'Could not check import progress. Retrying…'
+              : job?.status === 'PROCESSING' ? 'Importing employee records…'
+              : job?.status === 'QUEUED' ? 'Employee import queued…' : 'Checking import status…'}
+          </p>
+          {jobQuery.isError && (
+            <button type="button" onClick={() => void jobQuery.refetch()} disabled={jobQuery.isFetching}
+              className="mt-2 rounded-lg border border-gray-300 px-3 py-2 font-medium disabled:opacity-50 dark:border-gray-700">
+              Check status now
+            </button>
+          )}
+        </div>
       )}
-      {missingJob && (
+      {unavailableJob && (
         <p role="status" className="rounded-xl border border-amber-300 p-4 text-sm text-amber-800 dark:text-amber-200">
           This import is unavailable. Select a file to start a new import.
         </p>

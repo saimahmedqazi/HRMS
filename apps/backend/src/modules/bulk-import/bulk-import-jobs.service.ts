@@ -67,9 +67,13 @@ export class BulkImportJobsService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.queue.add('import', { workbook: workbook.toString('base64') }, { jobId: job.id });
     } catch {
-      await this.prisma.bulkImportJob.updateMany({
+      const failure = await this.prisma.bulkImportJob.updateMany({
         where: { id: job.id, status: BulkImportStatus.QUEUED },
         data: { status: BulkImportStatus.FAILED, failureReason: 'The upload could not be queued. Select the file and try again.', finishedAt: new Date() },
+      });
+      if (failure.count > 0) return { id: job.id, status: BulkImportStatus.FAILED };
+      return this.prisma.bulkImportJob.findUniqueOrThrow({
+        where: { id: job.id }, select: { id: true, status: true },
       });
     }
     return job;

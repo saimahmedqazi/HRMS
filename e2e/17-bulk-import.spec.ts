@@ -4,6 +4,33 @@ import { expect, test } from '@playwright/test';
 import * as xlsx from 'xlsx';
 import { openFixtureDatabase } from './fixture-database';
 
+test('an unavailable import report leaves file selection usable', async ({ page }) => {
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    json: { data: { id: 'fixture-hr', role: 'HR_MANAGER', companyId: 'fixture-company' } },
+  }));
+  await page.route('**/api/v1/auth/me/modules', (route) => route.fulfill({ json: { data: { allowedModules: ['bulk-import'] } } }));
+  await page.route('**/api/v1/notifications', (route) => route.fulfill({ json: { data: [] } }));
+  let releaseResponse!: () => void;
+  const responseReady = new Promise<void>((resolve) => { releaseResponse = resolve; });
+  await page.route('**/api/v1/employees/bulk/jobs/old-import', async (route) => {
+    await responseReady;
+    await route.fulfill({ status: 403, json: { message: 'Import unavailable' } });
+  });
+
+  await page.goto('/dashboard/bulk-import?importJob=old-import');
+  const picker = page.locator('input[type=file]');
+  try {
+    await expect(page.getByText('Checking import status…')).toBeVisible();
+    await expect(page.getByText('Employee import queued…')).toHaveCount(0);
+    await expect(picker).toBeDisabled();
+  } finally {
+    releaseResponse();
+  }
+  await expect(page.getByText('This import is unavailable.', { exact: false })).toBeVisible();
+  await expect(picker).toBeEnabled();
+  await expect(page).toHaveURL(/importJob=old-import$/);
+});
+
 test('HR downloads the bulk template and an imported employee sets their own password', async ({ page }) => {
   const prisma = openFixtureDatabase();
   const suffix = randomUUID().slice(0, 8);
