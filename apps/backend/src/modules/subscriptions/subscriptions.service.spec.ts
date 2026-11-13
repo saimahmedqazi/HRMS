@@ -31,7 +31,8 @@ describe('SubscriptionsService', () => {
       subscription: {
         findUnique: jest.fn(),
         findMany: jest.fn(),
-        create: jest.fn(),
+        createMany: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
@@ -79,7 +80,7 @@ describe('SubscriptionsService', () => {
       config['app.nodeEnv'] = 'production';
       await expect(service.createCheckoutSession(mockCompanyId)).rejects.toMatchObject({ status: 503 });
       await expect(service.createCustomerPortalSession(mockCompanyId)).rejects.toMatchObject({ status: 503 });
-      expect(prisma.subscription.create).not.toHaveBeenCalled();
+      expect(prisma.subscription.createMany).not.toHaveBeenCalled();
     });
 
     it('uses the configured billing page for local demo redirects', async () => {
@@ -100,7 +101,8 @@ describe('SubscriptionsService', () => {
   describe('ensureSubscription', () => {
     it('should create default BASIC subscription with 14-day trial if none exists', async () => {
       prisma.subscription.findUnique.mockResolvedValue(null);
-      prisma.subscription.create.mockResolvedValue({
+      prisma.subscription.createMany.mockResolvedValue({ count: 1 });
+      prisma.subscription.findUniqueOrThrow.mockResolvedValue({
         id: 'sub-1',
         companyId: mockCompanyId,
         tier: SubscriptionTier.BASIC,
@@ -109,8 +111,9 @@ describe('SubscriptionsService', () => {
 
       const result = await service.ensureSubscription(mockCompanyId);
 
-      expect(prisma.subscription.create).toHaveBeenCalledWith(
+      expect(prisma.subscription.createMany).toHaveBeenCalledWith(
         expect.objectContaining({
+          skipDuplicates: true,
           data: expect.objectContaining({
             tier: SubscriptionTier.BASIC,
             status: SubscriptionStatus.TRIALING,
@@ -118,6 +121,16 @@ describe('SubscriptionsService', () => {
         }),
       );
       expect(result.tier).toBe(SubscriptionTier.BASIC);
+    });
+
+    it('returns the persisted subscription when another request created it first', async () => {
+      const stored = { id: 'winner', tier: SubscriptionTier.PREMIUM, currentPeriodEnd: new Date() };
+      prisma.subscription.findUnique.mockResolvedValue(null);
+      prisma.subscription.createMany.mockResolvedValue({ count: 0 });
+      prisma.subscription.findUniqueOrThrow.mockResolvedValue(stored);
+
+      await expect(service.ensureSubscription(mockCompanyId)).resolves.toEqual(stored);
+      expect(prisma.subscription.findUniqueOrThrow).toHaveBeenCalledWith({ where: { companyId: mockCompanyId } });
     });
   });
 

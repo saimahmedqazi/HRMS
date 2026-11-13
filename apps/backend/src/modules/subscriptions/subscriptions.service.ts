@@ -55,7 +55,8 @@ export class SubscriptionsService {
       const now = new Date();
       const trialEnd = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
       const currentPeriodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-      subscription = await this.prisma.subscription.create({
+      await this.prisma.subscription.createMany({
+        skipDuplicates: true,
         data: {
           companyId,
           tier,
@@ -65,7 +66,9 @@ export class SubscriptionsService {
           trialEnd,
         },
       });
-    } else if (!subscription.currentPeriodEnd) {
+      subscription = await this.prisma.subscription.findUniqueOrThrow({ where: { companyId } });
+    }
+    if (!subscription.currentPeriodEnd) {
       const start = subscription.currentPeriodStart || subscription.createdAt || new Date();
       subscription = {
         ...subscription,
