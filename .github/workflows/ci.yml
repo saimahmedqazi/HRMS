@@ -20,7 +20,7 @@ jobs:
           docker build --file apps/frontend/Dockerfile --tag zenhr-frontend-ci .
           container=$(docker run --detach --env PORT=3100 --publish 127.0.0.1:3100:3100 zenhr-frontend-ci)
           trap 'docker logs "$container"; docker rm -f "$container"' EXIT
-          curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 2 --max-time 5 \
+          curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 2 --retry-max-time 35 --max-time 5 \
             http://127.0.0.1:3100/login --output "$RUNNER_TEMP/zenhr-container-login.html"
           grep -q 'Sign in to ZenHR' "$RUNNER_TEMP/zenhr-container-login.html"
 
