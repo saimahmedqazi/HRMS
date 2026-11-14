@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 
+const SMTP_SEND_TIMEOUT_MS = 8_000;
+
 export type SendMailOptions = {
   to: string;
   subject: string;
@@ -46,6 +48,7 @@ export class MailService {
         subject: options.subject,
         text: options.text,
         html: options.html,
+        signal: AbortSignal.timeout(SMTP_SEND_TIMEOUT_MS),
       });
       return (result.accepted?.length ?? 0) > 0;
     } catch (error) {
