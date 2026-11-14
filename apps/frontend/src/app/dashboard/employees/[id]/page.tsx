@@ -134,9 +134,12 @@ export default function EmployeeDetailPage() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['employee', id] });
+      queryClient.invalidateQueries({ queryKey: ['employees'] });
       setShowStatusModal(false);
       setStatusReason('');
+      setFeedback({ type: 'success', message: 'Employment status updated.' });
     },
+    onError: () => queryClient.invalidateQueries({ queryKey: ['employee', id] }),
   });
 
   // Emergency contact mutation
@@ -355,6 +358,8 @@ export default function EmployeeDetailPage() {
             {canUpdateStatus && (
               <button
                 onClick={() => {
+                  statusMutation.reset();
+                  setStatusReason('');
                   setNewStatus(emp.status);
                   setShowStatusModal(true);
                 }}
@@ -713,16 +718,17 @@ export default function EmployeeDetailPage() {
       {/* Status Modal */}
       {showStatusModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl dark:bg-zinc-900">
-            <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
+          <div role="dialog" aria-modal="true" aria-labelledby="status-dialog-title" className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl dark:bg-zinc-900">
+            <h2 id="status-dialog-title" className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
               Update Employment Status
             </h2>
             <div className="mt-4 space-y-4">
               <div>
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                <label htmlFor="employee-new-status" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                   New Status
                 </label>
                 <select
+                  id="employee-new-status"
                   value={newStatus}
                   onChange={(e) => setNewStatus(e.target.value)}
                   className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
@@ -736,10 +742,12 @@ export default function EmployeeDetailPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                <label htmlFor="employee-status-reason" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                   Reason for Status Change
                 </label>
                 <textarea
+                  id="employee-status-reason"
+                  maxLength={500}
                   value={statusReason}
                   onChange={(e) => setStatusReason(e.target.value)}
                   placeholder="e.g. Completed probation review, voluntary resignation, etc."
@@ -748,15 +756,19 @@ export default function EmployeeDetailPage() {
                 />
               </div>
             </div>
+            {statusMutation.isError && (
+              <p role="alert" className="mt-4 text-sm text-rose-700 dark:text-rose-300">{statusMutation.error.message}</p>
+            )}
             <div className="mt-6 flex justify-end gap-2">
               <button
                 onClick={() => setShowStatusModal(false)}
-                className="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300"
+                disabled={statusMutation.isPending}
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300"
               >
                 Cancel
               </button>
               <button
-                disabled={statusMutation.isPending}
+                disabled={statusMutation.isPending || newStatus === emp.status}
                 onClick={() => statusMutation.mutate()}
                 className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
               >

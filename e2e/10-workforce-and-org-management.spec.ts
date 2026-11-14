@@ -29,6 +29,41 @@ test('Employee profile can recover from an outage and handles a missing record',
   await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
 });
 
+test('Employment status changes show a conflict and allow a retry', async ({ page }) => {
+  let status = 'ACTIVE';
+  let attempts = 0;
+  await page.route('**/api/v1/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/auth/me')) return route.fulfill({ json: { data: { id: 'hr', role: 'HR_MANAGER', companyId: 'acme' } } });
+    if (path.endsWith('/auth/me/modules')) return route.fulfill({ json: { data: { allowedModules: ['employees'] } } });
+    if (path.endsWith('/employees/fixture/status')) {
+      if (++attempts === 1) {
+        return route.fulfill({ status: 409, json: { message: 'Employee status changed. Refresh the profile and try again.' } });
+      }
+      status = route.request().postDataJSON().status;
+      return route.fulfill({ json: { data: { status } } });
+    }
+    if (path.endsWith('/employees/fixture')) return route.fulfill({ json: { data: {
+      id: 'fixture', employeeCode: 'EMP-005', firstName: 'Employee', lastName: 'Fixture', status, hireDate: '2025-01-15',
+    } } });
+    return route.fulfill({ json: { data: [] } });
+  });
+
+  await page.goto('/dashboard/employees/fixture');
+  await page.getByRole('button', { name: 'Update Status', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Update Employment Status' });
+  const confirm = dialog.getByRole('button', { name: 'Confirm Update' });
+  await expect(confirm).toBeDisabled();
+  await dialog.getByLabel('New Status').selectOption('ON_LEAVE');
+  await dialog.getByLabel('Reason for Status Change').fill('Fixture status update');
+  await confirm.click();
+  await expect(dialog.getByRole('alert')).toContainText('Employee status changed.');
+  await expect(dialog.getByLabel('Reason for Status Change')).toHaveValue('Fixture status update');
+  await confirm.click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText('Employment status updated.', { exact: true })).toBeVisible();
+});
+
 test('Team Members can retry a failed search and distinguish it from empty results', async ({ page }) => {
   const requests: string[] = [];
   await page.route('**/api/v1/**', (route) => {

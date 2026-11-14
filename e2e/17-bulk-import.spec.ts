@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import * as xlsx from 'xlsx';
 import { openFixtureDatabase } from './fixture-database';
+import { signInThroughUi } from './role-session';
 
 test('an unavailable import report leaves file selection usable', async ({ page }) => {
   await page.route('**/api/v1/auth/me', (route) => route.fulfill({
@@ -32,6 +33,7 @@ test('an unavailable import report leaves file selection usable', async ({ page 
 });
 
 test('HR downloads the bulk template and an imported employee sets their own password', async ({ page }) => {
+  test.setTimeout(180_000);
   const prisma = openFixtureDatabase();
   const suffix = randomUUID().slice(0, 8);
   const email = `bulk-${suffix}@example.test`;
@@ -39,11 +41,7 @@ test('HR downloads the bulk template and an imported employee sets their own pas
   const jobIds: string[] = [];
 
   try {
-    await page.goto('/login');
-    await page.locator('input[type="email"]').fill('hr@acme.com');
-    await page.locator('input[type="password"]').fill('Password@123');
-    await page.getByRole('button', { name: 'Sign In', exact: true }).click();
-    await expect(page).toHaveURL(/\/dashboard$/);
+    await signInThroughUi(page, 'hr@acme.com', 'Password@123');
     await page.goto('/dashboard/bulk-import');
 
     const [download] = await Promise.all([
@@ -102,9 +100,7 @@ test('HR downloads the bulk template and an imported employee sets their own pas
     }).toMatchObject({ status: 'COMPLETED', importedCount: 0, failedCount: 2 });
 
     await page.context().clearCookies();
-    expect((await page.request.post('/api/v1/auth/login', {
-      data: { email: 'ceo@acme.com', password: 'Password@123' },
-    })).ok()).toBe(true);
+    await signInThroughUi(page, 'ceo@acme.com', 'Password@123');
     expect((await page.request.get(`/api/v1/employees/bulk/jobs/${id}`)).status()).toBe(404);
 
     await page.context().clearCookies();
@@ -115,7 +111,7 @@ test('HR downloads the bulk template and an imported employee sets their own pas
     expect((await page.request.post('/api/v1/auth/reset-password', {
       data: { token: account.passwordResetToken, newPassword: password },
     })).ok()).toBe(true);
-    expect((await page.request.post('/api/v1/auth/login', { data: { email, password } })).ok()).toBe(true);
+    await signInThroughUi(page, email, password);
     expect((await page.request.get('/api/v1/employees/bulk/template')).status()).toBe(403);
     expect((await page.request.get(`/api/v1/employees/bulk/jobs/${id}`)).status()).toBe(403);
   } finally {

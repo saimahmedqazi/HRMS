@@ -65,6 +65,7 @@ test('Team Lead dashboard and attendance agree on the company day and show the a
 
     await page.getByRole('link', { name: 'History Log' }).click();
     const row = page.getByRole('row').filter({ hasText: 'Tina Lopez' }).filter({ hasText: 'ABSENT_PENDING_REVIEW' });
+    await expect(page.getByRole('columnheader', { name: 'Work Minutes', exact: true })).toBeVisible();
     const columns = await page.getByRole('columnheader').allTextContents();
     const workMinutes = columns.findIndex((column) => column.trim() === 'Work Minutes');
     expect(workMinutes).toBeGreaterThanOrEqual(0);
