@@ -68,8 +68,8 @@ test.describe('Authentication & Access Control Flows', () => {
     await expect(page.locator('h1')).toContainText('Sign in to ZenHR');
 
     // Input fields and buttons
-    await expect(page.locator('input[type="email"]')).toBeVisible();
-    await expect(page.locator('input[type="password"]')).toBeVisible();
+    await expect(page.getByLabel('Work Email', { exact: true })).toHaveAttribute('autocomplete', 'username');
+    await expect(page.getByLabel('Password', { exact: true })).toHaveAttribute('autocomplete', 'current-password');
     await expect(page.locator('button[type="submit"]')).toContainText(/sign in/i);
 
     // Links to forgot password and registration
@@ -96,20 +96,22 @@ test.describe('Authentication & Access Control Flows', () => {
 
   test('Register company page renders correctly', async ({ page }) => {
     await page.goto('/register');
-    await expect(page.locator('input[name="companyName"], input[placeholder*="Acme"]')).toBeVisible();
-    await expect(page.locator('input[type="email"]')).toBeVisible();
-    await expect(page.locator('input[type="password"]')).toBeVisible();
+    await expect(page.getByLabel(/Company Name/)).toHaveAttribute('autocomplete', 'organization');
+    await expect(page.getByLabel(/Admin First Name/)).toHaveAttribute('autocomplete', 'given-name');
+    await expect(page.getByLabel(/Admin Last Name/)).toHaveAttribute('autocomplete', 'family-name');
+    await expect(page.getByLabel(/Admin Work Email/)).toHaveAttribute('autocomplete', 'email');
+    await expect(page.getByLabel(/Admin Password/)).toHaveAttribute('autocomplete', 'new-password');
   });
 
   test('Login and registration show field errors before submitting blank forms', async ({ page }) => {
     await page.goto('/login');
     await page.locator('button[type="submit"]').click();
     await expect(page.getByText('Please enter a valid email address', { exact: true })).toBeVisible();
-    await expect(page.getByText('Password is required', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Password', { exact: true })).toHaveAccessibleDescription('Password is required');
 
     await page.goto('/register');
     await page.locator('button[type="submit"]').click();
-    await expect(page.getByText('Company name must be at least 2 characters', { exact: true })).toBeVisible();
+    await expect(page.getByLabel(/Company Name/)).toHaveAccessibleDescription('Company name must be at least 2 characters');
     await expect(page.getByText('Password must be at least 8 characters', { exact: true })).toBeVisible();
   });
 

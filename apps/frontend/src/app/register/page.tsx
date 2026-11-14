@@ -77,76 +77,96 @@ export default function RegisterPage() {
         <form method="post" onSubmit={handleSubmit(onSubmit)}>
           <fieldset disabled={!isReady} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
+            <label htmlFor="register-company" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
               Company Name *
             </label>
             <input
               {...register('companyName')}
+              id="register-company"
+              autoComplete="organization"
+              aria-invalid={!!errors.companyName}
+              aria-describedby={errors.companyName ? 'register-company-error' : undefined}
               placeholder="e.g. Acme Technologies"
               className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
             />
             {errors.companyName && (
-              <p className="mt-1 text-xs text-red-600">{errors.companyName.message}</p>
+              <p id="register-company-error" className="mt-1 text-xs text-red-600">{errors.companyName.message}</p>
             )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
+              <label htmlFor="register-first-name" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
                 Admin First Name *
               </label>
               <input
                 {...register('adminFirstName')}
+                id="register-first-name"
+                autoComplete="given-name"
+                aria-invalid={!!errors.adminFirstName}
+                aria-describedby={errors.adminFirstName ? 'register-first-name-error' : undefined}
                 placeholder="John"
                 className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm outline-none transition focus:border-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
               />
               {errors.adminFirstName && (
-                <p className="mt-1 text-xs text-red-600">{errors.adminFirstName.message}</p>
+              <p id="register-first-name-error" className="mt-1 text-xs text-red-600">{errors.adminFirstName.message}</p>
               )}
             </div>
 
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
+              <label htmlFor="register-last-name" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
                 Admin Last Name *
               </label>
               <input
                 {...register('adminLastName')}
+                id="register-last-name"
+                autoComplete="family-name"
+                aria-invalid={!!errors.adminLastName}
+                aria-describedby={errors.adminLastName ? 'register-last-name-error' : undefined}
                 placeholder="Doe"
                 className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm outline-none transition focus:border-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
               />
               {errors.adminLastName && (
-                <p className="mt-1 text-xs text-red-600">{errors.adminLastName.message}</p>
+              <p id="register-last-name-error" className="mt-1 text-xs text-red-600">{errors.adminLastName.message}</p>
               )}
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
+            <label htmlFor="register-email" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
               Admin Work Email *
             </label>
             <input
               {...register('adminEmail')}
+              id="register-email"
+              autoComplete="email"
+              aria-invalid={!!errors.adminEmail}
+              aria-describedby={errors.adminEmail ? 'register-email-error' : undefined}
               type="email"
               placeholder="admin@company.com"
               className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm outline-none transition focus:border-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
             />
             {errors.adminEmail && (
-              <p className="mt-1 text-xs text-red-600">{errors.adminEmail.message}</p>
+              <p id="register-email-error" className="mt-1 text-xs text-red-600">{errors.adminEmail.message}</p>
             )}
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
+            <label htmlFor="register-password" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
               Admin Password (min. 8 characters) *
             </label>
             <input
               {...register('adminPassword')}
+              id="register-password"
+              autoComplete="new-password"
+              aria-invalid={!!errors.adminPassword}
+              aria-describedby={errors.adminPassword ? 'register-password-error' : undefined}
               type="password"
               placeholder="••••••••"
               className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm outline-none transition focus:border-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
             />
             {errors.adminPassword && (
-              <p className="mt-1 text-xs text-red-600">{errors.adminPassword.message}</p>
+              <p id="register-password-error" className="mt-1 text-xs text-red-600">{errors.adminPassword.message}</p>
             )}
           </div>
 
