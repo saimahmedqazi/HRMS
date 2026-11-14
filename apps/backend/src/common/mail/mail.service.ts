@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 
-const SMTP_SEND_TIMEOUT_MS = 8_000;
+const MAIL_SEND_TIMEOUT_MS = 8_000;
 
 export type SendMailOptions = {
   to: string;
@@ -13,8 +13,12 @@ export type SendMailOptions = {
 export class MailService {
   private readonly logger = new Logger(MailService.name);
   private transporter: nodemailer.Transporter | null = null;
+  private readonly resendApiKey?: string;
 
   constructor(private readonly configService: ConfigService) {
+    this.resendApiKey = this.configService.get<string>('app.mail.resendApiKey');
+    if (this.resendApiKey) return;
+
     const host = this.configService.get<string>('app.mail.host');
     const user = this.configService.get<string>('app.mail.user');
     const pass = this.configService.get<string>('app.mail.password');
@@ -36,19 +40,40 @@ export class MailService {
     const fromAddress = this.configService.get<string>('app.mail.fromAddress', 'noreply@zenhr.com');
     const from = `"${fromName}" <${fromAddress}>`;
 
-    if (!this.transporter) {
-      this.logger.log(`[DEV MAIL] To: ${options.to} | Subject: ${options.subject}`);
-      return false;
-    }
-
+    const { resendApiKey, transporter } = this;
     try {
-      const result = await this.transporter.sendMail({
+      const signal = AbortSignal.timeout(MAIL_SEND_TIMEOUT_MS);
+      if (resendApiKey) {
+        const response = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ ...options, from, to: options.to.split(',').map((address) => address.trim()) }),
+          redirect: 'error',
+          signal,
+        });
+        if (!response.ok) {
+          await response.body?.cancel();
+          this.logger.warn(`Email provider rejected delivery with HTTP ${response.status}.`);
+          return false;
+        }
+        const result: { id?: string } = await response.json();
+        return Boolean(result.id);
+      }
+
+      if (!transporter) {
+        this.logger.log(`[DEV MAIL] To: ${options.to} | Subject: ${options.subject}`);
+        return false;
+      }
+      const result = await transporter.sendMail({
         from,
         to: options.to,
         subject: options.subject,
         text: options.text,
         html: options.html,
-        signal: AbortSignal.timeout(SMTP_SEND_TIMEOUT_MS),
+        signal,
       });
       return (result.accepted?.length ?? 0) > 0;
     } catch (error) {

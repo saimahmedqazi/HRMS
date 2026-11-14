@@ -89,7 +89,7 @@ The seeded accounts and core workflows work with the copied local environment. C
 | Actual PDF upload and download | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. In Cloudinary, enable **Allow delivery of PDF and ZIP files** if required. The local storage simulation verifies application records and workflow. [Cloudinary delivery options](https://cloudinary.com/documentation/image_delivery_options) |
 | Live AI answers | `GEMINI_API_KEY`. `GEMINI_MODEL` is optional. The local demo uses built-in HR policy responses when the key is blank. |
 | Stripe checkout and webhooks | A Stripe test-mode `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` for events forwarded to `/api/v1/subscriptions/webhook`. Activate the customer portal in the Stripe test account to test billing management after checkout. |
-| Email delivery and password setup links | `MAIL_HOST`, `MAIL_PORT`, `MAIL_SECURE`, `MAIL_USER`, `MAIL_PASSWORD`, and `MAIL_FROM_ADDRESS`. Use a test SMTP inbox for demo recipients. |
+| Email delivery and password setup links | Set `RESEND_API_KEY` and a verified `MAIL_FROM_ADDRESS` for HTTPS delivery, or configure `MAIL_HOST`, `MAIL_PORT`, `MAIL_SECURE`, `MAIL_USER`, `MAIL_PASSWORD`, and `MAIL_FROM_ADDRESS` for SMTP. Use a test inbox for synthetic recipients. |
 | Authenticator setup | Generate a local key with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"` and save it as `TOTP_ENCRYPTION_KEY`. Keep the same key across restarts. |
 
 ## 7. Run tests or stop the demo
@@ -140,3 +140,7 @@ Use this setup when the group needs access while your PC is off. The group owns 
 3. Configure your host's HTTPS reverse proxy to forward requests to the API on port `4000`. If the proxy runs on the same server, set `API_BIND_HOST=127.0.0.1`. Run the backend under a service manager or your hosting provider's process supervisor so it restarts after reboot.
 4. In the group's Vercel project, choose **Next.js**, use `apps/frontend` as the root, select Node.js 24.x, and set **Production** `NEXT_PUBLIC_API_URL` to the backend's public HTTPS origin. Redeploy after saving the variable.
 5. Visit `/api/v1/auth/me` on the Vercel site in a private window. HTTP 401 with JSON confirms the request reaches the backend. Sign in, reload the dashboard to check the session, and complete one tenant workflow. Then hand over the frontend URL and share the demo credentials privately.
+
+### Email on Railway
+
+Railway Free, Trial, and Hobby require an HTTPS email provider. In the backend service variables, set `RESEND_API_KEY` and set `MAIL_FROM_ADDRESS` to an address on your verified sending domain, then redeploy the backend. The app selects Resend when the key is present. Verify delivery with a test mailbox using **Forgot password?** or by onboarding a synthetic employee. [Railway email delivery documentation](https://docs.railway.com/networking/outbound-networking)
