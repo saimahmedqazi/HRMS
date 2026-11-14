@@ -28,6 +28,8 @@ export class MailService {
         host,
         port: this.configService.get<number>('app.mail.port', 587),
         secure: this.configService.get<boolean>('app.mail.secure', false),
+        connectionTimeout: MAIL_SEND_TIMEOUT_MS,
+        greetingTimeout: MAIL_SEND_TIMEOUT_MS,
         auth: { user, pass },
       });
     } else {
@@ -36,50 +38,56 @@ export class MailService {
   }
 
   async sendMail(options: SendMailOptions): Promise<boolean> {
+    if (!this.resendApiKey && !this.transporter) return false;
+
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<false>((resolve) => {
+      timer = setTimeout(() => {
+        this.logger.warn(`${this.resendApiKey ? 'Resend' : 'SMTP'} delivery timed out after ${MAIL_SEND_TIMEOUT_MS} ms.`);
+        resolve(false);
+        controller.abort();
+      }, MAIL_SEND_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([this.deliver(options, controller.signal), deadline]);
+    } catch (error) {
+      this.logger.error(`Failed to send email to ${options.to}`, error);
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async deliver(options: SendMailOptions, signal: AbortSignal): Promise<boolean> {
     const fromName = this.configService.get<string>('app.mail.fromName', 'ZenHR');
     const fromAddress = this.configService.get<string>('app.mail.fromAddress', 'noreply@zenhr.com');
     const from = `"${fromName}" <${fromAddress}>`;
 
     const { resendApiKey, transporter } = this;
-    try {
-      const signal = AbortSignal.timeout(MAIL_SEND_TIMEOUT_MS);
-      if (resendApiKey) {
-        const response = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${resendApiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ ...options, from, to: options.to.split(',').map((address) => address.trim()) }),
-          redirect: 'error',
-          signal,
-        });
-        if (!response.ok) {
-          await response.body?.cancel();
-          this.logger.warn(`Email provider rejected delivery with HTTP ${response.status}.`);
-          return false;
-        }
-        const result: { id?: string } = await response.json();
-        return Boolean(result.id);
-      }
-
-      if (!transporter) {
-        this.logger.log(`[DEV MAIL] To: ${options.to} | Subject: ${options.subject}`);
-        return false;
-      }
-      const result = await transporter.sendMail({
-        from,
-        to: options.to,
-        subject: options.subject,
-        text: options.text,
-        html: options.html,
+    if (resendApiKey) {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ...options, from, to: options.to.split(',').map((address) => address.trim()) }),
+        redirect: 'error',
         signal,
       });
-      return (result.accepted?.length ?? 0) > 0;
-    } catch (error) {
-      this.logger.error(`Failed to send email to ${options.to}`, error);
-      return false;
+      if (!response.ok) {
+        this.logger.warn(`Email provider rejected delivery with HTTP ${response.status}.`);
+        await response.body?.cancel();
+        return false;
+      }
+      const result: { id?: string } = await response.json();
+      return Boolean(result.id);
     }
+
+    const result = await transporter?.sendMail({ from, ...options, signal });
+    return (result?.accepted?.length ?? 0) > 0;
   }
 
   async sendVerificationEmail(to: string, token: string): Promise<boolean> {

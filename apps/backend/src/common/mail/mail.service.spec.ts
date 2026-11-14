@@ -49,9 +49,7 @@ describe('MailService', () => {
 
   it('cancels a stalled SMTP delivery so callers can handle email failure', async () => {
     const server = createServer();
-    const controller = new AbortController();
-    const timeout = jest.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
-    const logError = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    const logWarning = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     let socket: Socket | undefined;
 
     try {
@@ -68,18 +66,35 @@ describe('MailService', () => {
       socket = await connected;
       const disconnected = once(socket, 'close');
 
-      expect(timeout).toHaveBeenCalledWith(8_000);
-      controller.abort();
-
       await expect(result).resolves.toBe(false);
       await disconnected;
-      expect(logError).toHaveBeenCalled();
+      expect(logWarning).toHaveBeenCalledWith('SMTP delivery timed out after 8000 ms.');
     } finally {
-      controller.abort();
       socket?.destroy();
       server.close();
-      timeout.mockRestore();
-      logError.mockRestore();
+      logWarning.mockRestore();
+    }
+  }, 12_000);
+
+  it('returns even if the HTTPS provider never settles after cancellation', async () => {
+    jest.useFakeTimers();
+    const fetchEmail = jest.spyOn(globalThis, 'fetch').mockReturnValue(new Promise(() => {}));
+    const logWarning = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    try {
+      const mail = new MailService(new ConfigService({ app: { mail: { resendApiKey: 'fixture-key' } } }));
+      const result = mail.sendMail({ to: 'employee@example.test', subject: 'Welcome', text: 'Welcome' });
+      const signal = fetchEmail.mock.calls[0][1]?.signal;
+      expect(signal?.aborted).toBe(false);
+
+      await jest.advanceTimersByTimeAsync(8_000);
+
+      await expect(result).resolves.toBe(false);
+      expect(signal?.aborted).toBe(true);
+      expect(logWarning).toHaveBeenCalledWith('Resend delivery timed out after 8000 ms.');
+    } finally {
+      jest.useRealTimers();
+      fetchEmail.mockRestore();
+      logWarning.mockRestore();
     }
   });
 });
