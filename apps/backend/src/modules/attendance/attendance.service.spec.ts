@@ -36,6 +36,7 @@ describe('AttendanceService', () => {
     shift: { findFirst: jest.fn().mockResolvedValue(null) },
     notification: {
       create: jest.fn(),
+      createMany: jest.fn(),
     },
     user: {
       findMany: jest.fn(),
@@ -192,8 +193,12 @@ describe('AttendanceService', () => {
         id: 'att-exception',
         status: AttendanceStatus.ABSENT_PENDING_REVIEW,
       });
-      mockPrisma.user.findMany.mockResolvedValueOnce([{ id: 'hr-1', email: 'hr@acme.com' }]);
-      mockPrisma.notification.create.mockResolvedValueOnce({});
+      mockPrisma.user.findMany.mockResolvedValueOnce([
+        { id: 'hr-1', email: 'hr1@example.test' },
+        { id: 'hr-2', email: 'hr2@example.test' },
+      ]);
+      mockPrisma.notification.createMany.mockResolvedValueOnce({ count: 2 });
+      mockMailService.sendMail.mockRejectedValueOnce(new Error('Mail unavailable'));
 
       const result = await service.checkIn({ isRemote: true }, '127.0.0.1', mockEmployeeUser);
       expect(result.status).toBe(AttendanceStatus.ABSENT_PENDING_REVIEW);
@@ -201,7 +206,12 @@ describe('AttendanceService', () => {
         data: expect.objectContaining({ checkInIp: '127.0.0.1', status: AttendanceStatus.ABSENT_PENDING_REVIEW }),
       }));
       expect(mockGateway.broadcastAttendanceException).toHaveBeenCalled();
-      expect(mockMailService.sendMail).toHaveBeenCalled();
+      expect(mockPrisma.notification.createMany).toHaveBeenCalledWith({ data: ['hr-1', 'hr-2'].map((userId) => expect.objectContaining({
+        companyId: 'comp-1', userId, type: 'ATTENDANCE_EXCEPTION', data: { attendanceId: 'att-exception', employeeId: 'emp-1' },
+      })) });
+      expect(mockMailService.sendMail).toHaveBeenCalledTimes(2);
+      expect(mockPrisma.notification.createMany.mock.invocationCallOrder[0])
+        .toBeLessThan(mockGateway.broadcastAttendanceException.mock.invocationCallOrder[0]);
     });
   });
 

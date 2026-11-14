@@ -111,7 +111,7 @@ export class AttendanceService {
     }
 
     const attendanceKey = { ...scope, date: shiftDate };
-    const record = await this.prisma.$transaction(async (tx) => {
+    const { record, hrUsers } = await this.prisma.$transaction(async (tx) => {
       const existing = await findCurrentPunch(tx, scope, dates);
       if (existing?.checkInTime) {
         throw new ConflictException(
@@ -136,7 +136,7 @@ export class AttendanceService {
         }
       }
       await tx.attendanceRecord.createMany({ data: attendanceKey, skipDuplicates: true });
-      return tx.attendanceRecord.update({
+      const record = await tx.attendanceRecord.update({
         where: { companyId_employeeId_date: attendanceKey, checkInTime: null },
         data: {
           checkInTime,
@@ -148,6 +148,23 @@ export class AttendanceService {
           markedBySystem: false,
         },
       });
+      if (status !== AttendanceStatus.ABSENT_PENDING_REVIEW) return { record, hrUsers: [] };
+
+      const hrUsers = await tx.user.findMany({
+        where: { companyId, role: UserRole.HR_MANAGER, deletedAt: null },
+        select: { id: true, email: true },
+      });
+      if (hrUsers.length) {
+        await tx.notification.createMany({ data: hrUsers.map(({ id }) => ({
+          companyId,
+          userId: id,
+          type: NotificationType.ATTENDANCE_EXCEPTION,
+          title: 'Unauthorized Remote Check-in Exception',
+          body: `${employee.firstName} ${employee.lastName} performed an unauthorized remote check-in. Review required.`,
+          data: { attendanceId: record.id, employeeId: employee.id },
+        })) });
+      }
+      return { record, hrUsers };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }).catch((error: unknown) => {
       if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2025', 'P2034'].includes(error.code)) {
         throw new ConflictException('The attendance record changed. Refresh it before trying again.');
@@ -169,26 +186,8 @@ export class AttendanceService {
 
       await this.gateway.broadcastAttendanceException(companyId, payload);
 
-      // Create in-app notification for HR
-      const hrUsers = await this.prisma.user.findMany({
-        where: { companyId, role: UserRole.HR_MANAGER },
-        select: { id: true, email: true },
-      });
-
-      for (const hr of hrUsers) {
-        await this.prisma.notification.create({
-          data: {
-            companyId,
-            userId: hr.id,
-            type: NotificationType.ATTENDANCE_EXCEPTION,
-            title: 'Unauthorized Remote Check-in Exception',
-            body: `${employee.firstName} ${employee.lastName} performed an unauthorized remote check-in. Review required.`,
-            data: { attendanceId: record.id, employeeId: employee.id },
-          },
-        });
-
-        // Email alert
-        await this.mailService.sendMail({
+      const deliveries = await Promise.allSettled(hrUsers.map((hr) =>
+        this.mailService.sendMail({
           to: hr.email,
           subject: 'Attendance Exception: Unauthorized Remote Check-in',
           html: `
@@ -196,7 +195,10 @@ export class AttendanceService {
             <p><strong>Check-in Time:</strong> ${checkInTime.toLocaleTimeString()}</p>
             <p><strong>Status:</strong> Routed to HR Exceptions Queue pending review.</p>
           `,
-        });
+        }),
+      ));
+      if (deliveries.some((result) => result.status === 'rejected' || !result.value)) {
+        this.logger.warn('An attendance exception email could not be sent. The in-app alert was recorded.');
       }
     }
 

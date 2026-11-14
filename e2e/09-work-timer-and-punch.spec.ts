@@ -371,7 +371,7 @@ test.describe('Daily Punch & Work Timer Lifecycle', () => {
     }
   });
 
-  test('Concurrent punches keep the first check-in record and return a conflict for the duplicate', async ({ page }) => {
+  test('Concurrent remote punches keep one check-in and one HR alert', async ({ page }) => {
     await page.goto('/login');
     await page.locator('input[type="email"]').fill('employee@acme.com');
     await page.locator('input[type="password"]').fill('Password@123');
@@ -379,17 +379,26 @@ test.describe('Daily Punch & Work Timer Lifecycle', () => {
     await page.waitForURL('**/dashboard');
 
     const results = await Promise.all(['First workstation', 'Second workstation'].map((notes) =>
-      page.request.post('/api/v1/attendance/check-in', { data: { isRemote: false, notes } }),
+      page.request.post('/api/v1/attendance/check-in', { data: { isRemote: true, notes } }),
     ));
     expect(results.map((response) => response.status()).sort()).toEqual([201, 409]);
     const accepted = results.find((response) => response.status() === 201)!;
     const { data: punch } = await accepted.json();
     const prisma = openFixtureDatabase();
+    const notificationScope = {
+      companyId: punch.companyId,
+      type: 'ATTENDANCE_EXCEPTION' as const,
+      data: { path: ['attendanceId'], equals: punch.id },
+    };
     try {
       const stored = await prisma.attendanceRecord.findUniqueOrThrow({ where: { id: punch.id } });
       expect(stored.notes).toBe(punch.notes);
       expect(stored.checkInTime?.toISOString()).toBe(punch.checkInTime);
+      expect(stored.status).toBe('ABSENT_PENDING_REVIEW');
+      const alerts = await prisma.notification.findMany({ where: notificationScope, select: { user: { select: { email: true } } } });
+      expect(alerts.map(({ user }) => user.email)).toEqual(['hr@acme.com']);
     } finally {
+      await prisma.notification.deleteMany({ where: notificationScope });
       await prisma.$disconnect();
     }
   });
