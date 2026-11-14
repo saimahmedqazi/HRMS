@@ -4,6 +4,39 @@ import { hash } from 'bcrypt';
 import { getAttendanceDay, previousAttendanceDate } from '../apps/backend/src/common/utils/attendance-date';
 import { openFixtureDatabase } from './fixture-database';
 
+test('Attendance recovers from a failed lookup and Basic users cannot start the timer', async ({ page }) => {
+  let lookupAvailable = false;
+  let timerRequests = 0;
+  let punchRequests = 0;
+  await page.route('**/api/v1/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/auth/me')) return route.fulfill({ json: { data: {
+      id: 'fixture-employee', role: 'EMPLOYEE', companyId: 'fixture-company',
+      company: { id: 'fixture-company', name: 'Basic Company', subscriptionTier: 'BASIC' },
+    } } });
+    if (path.endsWith('/attendance/today')) {
+      return lookupAvailable
+        ? route.fulfill({ json: { data: { checkedIn: false, status: null } } })
+        : route.fulfill({ status: 503, json: { message: 'Attendance unavailable' } });
+    }
+    if (path.includes('/timer/')) timerRequests++;
+    if (path.endsWith('/attendance/check-in')) punchRequests++;
+    return route.fulfill({ json: { data: [] } });
+  });
+
+  await page.goto('/dashboard/my-attendance');
+  await expect(page.getByRole('alert')).toContainText("Today's attendance couldn't load.");
+  await expect(page.getByRole('button', { name: 'Punch In Now' })).toHaveCount(0);
+  await expect(page.getByText('Work Timer is available on ZenHR Premium.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start Timer' })).toHaveCount(0);
+
+  lookupAvailable = true;
+  await page.getByRole('button', { name: 'Retry attendance' }).click();
+  await expect(page.getByRole('button', { name: 'Punch In Now' })).toBeEnabled();
+  expect(punchRequests).toBe(0);
+  expect(timerRequests).toBe(0);
+});
+
 test('the shared attendance calendar shows approved leave and history validates its date range', async ({ browser, baseURL }) => {
   const context = await browser.newContext({ baseURL, locale: 'en-US', timezoneId: 'America/Los_Angeles' });
   try {

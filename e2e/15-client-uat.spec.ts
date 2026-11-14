@@ -320,12 +320,21 @@ test('Employee can submit remote work and read work-from-home guidance', async (
     await page.goto('/dashboard/my-attendance');
     await page.getByRole('button', { name: 'New Remote Work Request', exact: true }).click();
     const date = new Date(Date.now() + 10 * 86400_000).toISOString().slice(0, 10);
-    await page.locator('input[type="date"]').nth(0).fill(date);
-    await page.locator('input[type="date"]').nth(1).fill(date);
+    const form = page.getByRole('dialog', { name: 'Request Remote Work (WFH)' });
+    await form.getByLabel(/Start Date/).fill(date);
+    await form.getByLabel(/End Date/).fill(date);
     const reason = `QA home-office request ${randomUUID().slice(0, 8)}`;
-    await page.locator('textarea').fill(reason);
-    page.once('dialog', (dialog) => dialog.accept());
-    await page.getByRole('button', { name: /Submit Request/ }).click();
+    const reasonField = form.getByLabel(/Reason \/ Justification/);
+    await reasonField.fill(reason);
+    const remoteEndpoint = '**/api/v1/attendance/remote-permissions';
+    await page.route(remoteEndpoint, (route) => route.request().method() === 'POST'
+      ? route.fulfill({ status: 500, json: { message: 'Internal server error' } })
+      : route.fallback());
+    await form.getByRole('button', { name: /Submit Request/ }).click();
+    await expect(form.getByRole('alert')).toContainText('check the request list');
+    await expect(reasonField).toHaveValue(reason);
+    await page.unroute(remoteEndpoint);
+    await form.getByRole('button', { name: /Submit Request/ }).click();
     const row = page.getByRole('row').filter({ hasText: reason });
     await expect(row).toContainText('PENDING');
     const formatted = new Date(date).toLocaleDateString('en-US', { timeZone: 'UTC' });

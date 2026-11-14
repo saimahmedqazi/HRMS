@@ -84,6 +84,7 @@ function getPunchLocation(userId: string): Promise<{ latitude: number; longitude
 export default function AttendanceDashboardPage() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const canUseTimer = (user?.supportModeCompany ?? user?.company)?.subscriptionTier === 'PREMIUM';
   const isHrOrAdmin =
     user?.role === 'SUPER_ADMIN' ||
     user?.role === 'COMPANY_ADMIN' ||
@@ -91,6 +92,7 @@ export default function AttendanceDashboardPage() {
   const [isRemote, setIsRemote] = useState(false);
   const [notes, setNotes] = useState('');
   const [timerSeconds, setTimerSeconds] = useState(0);
+  const [timerError, setTimerError] = useState<Error | null>(null);
   const [newWhitelistIp, setNewWhitelistIp] = useState('');
   const [newWhitelistDesc, setNewWhitelistDesc] = useState('');
   const [showRemoteModal, setShowRemoteModal] = useState(false);
@@ -101,16 +103,17 @@ export default function AttendanceDashboardPage() {
   const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Fetch today's attendance
-  const { data: attendanceData } = useQuery({
+  const attendanceQuery = useQuery({
     queryKey: ['attendance-today'],
     queryFn: () => api.get<any>('/attendance/today'),
     refetchInterval: 60_000,
   });
 
   // Fetch today's work timer
-  const { data: timerData } = useQuery({
+  const timerQuery = useQuery({
     queryKey: ['timer-today'],
     queryFn: () => api.get<any>('/timer/today'),
+    enabled: canUseTimer,
     refetchInterval: 60_000,
   });
 
@@ -139,14 +142,14 @@ export default function AttendanceDashboardPage() {
     queryFn: () => api.get<any[]>('/attendance/remote-permissions'),
   });
 
-  const attendance = attendanceData;
+  const attendance = attendanceQuery.data;
   const attendanceDate = overviewData?.attendanceDate ?? attendance?.date?.slice(0, 10);
   const shiftDate = attendance?.date?.slice(0, 10);
   const overnightShiftDate = shiftDate && attendanceDate && shiftDate !== attendanceDate ? shiftDate : null;
   const calendarMonth = selectedMonth ?? (attendanceDate
     ? new Date(`${attendanceDate}T12:00:00`)
     : new Date());
-  const timer = timerData;
+  const timer = timerQuery.data;
   const currentLatitude = whitelistData?.currentGeo?.latitude;
   const currentLongitude = whitelistData?.currentGeo?.longitude;
   const recordsList: any[] = Array.isArray(recordsData)
@@ -232,6 +235,7 @@ export default function AttendanceDashboardPage() {
       setRemoteReason('');
       setActionFeedback({ type: 'success', message: 'Remote work request submitted successfully.' });
     },
+    onError: () => queryClient.invalidateQueries({ queryKey: ['remote-permissions'] }),
   });
 
   const step1ApproveMutation = useMutation({
@@ -270,31 +274,42 @@ export default function AttendanceDashboardPage() {
       queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] });
     },
   });
-  const punchError = checkInMutation.error || checkOutMutation.error;
+  const punchError = checkOutMutation.error || checkInMutation.error;
 
   const startTimerMutation = useMutation({
     mutationFn: () => api.post('/timer/start', {}),
+    onMutate: () => setTimerError(null),
+    onError: setTimerError,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['timer-today'] }),
   });
 
   const pauseTimerMutation = useMutation({
     mutationFn: () => api.post('/timer/pause', {}),
+    onMutate: () => setTimerError(null),
+    onError: setTimerError,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['timer-today'] }),
   });
 
   const resumeTimerMutation = useMutation({
     mutationFn: () => api.post('/timer/resume', {}),
+    onMutate: () => setTimerError(null),
+    onError: setTimerError,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['timer-today'] }),
   });
 
   const stopTimerMutation = useMutation({
     mutationFn: () => api.post('/timer/stop', {}),
+    onMutate: () => setTimerError(null),
+    onError: setTimerError,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['timer-today'] });
       queryClient.invalidateQueries({ queryKey: ['attendance-today'] });
       queryClient.invalidateQueries({ queryKey: ['attendance-records'] });
     },
   });
+
+  const timerActions = [startTimerMutation, pauseTimerMutation, resumeTimerMutation, stopTimerMutation];
+  const timerBusy = timerActions.some((action) => action.isPending);
 
   const formatSeconds = (sec: number) => {
     const hrs = Math.floor(sec / 3600);
@@ -497,7 +512,14 @@ export default function AttendanceDashboardPage() {
             </div>
           </div>
 
-          {!attendance?.checkInTime ? (
+          {attendanceQuery.isError ? (
+            <div className="mt-4 text-sm text-rose-700 dark:text-rose-300">
+              <p role="alert">Today&apos;s attendance couldn&apos;t load.</p>
+              <button type="button" className="mt-2 font-semibold underline" onClick={() => void attendanceQuery.refetch()} disabled={attendanceQuery.isFetching}>Retry attendance</button>
+            </div>
+          ) : attendanceQuery.isPending ? (
+            <p role="status" className="mt-4 text-sm text-zinc-500">Loading today&apos;s attendance…</p>
+          ) : !attendance?.checkInTime ? (
             <div className="mt-6 space-y-4">
               {/* Onsite / Remote Toggle */}
               <div className="flex rounded-lg border border-zinc-200 p-1 dark:border-zinc-800">
@@ -572,6 +594,7 @@ export default function AttendanceDashboardPage() {
 
               <input
                 type="text"
+                maxLength={255}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="Optional notes or remarks..."
@@ -632,11 +655,22 @@ export default function AttendanceDashboardPage() {
             </p>
           </div>
 
-          {/* Controls */}
+          {timerError && (
+            <p role="alert" className="mb-4 text-center text-sm text-rose-700 dark:text-rose-300">{timerError.message}</p>
+          )}
           <div className="flex items-center justify-center gap-3">
-            {!timer || timer.status === 'STOPPED' ? (
+            {!canUseTimer ? (
+              <p className="text-center text-sm text-zinc-500">Work Timer is available on ZenHR Premium.</p>
+            ) : timerQuery.isError ? (
+              <div className="text-center text-sm text-rose-700 dark:text-rose-300">
+                <p role="alert">The work timer couldn&apos;t load.</p>
+                <button type="button" className="mt-2 font-semibold underline" onClick={() => void timerQuery.refetch()} disabled={timerQuery.isFetching}>Retry work timer</button>
+              </div>
+            ) : timerQuery.isPending ? (
+              <p role="status" className="text-sm text-zinc-500">Loading work timer…</p>
+            ) : !timer || timer.status === 'STOPPED' ? (
               <button
-                disabled={startTimerMutation.isPending}
+                disabled={timerBusy}
                 onClick={() => startTimerMutation.mutate()}
                 className="flex items-center gap-2 rounded-lg bg-indigo-600 px-6 py-2.5 text-xs font-semibold text-white shadow hover:bg-indigo-500"
               >
@@ -645,14 +679,14 @@ export default function AttendanceDashboardPage() {
             ) : timer.status === 'RUNNING' ? (
               <>
                 <button
-                  disabled={pauseTimerMutation.isPending}
+                  disabled={timerBusy}
                   onClick={() => pauseTimerMutation.mutate()}
                   className="flex items-center gap-2 rounded-lg bg-amber-500 px-5 py-2.5 text-xs font-semibold text-white shadow hover:bg-amber-400"
                 >
                   <Pause className="h-4 w-4" /> Pause Break
                 </button>
                 <button
-                  disabled={stopTimerMutation.isPending}
+                  disabled={timerBusy}
                   onClick={() => stopTimerMutation.mutate()}
                   className="flex items-center gap-2 rounded-lg bg-rose-600 px-5 py-2.5 text-xs font-semibold text-white shadow hover:bg-rose-500"
                 >
@@ -662,14 +696,14 @@ export default function AttendanceDashboardPage() {
             ) : (
               <>
                 <button
-                  disabled={resumeTimerMutation.isPending}
+                  disabled={timerBusy}
                   onClick={() => resumeTimerMutation.mutate()}
                   className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-xs font-semibold text-white shadow hover:bg-emerald-500"
                 >
                   <Play className="h-4 w-4" /> Resume Work
                 </button>
                 <button
-                  disabled={stopTimerMutation.isPending}
+                  disabled={timerBusy}
                   onClick={() => stopTimerMutation.mutate()}
                   className="flex items-center gap-2 rounded-lg bg-rose-600 px-5 py-2.5 text-xs font-semibold text-white shadow hover:bg-rose-500"
                 >
@@ -1089,13 +1123,14 @@ export default function AttendanceDashboardPage() {
       {/* Remote Work Request Modal */}
       {showRemoteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-2xl max-w-md w-full p-6">
+          <div role="dialog" aria-modal="true" aria-labelledby="remote-request-title" className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-2xl max-w-md w-full p-6">
             <div className="flex items-center justify-between pb-4 border-b border-zinc-200 dark:border-zinc-800">
-              <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+              <h3 id="remote-request-title" className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
                 <Home className="h-5 w-5 text-indigo-600" /> Request Remote Work (WFH)
               </h3>
               <button
                 type="button"
+                aria-label="Close remote work request"
                 onClick={() => setShowRemoteModal(false)}
                 disabled={createRemoteMutation.isPending}
                 className="text-zinc-400 hover:text-zinc-600 text-lg leading-none"
@@ -1113,10 +1148,11 @@ export default function AttendanceDashboardPage() {
               className="mt-4 space-y-4"
             >
               <div>
-                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
+                <label htmlFor="remote-request-start" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
                   Start Date *
                 </label>
                 <input
+                  id="remote-request-start"
                   type="date"
                   required
                   value={remoteStartDate}
@@ -1126,10 +1162,11 @@ export default function AttendanceDashboardPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
+                <label htmlFor="remote-request-end" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
                   End Date *
                 </label>
                 <input
+                  id="remote-request-end"
                   type="date"
                   required
                   min={remoteStartDate || undefined}
@@ -1140,10 +1177,11 @@ export default function AttendanceDashboardPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
+                <label htmlFor="remote-request-reason" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1">
                   Reason / Justification *
                 </label>
                 <textarea
+                  id="remote-request-reason"
                   required
                   maxLength={500}
                   rows={3}
@@ -1155,7 +1193,11 @@ export default function AttendanceDashboardPage() {
               </div>
 
               {createRemoteMutation.isError && (
-                <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">{createRemoteMutation.error.message}</p>
+                <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">
+                  {createRemoteMutation.error instanceof ApiError && createRemoteMutation.error.status < 500
+                    ? createRemoteMutation.error.message
+                    : 'We couldn’t confirm the request. Close this window and check the request list before trying again.'}
+                </p>
               )}
               <div className="flex justify-end gap-2 pt-3 border-t border-zinc-200 dark:border-zinc-800">
                 <button
