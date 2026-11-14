@@ -25,7 +25,7 @@ test('Attendance recovers from a failed lookup and Basic users cannot start the 
   });
 
   await page.goto('/dashboard/my-attendance');
-  await expect(page.getByRole('alert')).toContainText("Today's attendance couldn't load.");
+  await expect(page.getByRole('alert').filter({ hasText: "Today's attendance couldn't load." })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Punch In Now' })).toHaveCount(0);
   await expect(page.getByText('Work Timer is available on ZenHR Premium.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Start Timer' })).toHaveCount(0);
