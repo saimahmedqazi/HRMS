@@ -1,5 +1,11 @@
 import { CompanyStatus, EmployeeStatus } from '@prisma/client';
 
+export function isInactiveEmployeeStatus(status?: EmployeeStatus): boolean {
+  return status === EmployeeStatus.SUSPENDED ||
+    status === EmployeeStatus.TERMINATED ||
+    status === EmployeeStatus.RESIGNED;
+}
+
 export function isInactiveAccount(user: {
   deletedAt?: Date | null;
   company?: { status: CompanyStatus } | null;
@@ -9,8 +15,6 @@ export function isInactiveAccount(user: {
     user.deletedAt ||
     user.company?.status === CompanyStatus.SUSPENDED ||
     user.employee?.deletedAt ||
-    user.employee?.status === EmployeeStatus.SUSPENDED ||
-    user.employee?.status === EmployeeStatus.TERMINATED ||
-    user.employee?.status === EmployeeStatus.RESIGNED
+    isInactiveEmployeeStatus(user.employee?.status)
   );
 }

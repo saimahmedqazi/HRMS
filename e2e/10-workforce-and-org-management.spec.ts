@@ -156,6 +156,20 @@ test.describe('Workforce Onboarding & Organization Structure Management', () => 
       const profile = await employeeSession.get('/api/v1/auth/me');
       expect(profile.status()).toBe(200);
       expect((await profile.json()).data.email).toBe('chloe.davis@acme.com');
+
+      const statusPath = `/api/v1/employees/${credentials.id}/status`;
+      const terminated = await page.request.patch(statusPath, { data: { status: 'TERMINATED' } });
+      expect(terminated.status()).toBe(200);
+      expect((await employeeSession.get('/api/v1/auth/me')).status()).toBe(401);
+
+      const restored = await page.request.patch(statusPath, { data: { status: 'ON_PROBATION' } });
+      expect(restored.status()).toBe(200);
+      expect((await employeeSession.get('/api/v1/auth/me')).status()).toBe(401);
+      const freshLogin = await employeeSession.post('/api/v1/auth/login', {
+        data: { email: credentials.email, password: credentials.tempPassword },
+      });
+      expect(freshLogin.status()).toBe(200);
+      expect((await employeeSession.get('/api/v1/auth/me')).status()).toBe(200);
     } finally {
       await employeeSession.dispose();
     }

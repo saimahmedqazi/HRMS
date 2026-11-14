@@ -16,6 +16,7 @@ import { StorageService, DEFAULT_IMAGE_MIMES, DEFAULT_DOCUMENT_MIMES } from '../
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { getLoginNetworkLocation } from '../../common/utils/login-network-location';
 import { getProbationEndDate, parseEmployeeDate } from '../../common/utils/employee-dates';
+import { isInactiveEmployeeStatus } from '../auth/account-state';
 import {
   UserRole,
   Employee,
@@ -489,56 +490,81 @@ export class EmployeesService {
       return profile;
     }
 
-    // Update status
-    const updated = await this.prisma.employee.update({
-      where: { id },
-      data: { status: newStatus },
-    });
+    const wasInactive = isInactiveEmployeeStatus(previousStatus);
+    const becomesInactive = isInactiveEmployeeStatus(newStatus);
+    const employmentLock = new Date('9999-12-31');
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const transition = await tx.employee.updateMany({
+        where: { id, companyId, deletedAt: null, status: previousStatus },
+        data: { status: newStatus },
+      });
+      if (transition.count !== 1) {
+        throw new ConflictException('Employee status changed. Refresh the profile and try again.');
+      }
 
-    // Write audit log
-    await this.prisma.auditLog.create({
-      data: {
-        companyId,
-        userId: callerId,
-        action: AuditAction.STATUS_CHANGE,
-        entity: 'Employee',
-        entityId: id,
-        newValues: {
-          employeeCode: employee.employeeCode,
-          employeeName: `${employee.firstName} ${employee.lastName}`,
-          previousStatus,
-          newStatus,
-          reason: dto.reason,
-          changedBy: user.email,
-        },
-      },
-    });
-
-    // In-app notification to employee
-    await this.prisma.notification.create({
-      data: {
-        companyId,
-        userId: employee.userId,
-        type: NotificationType.STATUS_CHANGED,
-        title: 'Employment Status Update',
-        body: `Your employment status has been updated from ${previousStatus} to ${newStatus}.${dto.reason ? ` Reason: ${dto.reason}` : ''}`,
-        data: { employeeId: id, previousStatus, newStatus },
-      },
-    });
-
-    // In-app notification to reporting manager if one exists
-    if (employee.reportingManager && employee.reportingManager.userId) {
-      await this.prisma.notification.create({
+      // Write audit log
+      await tx.auditLog.create({
         data: {
           companyId,
-          userId: employee.reportingManager.userId,
-          type: NotificationType.STATUS_CHANGED,
-          title: `Reportee Status Update: ${employee.firstName} ${employee.lastName}`,
-          body: `${employee.firstName} ${employee.lastName}'s status changed to ${newStatus}.`,
-          data: { employeeId: id, newStatus },
+          userId: callerId,
+          action: AuditAction.STATUS_CHANGE,
+          entity: 'Employee',
+          entityId: id,
+          newValues: {
+            employeeCode: employee.employeeCode,
+            employeeName: `${employee.firstName} ${employee.lastName}`,
+            previousStatus,
+            newStatus,
+            reason: dto.reason,
+            changedBy: user.email,
+          },
         },
       });
-    }
+
+      // In-app notification to employee
+      await tx.notification.create({
+        data: {
+          companyId,
+          userId: employee.userId,
+          type: NotificationType.STATUS_CHANGED,
+          title: 'Employment Status Update',
+          body: `Your employment status has been updated from ${previousStatus} to ${newStatus}.${dto.reason ? ` Reason: ${dto.reason}` : ''}`,
+          data: { employeeId: id, previousStatus, newStatus },
+        },
+      });
+
+      // In-app notification to reporting manager if one exists
+      if (employee.reportingManager && employee.reportingManager.userId) {
+        await tx.notification.create({
+          data: {
+            companyId,
+            userId: employee.reportingManager.userId,
+            type: NotificationType.STATUS_CHANGED,
+            title: `Reportee Status Update: ${employee.firstName} ${employee.lastName}`,
+            body: `${employee.firstName} ${employee.lastName}'s status changed to ${newStatus}.`,
+            data: { employeeId: id, newStatus },
+          },
+        });
+      }
+
+      if (becomesInactive) {
+        await tx.user.update({
+          where: { id: employee.userId },
+          data: {
+            lockedUntil: employmentLock,
+            refreshTokenHash: null,
+            sessionVersion: { increment: 1 },
+          },
+        });
+      } else if (wasInactive) {
+        await tx.user.updateMany({
+          where: { id: employee.userId, lockedUntil: employmentLock },
+          data: { lockedUntil: null, failedLoginAttempts: 0 },
+        });
+      }
+
+      return tx.employee.findUniqueOrThrow({ where: { id, companyId, deletedAt: null } });
+    });
 
     // Email notification
     await this.mailService.sendMail({
@@ -550,25 +576,6 @@ export class EmployeesService {
         ${dto.reason ? `<p><strong>Reason:</strong> ${dto.reason}</p>` : ''}
       `,
     });
-
-    // If SUSPENDED or TERMINATED, lock user account & invalidate session
-    if (newStatus === EmployeeStatus.SUSPENDED || newStatus === EmployeeStatus.TERMINATED) {
-      await this.prisma.user.update({
-        where: { id: employee.userId },
-        data: {
-          lockedUntil: new Date('9999-12-31'),
-          refreshTokenHash: null,
-        },
-      });
-    } else if (previousStatus === EmployeeStatus.SUSPENDED && newStatus === EmployeeStatus.ACTIVE) {
-      // Re-activate user account
-      await this.prisma.user.update({
-        where: { id: employee.userId },
-        data: {
-          lockedUntil: null,
-        },
-      });
-    }
 
     return updated;
   }

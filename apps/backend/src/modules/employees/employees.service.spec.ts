@@ -16,14 +16,17 @@ describe('EmployeesService', () => {
     employee: {
       findMany: jest.fn(),
       findFirst: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
       count: jest.fn(),
     },
     user: {
       findUnique: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
     },
     department: {
       findFirst: jest.fn(),
@@ -205,6 +208,10 @@ describe('EmployeesService', () => {
   });
 
   describe('updateStatus', () => {
+    beforeEach(() => {
+      mockPrisma.employee.updateMany.mockResolvedValue({ count: 1 });
+    });
+
     it('should update status, write audit log, create notification, and send email', async () => {
       mockPrisma.employee.findFirst.mockResolvedValueOnce({
         id: 'emp-1',
@@ -216,7 +223,7 @@ describe('EmployeesService', () => {
         user: { email: 'arthur@acme.com' },
         reportingManager: null,
       });
-      mockPrisma.employee.update.mockResolvedValueOnce({
+      mockPrisma.employee.findUniqueOrThrow.mockResolvedValueOnce({
         id: 'emp-1',
         status: EmployeeStatus.ACTIVE,
       });
@@ -243,40 +250,76 @@ describe('EmployeesService', () => {
       expect(mockMailService.sendMail).toHaveBeenCalled();
     });
 
-    it('should lock user account when status changes to SUSPENDED', async () => {
-      mockPrisma.employee.findFirst.mockResolvedValueOnce({
-        id: 'emp-1',
-        employeeCode: 'EMP-001',
-        firstName: 'Arthur',
-        lastName: 'Pendelton',
-        status: EmployeeStatus.ACTIVE,
-        userId: 'user-1',
-        user: { email: 'arthur@acme.com' },
-        reportingManager: null,
-      });
-      mockPrisma.employee.update.mockResolvedValueOnce({
-        id: 'emp-1',
-        status: EmployeeStatus.SUSPENDED,
-      });
-      mockPrisma.auditLog.create.mockResolvedValueOnce({});
-      mockPrisma.notification.create.mockResolvedValueOnce({});
-      mockPrisma.user.update.mockResolvedValueOnce({});
+    it.each([EmployeeStatus.SUSPENDED, EmployeeStatus.TERMINATED, EmployeeStatus.RESIGNED])(
+      'revokes existing sessions before emailing when status changes to %s', async (status) => {
+        mockPrisma.employee.findFirst.mockResolvedValueOnce({
+          id: 'emp-1',
+          employeeCode: 'EMP-001',
+          firstName: 'Arthur',
+          lastName: 'Pendelton',
+          status: EmployeeStatus.ACTIVE,
+          userId: 'user-1',
+          user: { email: 'arthur@acme.com' },
+          reportingManager: null,
+        });
+        mockPrisma.employee.findUniqueOrThrow.mockResolvedValueOnce({
+          id: 'emp-1',
+          status,
+        });
+        mockPrisma.auditLog.create.mockResolvedValueOnce({});
+        mockPrisma.notification.create.mockResolvedValueOnce({});
+        mockPrisma.user.update.mockResolvedValueOnce({});
 
-      await service.updateStatus(
-        'emp-1',
-        { status: EmployeeStatus.SUSPENDED, reason: 'Security investigation' },
-        mockAdminUser,
-      );
+        await service.updateStatus(
+          'emp-1',
+          { status, reason: 'Fixture status change' },
+          mockAdminUser,
+        );
 
-      expect(mockPrisma.user.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 'user-1' },
-          data: expect.objectContaining({
-            lockedUntil: expect.any(Date),
-            refreshTokenHash: null,
+        expect(mockPrisma.user.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { id: 'user-1' },
+            data: expect.objectContaining({
+              lockedUntil: expect.any(Date),
+              refreshTokenHash: null,
+              sessionVersion: { increment: 1 },
+            }),
           }),
-        }),
-      );
+        );
+        const [locked] = mockPrisma.user.update.mock.invocationCallOrder;
+        const [mailSent] = mockMailService.sendMail.mock.invocationCallOrder;
+        expect(locked).toBeLessThan(mailSent);
+      },
+    );
+
+    it('removes the employment lock after an employee returns to an active status', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({
+        id: 'emp-1', status: EmployeeStatus.TERMINATED, userId: 'user-1',
+        user: { email: 'employee@example.test' }, reportingManager: null,
+      });
+      mockPrisma.employee.findUniqueOrThrow.mockResolvedValueOnce({ id: 'emp-1', status: EmployeeStatus.ON_PROBATION });
+
+      await service.updateStatus('emp-1', { status: EmployeeStatus.ON_PROBATION }, mockAdminUser);
+
+      expect(mockPrisma.user.updateMany).toHaveBeenCalledWith({
+        where: { id: 'user-1', lockedUntil: new Date('9999-12-31') },
+        data: { lockedUntil: null, failedLoginAttempts: 0 },
+      });
+    });
+
+    it('rejects a concurrent status change without sending notifications', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-1', status: EmployeeStatus.ACTIVE });
+      mockPrisma.employee.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.updateStatus('emp-1', { status: EmployeeStatus.SUSPENDED }, mockAdminUser))
+        .rejects.toThrow(ConflictException);
+
+      expect(mockPrisma.employee.updateMany).toHaveBeenCalledWith({
+        where: { id: 'emp-1', companyId: 'comp-1', deletedAt: null, status: EmployeeStatus.ACTIVE },
+        data: { status: EmployeeStatus.SUSPENDED },
+      });
+      expect(mockPrisma.notification.create).not.toHaveBeenCalled();
+      expect(mockMailService.sendMail).not.toHaveBeenCalled();
     });
 
     it('should notify reportingManager using reportingManager.userId rather than employee id', async () => {
@@ -294,7 +337,7 @@ describe('EmployeesService', () => {
           user: { email: 'mgr@acme.com' },
         },
       });
-      mockPrisma.employee.update.mockResolvedValueOnce({
+      mockPrisma.employee.findUniqueOrThrow.mockResolvedValueOnce({
         id: 'emp-1',
         status: EmployeeStatus.SUSPENDED,
       });
