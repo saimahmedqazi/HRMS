@@ -1,6 +1,36 @@
 import { test, expect } from '@playwright/test';
 import { openFixtureDatabase } from './fixture-database';
 
+test('The assistant waits for subscription access and locks prompts for Basic employees', async ({ page }) => {
+  let releaseSubscription!: () => void;
+  const canRespond = new Promise<void>((resolve) => { releaseSubscription = resolve; });
+  let promptRequests = 0;
+  await page.route('**/api/v1/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/auth/me')) return route.fulfill({ json: { data: { id: 'employee', role: 'EMPLOYEE', companyId: 'fixture' } } });
+    if (path.endsWith('/auth/me/modules')) return route.fulfill({ json: { data: { allowedModules: ['ai-assistant'] } } });
+    if (path.endsWith('/subscriptions/current')) {
+      await canRespond;
+      return route.fulfill({ json: { data: { tier: 'BASIC', status: 'TRIALING', features: { aiAssistant: false } } } });
+    }
+    if (path.endsWith('/ai/chat')) promptRequests++;
+    return route.fulfill({ json: { data: [] } });
+  });
+
+  try {
+    await page.goto('/dashboard/ai-assistant');
+    await expect(page.getByText('Checking assistant access…')).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Ask the HR assistant' })).toBeDisabled();
+  } finally {
+    releaseSubscription();
+  }
+  await expect(page.getByText('Premium Feature Locked')).toBeVisible();
+  await expect(page.getByText('Contact your company administrator about access to the assistant.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Probation Leave Policy' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Send message' })).toBeDisabled();
+  await expect(page.getByRole('link', { name: 'Upgrade Plan' })).toHaveCount(0);
+  expect(promptRequests).toBe(0);
+});
 test.describe('Resource Requisitions & Gemini AI Assistant Lifecycle', () => {
   test.beforeAll(async () => {
     const prisma = openFixtureDatabase();

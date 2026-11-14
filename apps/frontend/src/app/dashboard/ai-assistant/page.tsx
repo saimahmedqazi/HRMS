@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import {
   Bot,
   User,
@@ -48,7 +49,13 @@ const PRESET_PROMPTS = [
   },
 ];
 
+interface AssistantSubscription {
+  status: string;
+  features: { aiAssistant: boolean };
+}
+
 export default function AiAssistantPage() {
+  const { user } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome',
@@ -61,12 +68,15 @@ export default function AiAssistantPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Fetch subscription tier
-  const { data: subscription } = useQuery({
-    queryKey: ['subscription-current'],
-    queryFn: () => api.get<any>('/subscriptions/current'),
+  const { data: subscription, isError: subscriptionError, refetch: refetchSubscription } = useQuery({
+    queryKey: ['subscription-current', user?.id, user?.supportModeCompanyId ?? user?.companyId],
+    queryFn: () => api.get<AssistantSubscription>('/subscriptions/current'),
+    enabled: Boolean(user?.id),
   });
 
-  const isPremium = subscription?.tier === 'PREMIUM';
+  const canChat = !subscriptionError && subscription?.features?.aiAssistant === true;
+  const suspended = subscription?.status === 'SUSPENDED';
+  const canManageBilling = user?.role === 'COMPANY_ADMIN' || user?.role === 'SUPER_ADMIN';
 
   // Auto-scroll to bottom of chat
   useEffect(() => {
@@ -103,7 +113,7 @@ export default function AiAssistantPage() {
 
   const handleSendMessage = (textToSend?: string) => {
     const query = textToSend || inputText;
-    if (!query.trim() || sendMutation.isPending) return;
+    if (!canChat || !query.trim() || sendMutation.isPending) return;
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
@@ -144,25 +154,33 @@ export default function AiAssistantPage() {
         </div>
       </div>
 
-      {/* Basic Tier Locked Banner */}
-      {!isPremium && (
+      {!canChat && (
         <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 text-xs text-amber-900 dark:text-amber-200">
             <Lock className="w-5 h-5 text-amber-600 flex-shrink-0" />
             <div>
-              <p className="font-semibold">Premium Feature Locked</p>
-              <p className="text-amber-700 dark:text-amber-300/80 mt-0.5">
-                The Gemini AI Assistant is exclusively available on ZenHR Premium. Upgrade your plan to
-                enable interactive onboarding, leave guidance, and policy queries.
+              <p role="status" className="font-semibold">
+                {subscriptionError ? 'Unable to check assistant access.' : !subscription ? 'Checking assistant access…' : suspended ? 'Company subscription is suspended.' : 'Premium Feature Locked'}
               </p>
+              {subscription && !subscriptionError && (
+                <p className="text-amber-700 dark:text-amber-300/80 mt-0.5">
+                  {canManageBilling ? 'Manage your ZenHR subscription to restore access to the assistant.' : 'Contact your company administrator about access to the assistant.'}
+                </p>
+              )}
             </div>
           </div>
-          <Link
-            href="/dashboard/billing"
-            className="flex-shrink-0 px-3 py-1.5 text-xs font-semibold rounded-lg bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 text-white shadow-sm"
-          >
-            Upgrade Plan
-          </Link>
+          {subscriptionError ? (
+            <button type="button" onClick={() => void refetchSubscription()} className="shrink-0 text-xs font-semibold underline">
+              Try again
+            </button>
+          ) : subscription && canManageBilling && (
+            <Link
+              href="/dashboard/billing"
+              className="flex-shrink-0 px-3 py-1.5 text-xs font-semibold rounded-lg bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 text-white shadow-sm"
+            >
+              {suspended ? 'Open Billing' : 'Upgrade Plan'}
+            </Link>
+          )}
         </div>
       )}
 
@@ -230,7 +248,7 @@ export default function AiAssistantPage() {
             <button
               key={idx}
               onClick={() => handleSendMessage(p.prompt)}
-              disabled={sendMutation.isPending}
+              disabled={!canChat || sendMutation.isPending}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-[11px] font-medium text-gray-600 dark:text-gray-300 hover:border-primary-500 hover:text-primary-600 whitespace-nowrap shadow-sm transition flex-shrink-0"
             >
               <Icon className="w-3 h-3 text-primary-500" />
@@ -250,6 +268,8 @@ export default function AiAssistantPage() {
       >
         <input
           type="text"
+          aria-label="Ask the HR assistant"
+          disabled={!canChat}
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           placeholder="Ask a question about HR policies, leave balances, or workflows..."
@@ -257,7 +277,8 @@ export default function AiAssistantPage() {
         />
         <button
           type="submit"
-          disabled={!inputText.trim() || sendMutation.isPending}
+          aria-label="Send message"
+          disabled={!canChat || !inputText.trim() || sendMutation.isPending}
           className="p-2 rounded-lg bg-primary-600 hover:bg-primary-700 text-white disabled:opacity-50 shadow-sm transition"
         >
           <Send className="w-4 h-4" />
