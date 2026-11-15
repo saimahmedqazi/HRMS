@@ -104,6 +104,35 @@ describe('EmployeesService', () => {
     jest.clearAllMocks();
   });
 
+  describe('listEmployees', () => {
+    it('selects only fields rendered by the directory and returns scoped pagination metadata', async () => {
+      mockPrisma.employee.count.mockResolvedValueOnce(1);
+      mockPrisma.employee.findMany.mockResolvedValueOnce([]);
+
+      const result = await service.listEmployees(mockAdminUser, { page: 1, limit: 12 });
+
+      expect(mockPrisma.employee.count).toHaveBeenCalledWith({
+        where: { companyId: 'comp-1', deletedAt: null },
+      });
+      expect(mockPrisma.employee.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { companyId: 'comp-1', deletedAt: null },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          employeeCode: true,
+          status: true,
+          profilePictureUrl: true,
+          department: { select: { id: true, name: true } },
+          designation: { select: { id: true, name: true } },
+          reportingManager: { select: { id: true, firstName: true, lastName: true } },
+          user: { select: { email: true } },
+        },
+      }));
+      expect(result.meta).toEqual({ total: 1, page: 1, limit: 12, totalPages: 1 });
+    });
+  });
+
   describe('onboardEmployee', () => {
     it.each([
       { hireDate: '2026-02-30' },

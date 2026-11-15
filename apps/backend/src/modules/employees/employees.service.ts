@@ -116,7 +116,6 @@ export class EmployeesService {
         where: whereClause,
         select: {
           id: true,
-          userId: true,
           firstName: true,
           lastName: true,
           employeeCode: true,
@@ -124,21 +123,16 @@ export class EmployeesService {
           profilePictureUrl: true,
           department: { select: { id: true, name: true } },
           designation: { select: { id: true, name: true } },
-          team: { select: { id: true, name: true } },
           reportingManager: {
             select: {
               id: true,
               firstName: true,
               lastName: true,
-              user: { select: { email: true } },
             },
           },
           user: {
             select: {
-              id: true,
               email: true,
-              role: true,
-              lastLoginAt: true,
             },
           },
         },
