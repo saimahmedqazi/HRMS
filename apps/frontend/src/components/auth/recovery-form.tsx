@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { ArrowLeft, CheckCircle2 } from 'lucide-react';
@@ -11,11 +11,20 @@ export function RecoveryForm({ initialToken, resetOnly = false }: {
 }) {
   const [email, setEmail] = useState('');
   const [submitted, setSubmitted] = useState(false);
-  const [resetToken, setResetToken] = useState(initialToken ?? '');
   const [newPassword, setNewPassword] = useState('');
   const [resetComplete, setResetComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    setIsReady(true);
+    if (!resetOnly || !initialToken) return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('token')) return;
+    url.searchParams.delete('token');
+    window.history.replaceState(window.history.state, '', url);
+  }, [resetOnly, initialToken]);
 
   const handleRequestReset = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,6 +42,7 @@ export function RecoveryForm({ initialToken, resetOnly = false }: {
 
   const handleConfirmReset = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!initialToken) return;
     setError(null);
     if (new TextEncoder().encode(newPassword).length > 72) {
       setError('Password must be at most 72 bytes in UTF-8.');
@@ -41,7 +51,7 @@ export function RecoveryForm({ initialToken, resetOnly = false }: {
     setIsLoading(true);
     try {
       await api.post('/auth/reset-password', {
-        token: resetToken,
+        token: initialToken,
         newPassword,
       });
       setResetComplete(true);
@@ -86,7 +96,11 @@ export function RecoveryForm({ initialToken, resetOnly = false }: {
               Return to Sign In
             </Link>
           </div>
-        ) : !submitted && !resetOnly ? (
+        ) : !resetOnly && submitted ? (
+          <p role="status" className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+            If your email is registered, open the password reset link sent to your inbox.
+          </p>
+        ) : !resetOnly ? (
           <form method="post" onSubmit={handleRequestReset} className="space-y-4">
             <div>
               <label htmlFor="recovery-email" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
@@ -95,6 +109,7 @@ export function RecoveryForm({ initialToken, resetOnly = false }: {
               <input
                 id="recovery-email"
                 type="email"
+                disabled={!isReady}
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -105,33 +120,19 @@ export function RecoveryForm({ initialToken, resetOnly = false }: {
 
             <button
               type="submit"
-              disabled={isLoading || !email}
+              disabled={!isReady || isLoading || !email}
               className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-semibold text-white shadow-md transition hover:bg-blue-700 disabled:opacity-50"
             >
               {isLoading ? 'Sending Reset Link...' : 'Send Reset Instructions'}
             </button>
           </form>
+        ) : !initialToken ? (
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            Open the link from your password reset email or{' '}
+            <Link href="/forgot-password" className="font-medium text-blue-600 underline dark:text-blue-400">request a new link</Link>.
+          </p>
         ) : (
           <form method="post" onSubmit={handleConfirmReset} className="space-y-4">
-            {submitted && <div className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
-              If <strong>{email}</strong> is registered, a password reset token has been dispatched to your email. Enter the token below to set a new password.
-            </div>}
-
-            <div>
-              <label htmlFor="reset-token" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
-                Reset Token
-              </label>
-              <input
-                id="reset-token"
-                type="text"
-                required
-                value={resetToken}
-                onChange={(e) => setResetToken(e.target.value)}
-                placeholder="Paste reset token from email"
-                className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-mono outline-none focus:border-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-              />
-            </div>
-
             <div>
               <label htmlFor="new-password" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
                 New Password (min 8 chars)
@@ -139,6 +140,7 @@ export function RecoveryForm({ initialToken, resetOnly = false }: {
               <input
                 id="new-password"
                 type="password"
+                disabled={!isReady}
                 autoComplete="new-password"
                 required
                 minLength={8}
@@ -151,7 +153,7 @@ export function RecoveryForm({ initialToken, resetOnly = false }: {
 
             <button
               type="submit"
-              disabled={isLoading || !resetToken || newPassword.length < 8}
+              disabled={!isReady || isLoading || newPassword.length < 8}
               className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-semibold text-white shadow-md transition hover:bg-blue-700 disabled:opacity-50"
             >
               {isLoading ? 'Resetting...' : 'Reset Password'}

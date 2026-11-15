@@ -40,7 +40,8 @@ test('a password reset link changes the password and revokes previous sessions',
   await page.goto('/forgot-password');
   await page.getByLabel('Registered Work Email').fill(email);
   await page.getByRole('button', { name: 'Send Reset Instructions' }).click();
-  await expect(page.getByLabel('Reset Token')).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('open the password reset link');
+  await expect(page.getByLabel('Reset Token')).toHaveCount(0);
 
   const prisma = openFixtureDatabase();
   let resetToken: string | null;
@@ -56,7 +57,8 @@ test('a password reset link changes the password and revokes previous sessions',
   if (!resetToken) throw new Error('Expected a reset token for the test account');
 
   await page.goto(`/reset-password?token=${encodeURIComponent(resetToken)}`);
-  await expect(page.getByLabel('Reset Token')).toHaveValue(resetToken);
+  await expect(page).toHaveURL(/\/reset-password$/);
+  await expect(page.getByLabel('Reset Token')).toHaveCount(0);
   await page.getByLabel('New Password', { exact: false }).fill('ChangedFixturePassword@123');
   await page.getByRole('button', { name: 'Reset Password', exact: true }).click();
   await expect(page.getByText('Your password has been reset successfully!')).toBeVisible();
