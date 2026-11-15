@@ -49,7 +49,9 @@ Open two terminals in the extracted folder. Leave both running.
 
 Open [ZenHR sign-in](http://localhost:3000/login). Use `localhost` for the web app so it matches the configured browser origin. API documentation is available at [Swagger](http://127.0.0.1:4000/api/docs).
 
-## 4. Demo sign-ins
+## 4. Local demo sign-ins
+
+These passwords apply to the disposable database created by the local seed command above. The hosted Platform Super Admin and Operation Manager use separately rotated credentials that are kept outside this repository. Ask the project owner for hosted platform access; do not use the local seed passwords on the hosted site.
 
 | Role | Email | Password |
 |---|---|---|
