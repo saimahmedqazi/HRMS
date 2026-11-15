@@ -145,5 +145,39 @@ describe('AnalyticsService', () => {
       expect(overview.departmentDistribution.length).toBe(2);
       expect(overview.attendanceTrend.length).toBe(7);
     });
+
+    it('builds the executive attendance trend from one seven-day query', async () => {
+      jest.useFakeTimers({ now: new Date('2026-11-15T12:00:00Z') });
+      try {
+        prisma.attendanceRecord.findMany.mockImplementation(async (query: any) => {
+          if (query.where.date?.gte) {
+            return [
+              { date: new Date('2026-11-09T00:00:00Z'), status: AttendanceStatus.PRESENT },
+              { date: new Date('2026-11-15T00:00:00Z'), status: AttendanceStatus.PRESENT_REMOTE },
+            ];
+          }
+          return [];
+        });
+
+        const overview = await service.getDashboardOverview(mockCompanyId, {
+          id: 'admin-1',
+          role: UserRole.COMPANY_ADMIN,
+        }) as any;
+
+        expect(overview.attendanceTrend).toHaveLength(7);
+        expect(overview.attendanceTrend[0]).toMatchObject({ day: 'Mon', present: 1, remote: 0 });
+        expect(overview.attendanceTrend[6]).toMatchObject({ day: 'Sun', present: 0, remote: 1 });
+        expect(prisma.attendanceRecord.findMany).toHaveBeenCalledTimes(2);
+        expect(prisma.attendanceRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({
+          where: expect.objectContaining({
+            companyId: mockCompanyId,
+            date: { gte: new Date('2026-11-09T00:00:00Z'), lte: new Date('2026-11-15T00:00:00Z') },
+          }),
+          select: { date: true, status: true },
+        }));
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 });

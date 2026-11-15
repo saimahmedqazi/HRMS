@@ -255,49 +255,53 @@ export class AnalyticsService {
     }
 
     // 4. HR Manager & Company Admin (Executive Overview)
-    const totalEmployees = await this.prisma.employee.count({
-      where: { companyId, deletedAt: null },
-    });
-
-    const onProbationCount = await this.prisma.employee.count({
-      where: { companyId, status: EmployeeStatus.ON_PROBATION, deletedAt: null },
-    });
-
-    const todayAttendance = await this.prisma.attendanceRecord.findMany({
-      where: { companyId, date: today, employee: { companyId, deletedAt: null } },
-    });
-
-    const pendingExceptions = await this.prisma.attendanceRecord.count({
-      where: { companyId, status: AttendanceStatus.ABSENT_PENDING_REVIEW },
-    });
-
-    const pendingLeaveApprovals = await this.prisma.leaveRequest.count({
-      where: { companyId, status: 'PENDING' },
-    });
-
-    // Department Distribution
-    const departments = await this.prisma.department.findMany({
-      where: { companyId, deletedAt: null },
-      include: {
-        _count: {
-          select: { employees: { where: { deletedAt: null } } },
+    const weekStart = new Date(today);
+    weekStart.setUTCDate(weekStart.getUTCDate() - 6);
+    const [
+      totalEmployees,
+      onProbationCount,
+      todayAttendance,
+      pendingExceptions,
+      pendingLeaveApprovals,
+      departments,
+      weekAttendance,
+    ] = await Promise.all([
+      this.prisma.employee.count({ where: { companyId, deletedAt: null } }),
+      this.prisma.employee.count({
+        where: { companyId, status: EmployeeStatus.ON_PROBATION, deletedAt: null },
+      }),
+      this.prisma.attendanceRecord.findMany({
+        where: { companyId, date: today, employee: { companyId, deletedAt: null } },
+      }),
+      this.prisma.attendanceRecord.count({
+        where: { companyId, status: AttendanceStatus.ABSENT_PENDING_REVIEW },
+      }),
+      this.prisma.leaveRequest.count({ where: { companyId, status: 'PENDING' } }),
+      this.prisma.department.findMany({
+        where: { companyId, deletedAt: null },
+        include: {
+          _count: {
+            select: { employees: { where: { deletedAt: null } } },
+          },
         },
-      },
-    });
+      }),
+      this.prisma.attendanceRecord.findMany({
+        where: { companyId, date: { gte: weekStart, lte: today } },
+        select: { date: true, status: true },
+      }),
+    ]);
 
     const departmentDistribution = departments.map((d) => ({
       name: d.name,
       headcount: d._count.employees,
     }));
 
-    // 7-Day Attendance Trend
+    // Build the seven-day trend from one company-scoped attendance query.
     const trend = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(today);
-      d.setUTCDate(d.getUTCDate() - i);
-      const dayRecords = await this.prisma.attendanceRecord.findMany({
-        where: { companyId, date: d },
-      });
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStart);
+      d.setUTCDate(d.getUTCDate() + i);
+      const dayRecords = weekAttendance.filter((record) => record.date.getTime() === d.getTime());
       trend.push({
         day: d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
         present: dayRecords.filter((r) => r.status === AttendanceStatus.PRESENT).length,
