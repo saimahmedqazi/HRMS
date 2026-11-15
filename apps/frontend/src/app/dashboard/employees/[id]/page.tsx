@@ -513,7 +513,7 @@ export default function EmployeeDetailPage() {
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">Job Details</h3>
               {canEditJobDetails && (
-                <button type="button" onClick={openJobModal} className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                <button type="button" aria-label="Edit Job Details" onClick={openJobModal} className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
                   <Edit3 className="h-3.5 w-3.5 text-indigo-600" /> Edit
                 </button>
               )}
