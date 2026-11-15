@@ -1,5 +1,9 @@
 import { isIP } from 'node:net';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request } from 'express';
+
+const FORWARDED_IP_MAX_AGE_MS = 60_000;
+type IpRequest = Pick<Request, 'ip' | 'socket'> & Partial<Pick<Request, 'headers'>>;
 
 export function normalizeIpAddress(value?: string): string | null {
   const address = value?.trim();
@@ -8,7 +12,24 @@ export function normalizeIpAddress(value?: string): string | null {
   return isIP(mapped) === 4 ? mapped : address;
 }
 
-export function getRequestIp(req: Pick<Request, 'ip' | 'socket'>): string | null {
+export function getRequestIp(req: IpRequest, forwardingSecret = process.env.IP_FORWARDING_SECRET): string | null {
+  if (forwardingSecret) {
+    const ipHeader = req.headers?.['x-zenhr-client-ip'];
+    const timestampHeader = req.headers?.['x-zenhr-client-ip-timestamp'];
+    const signatureHeader = req.headers?.['x-zenhr-client-ip-signature'];
+    if (typeof ipHeader !== 'string' || typeof timestampHeader !== 'string' ||
+        typeof signatureHeader !== 'string' || !/^\d{13}$/.test(timestampHeader) ||
+        !/^[a-f0-9]{64}$/i.test(signatureHeader)) return null;
+
+    const ip = normalizeIpAddress(ipHeader);
+    const age = Math.abs(Date.now() - Number(timestampHeader));
+    if (!ip || age > FORWARDED_IP_MAX_AGE_MS) return null;
+
+    const expected = createHmac('sha256', forwardingSecret)
+      .update(`${timestampHeader}\n${ipHeader}`).digest();
+    const received = Buffer.from(signatureHeader, 'hex');
+    return timingSafeEqual(expected, received) ? ip : null;
+  }
   return normalizeIpAddress(req.ip) ?? normalizeIpAddress(req.socket.remoteAddress);
 }
 

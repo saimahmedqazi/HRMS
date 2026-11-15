@@ -20,6 +20,10 @@ async function bootstrap(): Promise<void> {
   const frontendUrl = configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
   const apiPrefix = configService.get<string>('API_PREFIX', 'api/v1');
   const trustedProxyRanges = parseTrustedProxyRanges(configService.get<string>('TRUSTED_PROXY_CIDRS'));
+  const ipForwardingSecret = configService.get<string>('IP_FORWARDING_SECRET');
+  if (ipForwardingSecret && Buffer.byteLength(ipForwardingSecret, 'utf8') < 32) {
+    throw new Error('IP_FORWARDING_SECRET must contain at least 32 bytes when configured.');
+  }
   app.set('trust proxy', trustedProxyRanges.length ? trustedProxyRanges : false);
 
   // Security headers
