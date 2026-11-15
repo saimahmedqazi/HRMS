@@ -131,7 +131,7 @@ export default function AttendanceDashboardPage() {
   });
 
   // Fetch IP Whitelist & current client IP telemetry
-  const { data: whitelistData } = useQuery({
+  const { data: whitelistData, isLoading: isWhitelistLoading, error: whitelistError, refetch: refetchWhitelist } = useQuery({
     queryKey: ['attendance-ip-whitelist'],
     queryFn: () => api.get<any>('/attendance/ip-whitelist'),
   });
@@ -960,7 +960,22 @@ export default function AttendanceDashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                {(!whitelistData?.items || whitelistData.items.length === 0) ? (
+                {isWhitelistLoading ? (
+                  <tr>
+                    <td colSpan={4} className="py-4 px-3 text-center text-zinc-400">
+                      Loading IP whitelist...
+                    </td>
+                  </tr>
+                ) : whitelistError || !Array.isArray(whitelistData?.items) ? (
+                  <tr>
+                    <td colSpan={4} className="py-4 px-3 text-center text-rose-600 dark:text-rose-400">
+                      Could not load the IP whitelist.{' '}
+                      <button type="button" onClick={() => void refetchWhitelist()} className="font-semibold underline">
+                        Retry
+                      </button>
+                    </td>
+                  </tr>
+                ) : whitelistData.items.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="py-4 px-3 text-center text-zinc-400">
                       No IP restrictions configured yet. Add Office or Remote/Hybrid employee IPs above to enforce IP whitelisting.
