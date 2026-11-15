@@ -4,7 +4,7 @@ import {
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { BulkImportStatus, Prisma, UserRole } from '@prisma/client';
-import { ConnectionOptions, Job, Queue, Worker } from 'bullmq';
+import { RedisOptions, Job, Queue, Worker } from 'bullmq';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { BulkImportService, PreparedImportRow, RowError } from './bulk-import.service';
 import { isInactiveAccount } from '../auth/account-state';
@@ -13,6 +13,30 @@ type ImportPayload = { workbook?: string };
 const QUEUE_NAME = 'zenhr-employee-imports';
 const pendingStatuses: BulkImportStatus[] = [BulkImportStatus.QUEUED, BulkImportStatus.PROCESSING];
 const JOB_FAILURE = 'The import stopped before all rows were processed. Review the results before retrying.';
+
+function getRedisConnection(env: NodeJS.ProcessEnv): RedisOptions | undefined {
+  if (!env.REDIS_URL) {
+    const host = env.REDIS_HOST?.trim();
+    if (!host) return;
+    return {
+      host,
+      port: Number(env.REDIS_PORT || 6379),
+      password: env.REDIS_PASSWORD || undefined,
+      ...(host.toLowerCase().endsWith('.upstash.io') && { tls: {} }),
+    };
+  }
+
+  const redis = new URL(env.REDIS_URL);
+  if (!['redis:', 'rediss:'].includes(redis.protocol)) throw new Error('REDIS_URL must use redis or rediss.');
+  return {
+    host: redis.hostname,
+    port: Number(redis.port || 6379),
+    username: decodeURIComponent(redis.username) || undefined,
+    password: decodeURIComponent(redis.password) || undefined,
+    db: Number(redis.pathname.slice(1) || 0),
+    ...(redis.protocol === 'rediss:' && { tls: {} }),
+  };
+}
 
 @Injectable()
 export class BulkImportJobsService implements OnModuleInit, OnModuleDestroy {
@@ -24,17 +48,8 @@ export class BulkImportJobsService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly prisma: PrismaService, private readonly imports: BulkImportService) {}
 
   onModuleInit() {
-    if (!process.env.REDIS_URL) return;
-    const redis = new URL(process.env.REDIS_URL);
-    if (!['redis:', 'rediss:'].includes(redis.protocol)) throw new Error('REDIS_URL must use redis or rediss.');
-    const connection: ConnectionOptions = {
-      host: redis.hostname,
-      port: Number(redis.port || 6379),
-      username: decodeURIComponent(redis.username) || undefined,
-      password: decodeURIComponent(redis.password) || undefined,
-      db: Number(redis.pathname.slice(1) || 0),
-      ...(redis.protocol === 'rediss:' && { tls: {} }),
-    };
+    const connection = getRedisConnection(process.env);
+    if (!connection) return;
     this.queue = new Queue(QUEUE_NAME, {
       connection: { ...connection, maxRetriesPerRequest: 1, enableOfflineQueue: false, commandTimeout: 5000 },
       defaultJobOptions: {

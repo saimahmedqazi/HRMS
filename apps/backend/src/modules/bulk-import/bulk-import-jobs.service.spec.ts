@@ -1,5 +1,5 @@
 import { BulkImportStatus } from '@prisma/client';
-import { Queue } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
 import type { PrismaService } from '@common/prisma/prisma.service';
 import { BulkImportJobsService } from './bulk-import-jobs.service';
 import type { BulkImportService } from './bulk-import.service';
@@ -10,6 +10,27 @@ jest.mock('bullmq', () => ({
 }));
 
 describe('BulkImportJobsService submission', () => {
+  it('starts both the queue and worker with the hosted split Redis settings', () => {
+    const originalEnv = process.env;
+    process.env = { ...originalEnv, REDIS_HOST: 'fixture.upstash.io', REDIS_PORT: '6380', REDIS_PASSWORD: 'fixture-password' };
+    delete process.env.REDIS_URL;
+    jest.mocked(Queue).mockReturnValue({ on: jest.fn() } as unknown as Queue);
+    try {
+      const service = new BulkImportJobsService({} as PrismaService, {} as BulkImportService);
+      service.onModuleInit();
+      const connection = expect.objectContaining({
+        host: 'fixture.upstash.io',
+        port: 6380,
+        password: 'fixture-password',
+        tls: {},
+      });
+      expect(Queue).toHaveBeenLastCalledWith('zenhr-employee-imports', expect.objectContaining({ connection }));
+      expect(Worker).toHaveBeenLastCalledWith('zenhr-employee-imports', expect.any(Function), expect.objectContaining({ connection }));
+    } finally {
+      process.env = originalEnv;
+    }
+  });
+
   it.each([
     [1, BulkImportStatus.FAILED],
     [0, BulkImportStatus.PROCESSING],
