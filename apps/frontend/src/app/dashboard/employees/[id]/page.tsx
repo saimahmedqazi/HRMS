@@ -36,6 +36,10 @@ export default function EmployeeDetailPage() {
     user?.role === 'SUPER_ADMIN' ||
     user?.role === 'COMPANY_ADMIN' ||
     user?.role === 'HR_MANAGER';
+  const canEditJobDetails =
+    user?.role === 'SUPER_ADMIN' ||
+    user?.role === 'COMPANY_ADMIN' ||
+    user?.role === 'HR_MANAGER';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
 
@@ -68,7 +72,16 @@ export default function EmployeeDetailPage() {
   const [demoCity, setDemoCity] = useState('');
   const [demoCountry, setDemoCountry] = useState('');
   const [demoSaved, setDemoSaved] = useState(false);
+  const [invalidStoredDob, setInvalidStoredDob] = useState(false);
   const initialDemoValues = useRef<Record<string, string>>({});
+
+  // Job assignment modal (HR/Admin only)
+  const [showJobModal, setShowJobModal] = useState(false);
+  const [jobDepartmentId, setJobDepartmentId] = useState('');
+  const [jobDesignationId, setJobDesignationId] = useState('');
+  const [jobTeamId, setJobTeamId] = useState('');
+  const [jobReportingManagerId, setJobReportingManagerId] = useState('');
+  const initialJobValues = useRef<Record<string, string>>({});
 
   // Action feedback notification banner
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -84,12 +97,42 @@ export default function EmployeeDetailPage() {
   const emp = data;
   const isOwnProfile = Boolean(user?.employee?.id && user.employee.id === emp?.id);
 
+  const { data: departments = [] } = useQuery({
+    queryKey: ['employee-edit-departments', user?.id, user?.supportModeCompanyId ?? user?.companyId],
+    queryFn: () => api.get<any[]>('/departments'),
+    enabled: canEditJobDetails,
+  });
+  const { data: designations = [] } = useQuery({
+    queryKey: ['employee-edit-designations', user?.id, user?.supportModeCompanyId ?? user?.companyId],
+    queryFn: () => api.get<any[]>('/designations'),
+    enabled: canEditJobDetails,
+  });
+  const { data: teams = [] } = useQuery({
+    queryKey: ['employee-edit-teams', user?.id, user?.supportModeCompanyId ?? user?.companyId, jobDepartmentId],
+    queryFn: () => api.get<any[]>(`/teams?departmentId=${encodeURIComponent(jobDepartmentId)}`),
+    enabled: canEditJobDetails && Boolean(jobDepartmentId),
+  });
+  const { data: employeeOptions } = useQuery({
+    queryKey: ['employee-edit-reporting-managers', user?.id, user?.supportModeCompanyId ?? user?.companyId],
+    queryFn: () => api.get<{ items: any[] }>('/employees?limit=100'),
+    enabled: canEditJobDetails,
+  });
+
   const openDemoModal = () => {
     if (!emp) return;
     updateDemoMutation.reset();
     setDemoSaved(false);
+    const dobCandidate = emp.dateOfBirth ? new Date(emp.dateOfBirth) : null;
+    const formattedDob = dobCandidate && Number.isFinite(dobCandidate.getTime())
+      ? dobCandidate.toISOString().slice(0, 10)
+      : '';
+    // The API validates ISO dates strictly (years 0001–0999 are rejected by
+    // class-validator). Do not include a corrupt legacy value in an otherwise
+    // valid profile update; leave it blank so the employee can replace it.
+    const validDob = formattedDob && Number(formattedDob.slice(0, 4)) >= 1000 ? formattedDob : '';
+    setInvalidStoredDob(Boolean(emp.dateOfBirth && !validDob));
     const personal = {
-      dateOfBirth: emp.dateOfBirth ? new Date(emp.dateOfBirth).toISOString().slice(0, 10) : '',
+      dateOfBirth: validDob,
       gender: emp.gender || '',
       nationality: emp.nationality || '',
       phone: emp.phone || '',
@@ -123,6 +166,44 @@ export default function EmployeeDetailPage() {
       setShowDemoModal(false);
       setDemoSaved(true);
     },
+  });
+
+  const openJobModal = () => {
+    if (!emp) return;
+    jobMutation.reset();
+    const values = {
+      departmentId: emp.departmentId || '',
+      designationId: emp.designationId || '',
+      teamId: emp.teamId || '',
+      reportingManagerId: emp.reportingManagerId || '',
+    };
+    initialJobValues.current = values;
+    setJobDepartmentId(values.departmentId);
+    setJobDesignationId(values.designationId);
+    setJobTeamId(values.teamId);
+    setJobReportingManagerId(values.reportingManagerId);
+    setShowJobModal(true);
+  };
+
+  const jobChanges = Object.fromEntries(Object.entries({
+    departmentId: jobDepartmentId,
+    designationId: jobDesignationId,
+    teamId: jobTeamId,
+    reportingManagerId: jobReportingManagerId,
+  }).filter(([field, value]) => value !== (initialJobValues.current[field] || ''))
+    .map(([field, value]) => [field, value || null]));
+
+  const jobMutation = useMutation({
+    mutationFn: () => api.patch(`/employees/${id}`, jobChanges),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['employee', id] }),
+        queryClient.invalidateQueries({ queryKey: ['employees'] }),
+      ]);
+      setShowJobModal(false);
+      setFeedback({ type: 'success', message: 'Employee job details saved.' });
+    },
+    onError: (err: any) => setFeedback({ type: 'error', message: err.message || 'Failed to update job details.' }),
   });
 
   // Status mutation
@@ -429,7 +510,14 @@ export default function EmployeeDetailPage() {
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           {/* Job Details Card */}
           <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-            <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">Job Details</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">Job Details</h3>
+              {canEditJobDetails && (
+                <button type="button" onClick={openJobModal} className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                  <Edit3 className="h-3.5 w-3.5 text-indigo-600" /> Edit
+                </button>
+              )}
+            </div>
             <dl className="mt-4 divide-y divide-zinc-100 text-xs dark:divide-zinc-800">
               <div className="flex justify-between py-2.5">
                 <dt className="text-zinc-500">Department</dt>
@@ -943,10 +1031,16 @@ export default function EmployeeDetailPage() {
                     id="personal-date-of-birth"
                     type="date"
                     value={demoDob}
+                    min="1000-01-01"
                     max={new Date().toISOString().slice(0, 10)}
                     onChange={(e) => setDemoDob(e.target.value)}
                     className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
                   />
+                  {invalidStoredDob && (
+                    <p role="status" className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+                      The saved date is invalid. Enter a valid date if you want to replace it.
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label htmlFor="personal-gender" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
@@ -1061,6 +1155,54 @@ export default function EmployeeDetailPage() {
                 >
                   {updateDemoMutation.isPending ? 'Saving...' : 'Save Changes'}
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Job Details Modal */}
+      {showJobModal && canEditJobDetails && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="employee-job-details-title" className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between border-b border-zinc-200 pb-3 dark:border-zinc-800">
+              <h2 id="employee-job-details-title" className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Edit Job Details</h2>
+              <button type="button" onClick={() => setShowJobModal(false)} disabled={jobMutation.isPending} aria-label="Close job details editor" className="text-zinc-400 hover:text-zinc-600 disabled:opacity-50">&times;</button>
+            </div>
+            <form onSubmit={(event) => { event.preventDefault(); if (Object.keys(jobChanges).length && !jobMutation.isPending) jobMutation.mutate(); }} className="mt-4 space-y-4">
+              <div>
+                <label htmlFor="job-department" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Department</label>
+                <select id="job-department" value={jobDepartmentId} onChange={(event) => { setJobDepartmentId(event.target.value); setJobTeamId(''); }} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
+                  <option value="">No department</option>
+                  {departments.map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="job-designation" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Designation</label>
+                <select id="job-designation" value={jobDesignationId} onChange={(event) => setJobDesignationId(event.target.value)} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
+                  <option value="">No designation</option>
+                  {designations.map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="job-team" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Team</label>
+                <select id="job-team" value={jobTeamId} onChange={(event) => setJobTeamId(event.target.value)} disabled={!jobDepartmentId} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800">
+                  <option value="">No team assigned</option>
+                  {teams.map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="job-reporting-manager" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Reporting Manager</label>
+                <select id="job-reporting-manager" value={jobReportingManagerId} onChange={(event) => setJobReportingManagerId(event.target.value)} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
+                  <option value="">Company Admin (CEO)</option>
+                  {(employeeOptions?.items || []).filter((item: any) => item.id !== id).map((item: any) => <option key={item.id} value={item.id}>{item.firstName} {item.lastName}</option>)}
+                </select>
+                <p className="mt-1 text-[11px] text-zinc-500">Select from the first 100 employees in your authorized scope.</p>
+              </div>
+              {jobMutation.error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-950 dark:text-rose-300">{jobMutation.error.message}</p>}
+              <div className="flex justify-end gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                <button type="button" onClick={() => setShowJobModal(false)} disabled={jobMutation.isPending} className="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-300">Cancel</button>
+                <button type="submit" disabled={!Object.keys(jobChanges).length || jobMutation.isPending} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{jobMutation.isPending ? 'Saving...' : 'Save Job Details'}</button>
               </div>
             </form>
           </div>

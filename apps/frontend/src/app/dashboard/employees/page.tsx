@@ -72,6 +72,7 @@ export default function EmployeesPage() {
   const [role, setRole] = useState('EMPLOYEE');
   const [departmentId, setDepartmentId] = useState('');
   const [designationId, setDesignationId] = useState('');
+  const [teamId, setTeamId] = useState('');
 
   // Fetch departments for dropdown
   const { data: deptData } = useQuery({
@@ -82,6 +83,12 @@ export default function EmployeesPage() {
   const { data: desigData } = useQuery({
     queryKey: ['designations', user?.id, companyId],
     queryFn: () => api.get<any[]>('/designations'),
+  });
+
+  const { data: teamData } = useQuery({
+    queryKey: ['teams', user?.id, companyId, departmentId],
+    queryFn: () => api.get<any[]>(`/teams?departmentId=${encodeURIComponent(departmentId)}`),
+    enabled: Boolean(departmentId),
   });
 
   // Fetch employees list
@@ -110,6 +117,7 @@ export default function EmployeesPage() {
         role,
         departmentId: departmentId || undefined,
         designationId: designationId || undefined,
+        teamId: teamId || undefined,
       }),
     onSuccess: (res: any) => {
       queryClient.invalidateQueries({ queryKey: ['employees'] });
@@ -118,6 +126,9 @@ export default function EmployeesPage() {
       setLastName('');
       setEmail('');
       setHireDate('');
+      setDepartmentId('');
+      setDesignationId('');
+      setTeamId('');
     },
   });
 
@@ -384,12 +395,16 @@ export default function EmployeesPage() {
                     />
                   </div>
                   <div>
-                    <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    <label htmlFor="onboard-department" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                       Department
                     </label>
                     <select
+                      id="onboard-department"
                       value={departmentId}
-                      onChange={(e) => setDepartmentId(e.target.value)}
+                      onChange={(e) => {
+                        setDepartmentId(e.target.value);
+                        setTeamId('');
+                      }}
                       className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
                     >
                       <option value="">Select Department</option>
@@ -399,6 +414,24 @@ export default function EmployeesPage() {
                         </option>
                       ))}
                     </select>
+                  </div>
+                  <div className="col-span-2">
+                    <label htmlFor="onboard-team" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                      Team
+                    </label>
+                    <select
+                      id="onboard-team"
+                      value={teamId}
+                      onChange={(e) => setTeamId(e.target.value)}
+                      disabled={!departmentId}
+                      className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800"
+                    >
+                      <option value="">No team assigned</option>
+                      {(teamData || []).map((team: any) => (
+                        <option key={team.id} value={team.id}>{team.name}</option>
+                      ))}
+                    </select>
+                    {!departmentId && <p className="mt-1 text-[11px] text-zinc-500">Select a department first.</p>}
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">

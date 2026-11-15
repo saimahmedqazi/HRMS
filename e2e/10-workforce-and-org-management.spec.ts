@@ -106,6 +106,7 @@ test.describe('Workforce Onboarding & Organization Structure Management', () => 
     await prisma.employee.deleteMany({ where: { user: { email: 'chloe.davis@acme.com' } } });
     await prisma.user.deleteMany({ where: { email: 'chloe.davis@acme.com' } });
     await prisma.designation.deleteMany({ where: { name: 'Senior CS Specialist', company: { slug: 'acme-corp' } } });
+    await prisma.team.deleteMany({ where: { name: 'Customer Success QA Team', company: { slug: 'acme-corp' } } });
     await prisma.department.deleteMany({ where: { name: 'Customer Success', company: { slug: 'acme-corp' } } });
     await prisma.$disconnect();
   });
@@ -133,6 +134,13 @@ test.describe('Workforce Onboarding & Organization Structure Management', () => 
 
     // Verify Department Card Created
     await expect(page.locator('h3:has-text("Customer Success")').first()).toBeVisible({ timeout: 10000 });
+    const { data: departments } = await (await page.request.get('/api/v1/departments')).json();
+    const customerSuccess = departments.find((department: { name: string }) => department.name === 'Customer Success');
+    const createdTeam = await page.request.post('/api/v1/teams', { data: {
+      name: 'Customer Success QA Team', departmentId: customerSuccess.id,
+    } });
+    expect(createdTeam.status()).toBe(201);
+    const { data: team } = await createdTeam.json();
 
     // 3. Create Designation
     await page.click('button:has-text("Designations")');
@@ -162,6 +170,8 @@ test.describe('Workforce Onboarding & Organization Structure Management', () => 
     await page.fill('input[placeholder="Jane"]', 'Chloe');
     await page.fill('input[placeholder="Doe"]', 'Davis');
     await page.fill('input[placeholder="jane.doe@acme.com"]', 'chloe.davis@acme.com');
+    await page.getByLabel('Department').selectOption({ label: 'Customer Success' });
+    await page.getByLabel('Team').selectOption({ label: 'Customer Success QA Team' });
     await page.getByLabel('Hire Date').fill('2025-01-15');
 
     // Submit Onboarding
@@ -172,6 +182,7 @@ test.describe('Workforce Onboarding & Organization Structure Management', () => 
     const response = await onboardingResponse;
     expect(response.status()).toBe(201);
     const { data: credentials } = await response.json();
+    expect(response.request().postDataJSON().teamId).toBe(team.id);
     expect(typeof credentials.welcomeEmailSent).toBe('boolean');
 
     // 5. Verify Success Credentials Modal
@@ -212,6 +223,7 @@ test.describe('Workforce Onboarding & Organization Structure Management', () => 
     const prisma = openFixtureDatabase();
     try {
       const employee = await prisma.employee.findFirstOrThrow({ where: { user: { email: 'chloe.davis@acme.com' } } });
+      expect(employee.teamId).toBe(team.id);
       expect(employee.hireDate.toISOString()).toBe('2025-01-15T00:00:00.000Z');
       expect(employee.probationEndDate?.toISOString()).toBe('2025-04-15T00:00:00.000Z');
       await prisma.employee.update({ where: { id: employee.id }, data: { probationEndDate: new Date('2027-01-01') } });
@@ -232,5 +244,25 @@ test.describe('Workforce Onboarding & Organization Structure Management', () => 
     // 6. Search for newly onboarded employee in directory
     await page.fill('input[placeholder="Search by name, employee code, or email..."]', 'Chloe Davis');
     await expect(page.locator('text=Chloe Davis').first()).toBeVisible({ timeout: 10000 });
+
+    await page.getByRole('link', { name: /Chloe Davis/ }).click();
+    await page.getByRole('button', { name: 'Edit Job Details', exact: true }).click();
+    const jobEditor = page.getByRole('dialog', { name: 'Edit Job Details' });
+    await expect(jobEditor.getByLabel('Team')).toHaveValue(team.id);
+    await jobEditor.getByLabel('Team').selectOption('');
+    const jobSave = jobEditor.getByRole('button', { name: 'Save Job Details' });
+    const [jobUpdate] = await Promise.all([
+      page.waitForResponse((res) => res.url().endsWith(`/api/v1/employees/${credentials.id}`) && res.request().method() === 'PATCH'),
+      jobSave.click(),
+    ]);
+    expect(jobUpdate.status()).toBe(200);
+    await expect(page.getByRole('alert').filter({ hasText: 'Employee job details saved.' })).toBeVisible();
+    const verificationDb = openFixtureDatabase();
+    try {
+      const storedAfterEdit = await verificationDb.employee.findUnique({ where: { id: credentials.id } });
+      expect(storedAfterEdit?.teamId).toBeNull();
+    } finally {
+      await verificationDb.$disconnect();
+    }
   });
 });

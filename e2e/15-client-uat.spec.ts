@@ -354,14 +354,21 @@ test('Employee can save and clear personal information while HR-managed fields s
   const prisma = openFixtureDatabase();
   const { id, companyId, firstName, baseSalary, ...original } = await prisma.employee.findFirstOrThrow({
     where: { user: { email: employee }, company: { slug: 'acme-corp' } },
-    select: { id: true, companyId: true, firstName: true, baseSalary: true, phone: true, address: true, dateOfBirth: true },
+    select: {
+      id: true, companyId: true, firstName: true, baseSalary: true,
+      phone: true, address: true, dateOfBirth: true, gender: true, nationality: true, city: true, country: true,
+    },
   });
   const where = { id, companyId };
   const endpoint = `/api/v1/employees/${id}`;
   const dateOfBirth = original.dateOfBirth?.toISOString().startsWith('1995-05-15') ? '1995-05-16' : '1995-05-15';
   const phone = original.phone === '+1 555 0104' ? '+1 555 0105' : '+1 555 0104';
   const address = `QA address ${randomUUID().slice(0, 8)}`;
+  const nationality = `QA ${randomUUID().slice(0, 8)}`;
+  const city = `QA City ${randomUUID().slice(0, 8)}`;
+  const country = `QA Country ${randomUUID().slice(0, 8)}`;
   try {
+    await prisma.employee.update({ where, data: { dateOfBirth: new Date('0002-11-22T00:00:00.000Z') } });
     await signIn(page, employee);
     await page.getByRole('link', { name: 'My Profile', exact: true }).click();
     const edit = page.getByRole('button', { name: 'Edit Personal Information', exact: true });
@@ -369,18 +376,26 @@ test('Employee can save and clear personal information while HR-managed fields s
     const editor = page.getByRole('dialog', { name: 'Edit Personal Information' });
     const save = editor.getByRole('button', { name: 'Save Changes' });
     await expect(save).toBeDisabled();
+    await expect(editor.getByLabel('Date of Birth')).toHaveValue('');
+    await expect(editor.getByText('The saved date is invalid. Enter a valid date if you want to replace it.')).toBeVisible();
     await expect(editor.getByText(/Contact HR to update your official name/)).toBeVisible();
     await expect(editor.getByLabel(/First Name|Work Email|Salary|Department/)).toHaveCount(0);
     await editor.getByLabel('Date of Birth').fill(dateOfBirth);
     await editor.getByLabel('Phone Number').fill(phone);
     await editor.getByLabel('Street Address').fill(address);
+    await editor.getByLabel('Gender').selectOption('Non-Binary');
+    await editor.getByLabel('Nationality').fill(nationality);
+    await editor.getByLabel('City').fill(city);
+    await editor.getByLabel('Country').fill(country);
 
     const [saved] = await Promise.all([
       page.waitForResponse((response) => response.url().endsWith(endpoint) && response.request().method() === 'PATCH'),
       save.click(),
     ]);
     expect(saved.status()).toBe(200);
-    expect(saved.request().postDataJSON()).toEqual({ dateOfBirth, phone, address });
+    expect(saved.request().postDataJSON()).toEqual({
+      dateOfBirth, gender: 'Non-Binary', nationality, phone, address, city, country,
+    });
     await expect(page.getByText('Personal information saved.', { exact: true })).toBeVisible();
 
     await page.reload();
@@ -388,9 +403,17 @@ test('Employee can save and clear personal information while HR-managed fields s
     await expect(editor.getByLabel('Date of Birth')).toHaveValue(dateOfBirth);
     await expect(editor.getByLabel('Phone Number')).toHaveValue(phone);
     await expect(editor.getByLabel('Street Address')).toHaveValue(address);
+    await expect(editor.getByLabel('Gender')).toHaveValue('Non-Binary');
+    await expect(editor.getByLabel('Nationality')).toHaveValue(nationality);
+    await expect(editor.getByLabel('City')).toHaveValue(city);
+    await expect(editor.getByLabel('Country')).toHaveValue(country);
     await editor.getByLabel('Date of Birth').clear();
     await editor.getByLabel('Phone Number').clear();
     await editor.getByLabel('Street Address').clear();
+    await editor.getByLabel('Gender').selectOption('');
+    await editor.getByLabel('Nationality').clear();
+    await editor.getByLabel('City').clear();
+    await editor.getByLabel('Country').clear();
     await save.click();
     await expect(page.getByText('Personal information saved.', { exact: true })).toBeVisible();
 
@@ -400,6 +423,9 @@ test('Employee can save and clear personal information while HR-managed fields s
     expect(invalidDate.status()).toBe(400);
     const futureDate = await page.request.patch(endpoint, { data: { dateOfBirth: '2099-07-01' } });
     expect(futureDate.status()).toBe(400);
+    const unsupportedLegacyYear = await page.request.patch(endpoint, { data: { dateOfBirth: '0002-11-22' } });
+    expect(unsupportedLegacyYear.status()).toBe(400);
+    expect((await unsupportedLegacyYear.json()).errors.join(' ')).toContain('dateOfBirth must be a valid ISO 8601 date string');
     const stored = await prisma.employee.findUniqueOrThrow({ where });
     expect(stored).toMatchObject({ firstName, baseSalary, dateOfBirth: null, phone: null, address: null });
 

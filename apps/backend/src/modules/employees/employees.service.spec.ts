@@ -424,6 +424,31 @@ describe('EmployeesService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
+    it('rejects assigning a team from a different department', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-1', companyId: 'comp-1', departmentId: 'dept-1' });
+      mockPrisma.department.findFirst.mockResolvedValueOnce({ id: 'dept-1' });
+      mockPrisma.team.findFirst.mockResolvedValueOnce({ id: 'team-2', departmentId: 'dept-2' });
+
+      await expect(service.updateEmployee('emp-1', { departmentId: 'dept-1', teamId: 'team-2' }, mockAdminUser))
+        .rejects.toThrow('selected team must belong to the selected department');
+      expect(mockPrisma.employee.update).not.toHaveBeenCalled();
+    });
+
+    it('clears an existing team when HR moves an employee to a different department', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({
+        id: 'emp-1', companyId: 'comp-1', departmentId: 'dept-1', teamId: 'team-1',
+      });
+      mockPrisma.department.findFirst.mockResolvedValueOnce({ id: 'dept-2' });
+      mockPrisma.team.findFirst.mockResolvedValueOnce({ departmentId: 'dept-1' });
+      mockPrisma.employee.update.mockResolvedValueOnce({ id: 'emp-1' });
+
+      await service.updateEmployee('emp-1', { departmentId: 'dept-2' }, mockAdminUser);
+
+      expect(mockPrisma.employee.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ departmentId: 'dept-2', teamId: null }),
+      }));
+    });
+
     it('should restrict TEAM_LEAD from updating another employee profile or sensitive fields', async () => {
       mockPrisma.employee.findFirst.mockResolvedValueOnce({
         id: 'emp-other',

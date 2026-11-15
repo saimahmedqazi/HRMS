@@ -87,7 +87,20 @@ export async function apiRequest<T = unknown>(
   }
 
   if (!response.ok) {
-    const errorMessage = json?.message || `Request failed with status ${response.status}`;
+    const validationMessages = Array.isArray(json?.errors)
+      ? json.errors.flatMap((error: unknown) => {
+          if (typeof error === 'string') return [error];
+          if (!error || typeof error !== 'object') return [];
+          const item = error as { property?: unknown; constraints?: unknown };
+          const constraints = item.constraints && typeof item.constraints === 'object'
+            ? Object.values(item.constraints).filter((value): value is string => typeof value === 'string')
+            : [];
+          return constraints.map((message) => `${typeof item.property === 'string' ? `${item.property}: ` : ''}${message}`);
+        })
+      : [];
+    const errorMessage = validationMessages.length
+      ? validationMessages.join('; ')
+      : json?.message || `Request failed with status ${response.status}`;
     throw new ApiError(response.status, errorMessage, json);
   }
 

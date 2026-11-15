@@ -268,6 +268,9 @@ export class EmployeesService {
         where: { id: dto.teamId, companyId, deletedAt: null },
       });
       if (!team) throw new BadRequestException('Invalid team ID for this organization');
+      if (!dto.departmentId || team.departmentId !== dto.departmentId) {
+        throw new BadRequestException('The selected team must belong to the selected department');
+      }
     }
 
     // 3. Validate reporting manager
@@ -425,11 +428,25 @@ export class EmployeesService {
       if (!desig) throw new BadRequestException('Invalid designation ID for this organization');
     }
 
+    let teamIdToSave = dto.teamId;
     if (dto.teamId) {
       const team = await this.prisma.team.findFirst({
         where: { id: dto.teamId, companyId, deletedAt: null },
       });
       if (!team) throw new BadRequestException('Invalid team ID for this organization');
+      const targetDepartmentId = dto.departmentId !== undefined ? dto.departmentId : employee.departmentId;
+      if (team.departmentId !== targetDepartmentId) {
+        throw new BadRequestException('The selected team must belong to the selected department');
+      }
+    } else if (
+      dto.teamId === undefined && dto.departmentId !== undefined &&
+      dto.departmentId !== employee.departmentId && employee.teamId
+    ) {
+      const currentTeam = await this.prisma.team.findFirst({
+        where: { id: employee.teamId, companyId, deletedAt: null },
+        select: { departmentId: true },
+      });
+      if (currentTeam && currentTeam.departmentId !== dto.departmentId) teamIdToSave = null;
     }
 
     // Validate reporting manager doesn't create circular reference
@@ -457,7 +474,7 @@ export class EmployeesService {
         ...(dto.nationality !== undefined ? { nationality: dto.nationality } : {}),
         ...(dto.departmentId !== undefined ? { departmentId: dto.departmentId } : {}),
         ...(dto.designationId !== undefined ? { designationId: dto.designationId } : {}),
-        ...(dto.teamId !== undefined ? { teamId: dto.teamId } : {}),
+        ...(teamIdToSave !== undefined ? { teamId: teamIdToSave } : {}),
         ...(dto.reportingManagerId !== undefined ? { reportingManagerId: dto.reportingManagerId } : {}),
         ...(dto.salary !== undefined ? { baseSalary: dto.salary } : {}),
         ...(dto.profilePictureUrl !== undefined ? { profilePictureUrl: dto.profilePictureUrl } : {}),
