@@ -272,6 +272,7 @@ export class AnalyticsService {
       }),
       this.prisma.attendanceRecord.findMany({
         where: { companyId, date: today, employee: { companyId, deletedAt: null } },
+        select: { status: true },
       }),
       this.prisma.attendanceRecord.count({
         where: { companyId, status: AttendanceStatus.ABSENT_PENDING_REVIEW },
@@ -285,9 +286,10 @@ export class AnalyticsService {
           },
         },
       }),
-      this.prisma.attendanceRecord.findMany({
+      this.prisma.attendanceRecord.groupBy({
         where: { companyId, date: { gte: weekStart, lte: today } },
-        select: { date: true, status: true },
+        by: ['date', 'status'],
+        _count: { _all: true },
       }),
     ]);
 
@@ -297,16 +299,24 @@ export class AnalyticsService {
     }));
 
     // Build the seven-day trend from one company-scoped attendance query.
+    const weekAttendanceCounts = new Map<number, Partial<Record<AttendanceStatus, number>>>();
+    for (const group of weekAttendance) {
+      const dateKey = group.date.getTime();
+      const counts = weekAttendanceCounts.get(dateKey) ?? {};
+      counts[group.status] = group._count._all;
+      weekAttendanceCounts.set(dateKey, counts);
+    }
+
     const trend = [];
     for (let i = 0; i < 7; i++) {
       const d = new Date(weekStart);
       d.setUTCDate(d.getUTCDate() + i);
-      const dayRecords = weekAttendance.filter((record) => record.date.getTime() === d.getTime());
+      const dayCounts = weekAttendanceCounts.get(d.getTime());
       trend.push({
         day: d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
-        present: dayRecords.filter((r) => r.status === AttendanceStatus.PRESENT).length,
-        remote: dayRecords.filter((r) => r.status === AttendanceStatus.PRESENT_REMOTE).length,
-        absent: dayRecords.filter((r) => r.status === AttendanceStatus.ABSENT).length,
+        present: dayCounts?.[AttendanceStatus.PRESENT] ?? 0,
+        remote: dayCounts?.[AttendanceStatus.PRESENT_REMOTE] ?? 0,
+        absent: dayCounts?.[AttendanceStatus.ABSENT] ?? 0,
       });
     }
 

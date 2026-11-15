@@ -36,6 +36,7 @@ describe('AnalyticsService', () => {
           checkInTime: new Date(),
         }),
         findMany: jest.fn().mockResolvedValue([]),
+        groupBy: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(2),
       },
       workTimerEntry: {
@@ -149,15 +150,18 @@ describe('AnalyticsService', () => {
     it('builds the executive attendance trend from one seven-day query', async () => {
       jest.useFakeTimers({ now: new Date('2026-11-15T12:00:00Z') });
       try {
-        prisma.attendanceRecord.findMany.mockImplementation(async (query: any) => {
-          if (query.where.date?.gte) {
-            return [
-              { date: new Date('2026-11-09T00:00:00Z'), status: AttendanceStatus.PRESENT },
-              { date: new Date('2026-11-15T00:00:00Z'), status: AttendanceStatus.PRESENT_REMOTE },
-            ];
-          }
-          return [];
-        });
+        prisma.attendanceRecord.groupBy.mockResolvedValue([
+          {
+            date: new Date('2026-11-09T00:00:00Z'),
+            status: AttendanceStatus.PRESENT,
+            _count: { _all: 1 },
+          },
+          {
+            date: new Date('2026-11-15T00:00:00Z'),
+            status: AttendanceStatus.PRESENT_REMOTE,
+            _count: { _all: 1 },
+          },
+        ]);
 
         const overview = await service.getDashboardOverview(mockCompanyId, {
           id: 'admin-1',
@@ -167,14 +171,19 @@ describe('AnalyticsService', () => {
         expect(overview.attendanceTrend).toHaveLength(7);
         expect(overview.attendanceTrend[0]).toMatchObject({ day: 'Mon', present: 1, remote: 0 });
         expect(overview.attendanceTrend[6]).toMatchObject({ day: 'Sun', present: 0, remote: 1 });
-        expect(prisma.attendanceRecord.findMany).toHaveBeenCalledTimes(2);
-        expect(prisma.attendanceRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        expect(prisma.attendanceRecord.findMany).toHaveBeenCalledTimes(1);
+        expect(prisma.attendanceRecord.findMany).toHaveBeenCalledWith({
+          where: { companyId: mockCompanyId, date: new Date('2026-11-15T00:00:00Z'), employee: { companyId: mockCompanyId, deletedAt: null } },
+          select: { status: true },
+        });
+        expect(prisma.attendanceRecord.groupBy).toHaveBeenCalledWith({
           where: expect.objectContaining({
             companyId: mockCompanyId,
             date: { gte: new Date('2026-11-09T00:00:00Z'), lte: new Date('2026-11-15T00:00:00Z') },
           }),
-          select: { date: true, status: true },
-        }));
+          by: ['date', 'status'],
+          _count: { _all: true },
+        });
       } finally {
         jest.useRealTimers();
       }
