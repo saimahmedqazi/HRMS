@@ -114,7 +114,14 @@ export class EmployeesService {
       this.prisma.employee.count({ where: whereClause }),
       this.prisma.employee.findMany({
         where: whereClause,
-        include: {
+        select: {
+          id: true,
+          userId: true,
+          firstName: true,
+          lastName: true,
+          employeeCode: true,
+          status: true,
+          profilePictureUrl: true,
           department: { select: { id: true, name: true } },
           designation: { select: { id: true, name: true } },
           team: { select: { id: true, name: true } },
@@ -141,12 +148,8 @@ export class EmployeesService {
       }),
     ]);
 
-    const manager = user.role === UserRole.TEAM_LEAD || user.role === UserRole.DEPARTMENT_MANAGER;
-    const callerId = user.id || user.sub;
     return {
-      items: manager ? items.map((employee) => employee.userId === callerId
-        ? employee
-        : omitSensitiveEmployeeFields(employee)) : items,
+      items,
       meta: {
         total,
         page,
