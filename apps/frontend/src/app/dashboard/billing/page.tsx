@@ -96,6 +96,15 @@ export default function BillingDashboardPage() {
   }
 
   const isPremium = subscription.tier === 'PREMIUM';
+  const isTrialing = subscription.status === 'TRIALING';
+  const trialStartDate = new Date(subscription.currentPeriodStart || Date.now());
+  const trialEndFallback = new Date(trialStartDate.getTime() + 14 * 24 * 60 * 60 * 1000);
+  const endDate = isTrialing
+    ? subscription.trialEnd
+    : subscription.currentPeriodEnd;
+  const fallbackEndDate = isTrialing
+    ? trialEndFallback
+    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
   return (
     <div className="space-y-6">
@@ -163,7 +172,7 @@ export default function BillingDashboardPage() {
           <div className="p-3.5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
             <span className="text-[11px] uppercase font-semibold text-gray-400 flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5 text-primary-600" />
-              Billing Cycle Start Date
+              {isTrialing ? 'Trial Start Date' : 'Billing Cycle Start Date'}
             </span>
             <p className="text-sm font-bold text-gray-900 dark:text-white mt-1">
               {subscription?.currentPeriodStart
@@ -183,16 +192,16 @@ export default function BillingDashboardPage() {
           <div className="p-3.5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
             <span className="text-[11px] uppercase font-semibold text-gray-400 flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5 text-emerald-600" />
-              Next Billing / Renewal Date
+              {isTrialing ? 'Free Trial Ends' : 'Next Billing / Renewal Date'}
             </span>
             <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-              {subscription?.currentPeriodEnd
-                ? new Date(subscription.currentPeriodEnd).toLocaleDateString('en-US', {
+              {endDate
+                ? new Date(endDate).toLocaleDateString('en-US', {
                     month: 'short',
                     day: 'numeric',
                     year: 'numeric',
                   })
-                : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', {
+                : fallbackEndDate.toLocaleDateString('en-US', {
                     month: 'short',
                     day: 'numeric',
                     year: 'numeric',

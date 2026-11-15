@@ -31,6 +31,39 @@ test('Billing waits for subscription details and can recover from a failed reque
   await expect(page.getByText('PREMIUM PLAN', { exact: true })).toBeVisible();
 });
 
+test('Billing displays the 14-day trial end instead of the 30-day cycle end', async ({ page }) => {
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    json: { data: { id: 'fixture-admin', role: 'COMPANY_ADMIN', companyId: 'fixture-company' } },
+  }));
+  await page.route('**/api/v1/auth/me/modules', (route) => route.fulfill({
+    json: { data: { allowedModules: ['billing'] } },
+  }));
+  await page.route('**/api/v1/notifications', (route) => route.fulfill({ json: { data: [] } }));
+  await page.route('**/api/v1/subscriptions/current', (route) => route.fulfill({
+    json: {
+      data: {
+        tier: 'BASIC',
+        status: 'TRIALING',
+        currentPeriodStart: '2026-11-15T00:00:00.000Z',
+        currentPeriodEnd: '2026-12-15T00:00:00.000Z',
+        trialEnd: '2026-11-29T00:00:00.000Z',
+      },
+    },
+  }));
+
+  const authResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === '/api/v1/auth/me');
+  const subscriptionResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === '/api/v1/subscriptions/current');
+  await page.goto('/dashboard/billing');
+  await Promise.all([authResponse, subscriptionResponse]);
+
+  await expect(page.getByText('Trial Start Date')).toBeVisible();
+  await expect(page.getByText('Free Trial Ends')).toBeVisible();
+  await expect(page.getByText('Nov 29, 2026', { exact: true })).toBeVisible();
+  await expect(page.getByText('Dec 15, 2026', { exact: true })).toHaveCount(0);
+});
+
 test.describe('Company Admin (CEO) End-to-End Suite', () => {
   useRoleSession('ceo@acme.com', 'Password@123');
 
