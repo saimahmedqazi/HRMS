@@ -41,6 +41,7 @@ export default function LeaveDashboardPage() {
     queryKey: ['me'],
     queryFn: () => api.get<any>('/auth/me'),
   });
+  const isCompanyReviewer = user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER';
 
   // 2. Fetch leave types
   const { data: leaveTypes = [], isError: leaveTypesFailed, isSuccess: leaveTypesLoaded } = useQuery({
@@ -263,7 +264,7 @@ export default function LeaveDashboardPage() {
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-sm overflow-hidden">
         <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
           <h2 className="text-base font-semibold text-gray-900 dark:text-white">
-            My Leave Requests
+            {isCompanyReviewer ? 'Company Leave Requests' : 'My Leave Requests'}
           </h2>
           <span className="text-xs text-gray-500">
             {leaveRequests.length} record(s) found
@@ -274,10 +275,12 @@ export default function LeaveDashboardPage() {
           <div className="p-12 text-center">
             <Calendar className="w-10 h-10 text-gray-400 mx-auto mb-3 opacity-60" />
             <h3 className="text-sm font-medium text-gray-900 dark:text-white">
-              No leave requests submitted yet
+              {isCompanyReviewer ? 'No company leave requests yet' : 'No leave requests submitted yet'}
             </h3>
             <p className="text-xs text-gray-500 mt-1">
-              Your historical and pending time-off requests will appear here.
+              {isCompanyReviewer
+                ? 'Employee leave requests will appear here when submitted.'
+                : 'Your historical and pending time-off requests will appear here.'}
             </p>
           </div>
         ) : (
@@ -285,6 +288,7 @@ export default function LeaveDashboardPage() {
             <table className="w-full text-left text-sm">
               <thead className="bg-gray-50 dark:bg-gray-800/50 text-xs text-gray-500 uppercase">
                 <tr>
+                  {isCompanyReviewer && <th className="px-4 py-3">Employee</th>}
                   <th className="px-4 py-3">Type</th>
                   <th className="px-4 py-3">Dates</th>
                   <th className="px-4 py-3">Days</th>
@@ -297,60 +301,73 @@ export default function LeaveDashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
-                {leaveRequests.map((req: any) => (
-                  <tr key={req.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/30">
-                    <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">
-                      {req.leaveTypeSetting?.leaveType}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                      {new Date(req.startDate).toLocaleDateString()} &rarr;{' '}
-                      {new Date(req.endDate).toLocaleDateString()}
-                    </td>
-                    <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white">
-                      {req.totalDays}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400 max-w-xs truncate">
-                      {req.reason || '—'}
-                    </td>
-                    <td className="px-4 py-3">
-                      {req.medicalCertUrl ? (
-                        <a
-                          href={`${API_PREFIX}/leave/requests/${req.id}/prescription/download`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-primary-600 hover:underline"
-                        >
-                          <FileText className="w-3.5 h-3.5" />
-                          View
-                        </a>
-                      ) : (
-                        <span className="text-gray-400 text-xs">—</span>
+                {leaveRequests.map((req: any) => {
+                  const isApplicant = req.employee?.userId === user?.id;
+                  return (
+                    <tr key={req.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/30">
+                      {isCompanyReviewer && (
+                        <td className="px-4 py-3">
+                          <div className="font-semibold text-gray-900 dark:text-white">
+                            {req.employee?.firstName} {req.employee?.lastName}
+                          </div>
+                          <div className="text-xs text-gray-400">
+                            {req.employee?.user?.email || req.employee?.employeeCode}
+                          </div>
+                        </td>
                       )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={req.step1Status} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={req.step2Status} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={req.status} />
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {req.status === 'PENDING' ? (
-                        <button
-                          onClick={() => cancelMutation.mutate(req.id)}
-                          disabled={cancelMutation.isPending}
-                          className="text-xs text-rose-600 hover:text-rose-700 font-medium"
-                        >
-                          Cancel
-                        </button>
-                      ) : (
-                        <span className="text-xs text-gray-400">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                      <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">
+                        {req.leaveTypeSetting?.leaveType}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                        {new Date(req.startDate).toLocaleDateString()} &rarr;{' '}
+                        {new Date(req.endDate).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white">
+                        {req.totalDays}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600 dark:text-gray-400 max-w-xs truncate">
+                        {req.reason || '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        {req.medicalCertUrl ? (
+                          <a
+                            href={`${API_PREFIX}/leave/requests/${req.id}/prescription/download`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-primary-600 hover:underline"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            View
+                          </a>
+                        ) : (
+                          <span className="text-gray-400 text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={req.step1Status} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={req.step2Status} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={req.status} />
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {req.status === 'PENDING' && isApplicant ? (
+                          <button
+                            onClick={() => cancelMutation.mutate(req.id)}
+                            disabled={cancelMutation.isPending}
+                            className="text-xs text-rose-600 hover:text-rose-700 font-medium"
+                          >
+                            Cancel
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
