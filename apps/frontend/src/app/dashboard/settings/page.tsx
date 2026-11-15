@@ -14,6 +14,16 @@ import {
   KeyRound,
 } from 'lucide-react';
 
+type CompanyProfile = {
+  name: string;
+  phone: string | null;
+  address: string | null;
+  website: string | null;
+  industry: string | null;
+  size: string | null;
+  timezone: string;
+};
+
 export default function SettingsPage() {
   const { user, refetchUser } = useAuth();
   const queryClient = useQueryClient();
@@ -34,9 +44,10 @@ export default function SettingsPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Company Settings State
-  const { data: companyData } = useQuery({
-    queryKey: ['company-me'],
-    queryFn: () => api.get<any>('/companies/me'),
+  const companyKey = ['company-me', user?.id, user?.supportModeCompanyId ?? user?.companyId];
+  const { data: companyData, isError: companyLoadFailed, isFetching: isLoadingCompany, refetch: refetchCompany } = useQuery({
+    queryKey: companyKey,
+    queryFn: () => api.get<CompanyProfile>('/companies/me'),
     enabled: canManageCompany,
   });
 
@@ -60,33 +71,42 @@ export default function SettingsPage() {
       setCompanyPhone(companyData.phone || '');
       setCompanyAddress(companyData.address || '');
       setCompanyWebsite(companyData.website || '');
-      setCompanyIndustry(companyData.industry || 'Technology & SaaS');
-      setCompanySize(companyData.size || '11-50 Employees');
+      setCompanyIndustry(companyData.industry ?? '');
+      setCompanySize(companyData.size ?? '');
       setCompanyTimezone(companyData.timezone || 'UTC');
     }
   }, [companyData]);
 
   const updateCompanyMutation = useMutation({
     mutationFn: () => {
-      const payload: any = {};
-      const targetName = (companyName || companyData?.name || '').trim();
-      if (targetName) payload.name = targetName;
-      if (companyPhone && companyPhone.trim()) payload.phone = companyPhone.trim();
-      if (companyAddress && companyAddress.trim()) payload.address = companyAddress.trim();
-      if (companyWebsite && companyWebsite.trim()) payload.website = companyWebsite.trim();
-      if (companyIndustry && companyIndustry.trim()) payload.industry = companyIndustry.trim();
-      if (companySize && companySize.trim()) payload.size = companySize.trim();
-      if (companyTimezone && companyTimezone.trim()) payload.timezone = companyTimezone.trim();
-      return api.patch('/companies/me', payload);
+      if (!companyData) throw new Error('Load the organization profile before saving.');
+      if (!companyName.trim()) throw new Error('Enter an organization name.');
+      const fields: CompanyProfile = {
+        name: companyName.trim(),
+        phone: companyPhone.trim() || null,
+        address: companyAddress.trim() || null,
+        website: companyWebsite.trim() || null,
+        industry: companyIndustry.trim() || null,
+        size: companySize.trim() || null,
+        timezone: companyTimezone.trim(),
+      };
+      const payload = Object.fromEntries((Object.keys(fields) as (keyof CompanyProfile)[])
+        .filter((field) => fields[field] !== companyData[field])
+        .map((field) => [field, fields[field]]));
+      return api.patch<CompanyProfile>('/companies/me', payload);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['company-me'] });
-      refetchUser();
+    onMutate: () => {
+      setStatusMessage(null);
+      setErrorMessage(null);
+    },
+    onSuccess: (profile) => {
+      queryClient.setQueryData(companyKey, profile);
+      void refetchUser();
       setStatusMessage('Organization profile settings saved.');
       setErrorMessage(null);
     },
-    onError: (err: any) => {
-      setErrorMessage(err.message || 'Failed to update company settings.');
+    onError: (error) => {
+      setErrorMessage(error.message || 'Failed to update company settings.');
     },
   });
 
@@ -334,12 +354,21 @@ export default function SettingsPage() {
           <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
             Tenant Organization Details
           </h2>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {!companyData && (companyLoadFailed ? (
+            <div className="text-sm text-rose-700 dark:text-rose-300">
+              <p role="alert">The organization profile couldn&apos;t load.</p>
+              <button type="button" onClick={() => void refetchCompany()} className="mt-2 font-semibold underline" disabled={isLoadingCompany}>Retry organization profile</button>
+            </div>
+          ) : (
+            <p role="status" className="text-sm text-zinc-500">Loading organization profile…</p>
+          ))}
+          <fieldset disabled={!companyData || updateCompanyMutation.isPending} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              <label htmlFor="organization-name" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Organization Name
               </label>
               <input
+                id="organization-name"
                 type="text"
                 value={companyName}
                 onChange={(e) => setCompanyName(e.target.value)}
@@ -347,10 +376,11 @@ export default function SettingsPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              <label htmlFor="organization-phone" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Phone Number
               </label>
               <input
+                id="organization-phone"
                 type="text"
                 value={companyPhone}
                 onChange={(e) => setCompanyPhone(e.target.value)}
@@ -359,10 +389,11 @@ export default function SettingsPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              <label htmlFor="organization-website" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Website URL
               </label>
               <input
+                id="organization-website"
                 type="text"
                 value={companyWebsite}
                 onChange={(e) => setCompanyWebsite(e.target.value)}
@@ -371,10 +402,11 @@ export default function SettingsPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              <label htmlFor="organization-industry" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Industry Sector
               </label>
               <input
+                id="organization-industry"
                 type="text"
                 value={companyIndustry}
                 onChange={(e) => setCompanyIndustry(e.target.value)}
@@ -383,10 +415,11 @@ export default function SettingsPage() {
               />
             </div>
             <div className="sm:col-span-2">
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              <label htmlFor="organization-address" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Headquarters Address
               </label>
               <input
+                id="organization-address"
                 type="text"
                 value={companyAddress}
                 onChange={(e) => setCompanyAddress(e.target.value)}
@@ -395,10 +428,11 @@ export default function SettingsPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              <label htmlFor="organization-size" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Organization Size
               </label>
               <input
+                id="organization-size"
                 type="text"
                 value={companySize}
                 onChange={(e) => setCompanySize(e.target.value)}
@@ -407,10 +441,11 @@ export default function SettingsPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+              <label htmlFor="organization-timezone" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                 Default Timezone
               </label>
               <input
+                id="organization-timezone"
                 type="text"
                 value={companyTimezone}
                 onChange={(e) => setCompanyTimezone(e.target.value)}
@@ -418,11 +453,11 @@ export default function SettingsPage() {
                 className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
               />
             </div>
-          </div>
+          </fieldset>
           <div className="pt-3 flex justify-end">
             <button
               onClick={() => updateCompanyMutation.mutate()}
-              disabled={updateCompanyMutation.isPending}
+              disabled={!companyData || updateCompanyMutation.isPending}
               className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
             >
               {updateCompanyMutation.isPending ? 'Saving...' : 'Save Organization Settings'}

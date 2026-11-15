@@ -3,11 +3,11 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 
 export interface UpdateCompanySettingsDto {
   name?: string;
-  phone?: string;
-  address?: string;
-  website?: string;
-  industry?: string;
-  size?: string;
+  phone?: string | null;
+  address?: string | null;
+  website?: string | null;
+  industry?: string | null;
+  size?: string | null;
   timezone?: string;
   locale?: string;
   logoUrl?: string;

@@ -157,4 +157,34 @@ test.describe('Company Admin (CEO) End-to-End Suite', () => {
     await expect(page.locator('text=Company Leave Quotas & Compliance Rules')).toBeVisible();
     await expect(page.locator('text=CASUAL LEAVE')).toBeVisible();
   });
+
+  test('Organization profile can clear optional fields without saving placeholder values', async ({ page }) => {
+    const endpoint = '/api/v1/companies/me';
+    const original = await page.request.get(endpoint);
+    expect(original.ok()).toBe(true);
+    const { phone, industry, size } = (await original.json()).data;
+    try {
+      const fixture = '+1 555 0101';
+      expect((await page.request.patch(endpoint, { data: { phone: fixture, industry: null, size: null } })).ok()).toBe(true);
+      await page.goto('/dashboard/settings');
+      const phoneField = page.getByLabel('Phone Number', { exact: true });
+      await expect(phoneField).toHaveValue(fixture);
+      await expect(page.getByLabel('Industry Sector')).toHaveValue('');
+      await expect(page.getByLabel('Organization Size')).toHaveValue('');
+      await phoneField.clear();
+      const [saved] = await Promise.all([
+        page.waitForResponse((response) => new URL(response.url()).pathname === endpoint && response.request().method() === 'PATCH'),
+        page.getByRole('button', { name: 'Save Organization Settings' }).click(),
+      ]);
+      expect(saved.ok()).toBe(true);
+      expect(saved.request().postDataJSON()).toEqual({ phone: null });
+      await expect(page.getByText('Organization profile settings saved.')).toBeVisible();
+      await page.reload();
+      await expect(phoneField).toBeEnabled();
+      await expect(phoneField).toHaveValue('');
+      expect((await (await page.request.get(endpoint)).json()).data).toMatchObject({ phone: null, industry: null, size: null });
+    } finally {
+      expect((await page.request.patch(endpoint, { data: { phone, industry, size } })).ok()).toBe(true);
+    }
+  });
 });
