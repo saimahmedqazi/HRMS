@@ -131,7 +131,7 @@ test.describe('Role 4: HR Manager Comprehensive Test Suite (10 Tests)', () => {
     await expect(page.locator('h1')).toContainText('Platform & Tenant Settings');
 
     // Organization Profile Tab
-    await expect(page.locator('text=Organization Profile')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Organization Profile', exact: true })).toBeVisible();
 
     // Switch to Security Tab
     await page.click('button:has-text("Security & 2FA")');

@@ -157,7 +157,7 @@ test.describe('Role 3: Company Admin (CEO) Comprehensive Test Suite (10 Tests)',
     await expect(page.locator('h1')).toContainText('Platform & Tenant Settings');
 
     // Organization Profile Tab
-    await expect(page.locator('text=Organization Profile')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Organization Profile', exact: true })).toBeVisible();
     await expect(page.locator('text=Tenant Organization Details')).toBeVisible();
 
     // Save Organization Settings

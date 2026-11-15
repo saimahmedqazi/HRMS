@@ -145,7 +145,7 @@ test.describe('Company Admin (CEO) End-to-End Suite', () => {
     await expect(page.locator('h1')).toContainText('Platform & Tenant Settings');
 
     // Organization Profile Tab
-    await expect(page.locator('text=Organization Profile')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Organization Profile', exact: true })).toBeVisible();
     await expect(page.locator('text=Tenant Organization Details')).toBeVisible();
 
     // Save Organization Settings
