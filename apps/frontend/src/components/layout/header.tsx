@@ -254,11 +254,20 @@ export function Header({ onMenuClick, mobileMenuOpen }: HeaderProps) {
         {/* User Avatar & Name */}
         <div className="flex items-center gap-2 border-l border-slate-200 pl-3 dark:border-slate-800">
           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-100 text-blue-700 font-bold text-xs dark:bg-blue-900 dark:text-blue-200 shadow-sm">
-            {user?.firstName && user?.lastName
-              ? `${user.firstName[0]}${user.lastName[0]}`.toUpperCase()
-              : user?.email
-              ? user.email.slice(0, 2).toUpperCase()
-              : 'U'}
+            {user?.avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={user.avatarUrl}
+                alt={`${user.firstName} ${user.lastName}`.trim() || 'Profile photo'}
+                className="h-full w-full rounded-xl object-cover"
+              />
+            ) : (
+              user?.firstName && user?.lastName
+                ? `${user.firstName[0]}${user.lastName[0]}`.toUpperCase()
+                : user?.email
+                ? user.email.slice(0, 2).toUpperCase()
+                : 'U'
+            )}
           </div>
           <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 hidden sm:inline-block">
             {user?.firstName
