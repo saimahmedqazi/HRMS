@@ -196,6 +196,18 @@ describe('AiAssistantService', () => {
       expect(result.reply).toContain('3-month probation period (90 days');
     });
 
+    it('answers a sick leave balance question with available days rather than annual allocation', async () => {
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How many days of sick leave do I have left?' },
+      );
+
+      expect(result.reply).toContain('Sick Leave: 12 days available');
+      expect(result.reply).not.toContain('allocates 12 days of Sick Leave per year');
+    });
+
     it('should emphasize mandatory medical doctor prescription for sick leave', async () => {
       const result = await service.processQuery(
         mockCompanyId,

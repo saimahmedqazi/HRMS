@@ -96,6 +96,11 @@ export class AiAssistantService {
     if (query.includes('probation')) {
       return `According to ${companyName} policy, all newly hired employees undergo a 3-month probation period (90 days from hire date). During active probation, regular leave requests are locked. For medical or emergency absences, please consult HR directly.`;
     }
+    if (query.includes('balance') || query.includes('how many days')) {
+      const available = (balance: typeof casualBalance, fallback: number) =>
+        balance ? balance.allocated + balance.carried - balance.used - balance.pending : fallback;
+      return `Here is your current leave balance:\n• Casual Leave: ${available(casualBalance, 10)} days available\n• Sick Leave: ${available(sickBalance, 14)} days available\n• Annual Leave: ${available(annualBalance, 14)} days available`;
+    }
     if (query.includes('sick') || query.includes('doctor') || query.includes('prescription')) {
       if (sickPolicy && !sickPolicy.isActive) {
         return `Sick Leave is currently unavailable under ${companyName}'s leave policy. Please contact HR for guidance.`;
@@ -105,11 +110,6 @@ export class AiAssistantService {
         ? ' An official medical doctor prescription or certificate (PDF/JPG/PNG) is required when you submit a Sick Leave request.'
         : ' Your current Sick Leave policy does not require a medical certificate when you submit the request.';
       return `${companyName} allocates ${allocation} days of Sick Leave per year.${medicalCertificateRule}`;
-    }
-    if (query.includes('balance') || query.includes('how many days')) {
-      const available = (balance: typeof casualBalance, fallback: number) =>
-        balance ? balance.allocated + balance.carried - balance.used - balance.pending : fallback;
-      return `Here is your current leave balance:\n• Casual Leave: ${available(casualBalance, 10)} days available\n• Sick Leave: ${available(sickBalance, 14)} days available\n• Annual Leave: ${available(annualBalance, 14)} days available`;
     }
     if (query.includes('break') || query.includes('timer') || query.includes('alert')) {
       return 'The ZenHR Work Timer tracks your active time and breaks. If your cumulative break time exceeds 60 minutes in a single shift, a real-time overstay notification is broadcast to your Team Lead and Department Manager.';
