@@ -153,6 +153,11 @@ export class ResourcesService {
       throw new NotFoundException('Resource request not found.');
     }
 
+    // No approver may approve or reject their own request, including operations roles.
+    if (request.requestedBy.userId === userId) {
+      throw new ForbiddenException('You cannot approve your own resource request.');
+    }
+
     const isOperationsRole =
       userRole === UserRole.SUPER_ADMIN ||
       userRole === UserRole.OPERATION_MANAGER ||
@@ -167,9 +172,6 @@ export class ResourcesService {
     if (!isOperationsRole) {
       if (userRole !== UserRole.DEPARTMENT_MANAGER && userRole !== UserRole.TEAM_LEAD) {
         throw new ForbiddenException('Not authorized to approve this resource request.');
-      }
-      if (request.requestedBy.userId === userId) {
-        throw new ForbiddenException('You cannot approve your own resource request.');
       }
       if (request.step1ApproverId !== userId) {
         const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, {

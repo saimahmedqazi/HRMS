@@ -187,6 +187,31 @@ describe('ResourcesService', () => {
         ),
       ).rejects.toThrow(ForbiddenException);
     });
+
+    it('should prevent a COMPANY_ADMIN from self-approving their own resource request', async () => {
+      const mockReq = {
+        id: 'res-admin-self',
+        companyId: mockCompanyId,
+        status: ResourceRequestStatus.PENDING,
+        resourceType: 'Chair',
+        step1ApproverId: 'admin-user-id',
+        requestedBy: { userId: 'admin-user-id' },
+      };
+      prisma.resourceRequest.findFirst.mockResolvedValue(mockReq);
+
+      await expect(
+        service.approveResourceRequest(
+          mockCompanyId,
+          'res-admin-self',
+          'admin-user-id',
+          UserRole.COMPANY_ADMIN,
+          { decision: 'APPROVE', notes: 'Self approved' },
+        ),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.resourceRequest.update).not.toHaveBeenCalled();
+      expect(prisma.notification.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('fulfillResourceRequest', () => {

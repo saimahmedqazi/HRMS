@@ -162,7 +162,7 @@ export default function ResourcesDashboardPage() {
                   const canApprove =
                     req.status === 'PENDING' &&
                     isManager &&
-                    (isOpsOrAdmin || !isSelfRequest);
+                    !isSelfRequest;
                   const canFulfill = req.status === 'STEP_1_APPROVED' && isOpsOrAdmin;
                   return (
                     <tr
