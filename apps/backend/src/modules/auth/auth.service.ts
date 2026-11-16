@@ -378,7 +378,7 @@ export class AuthService {
   async logout(userId: string): Promise<void> {
     await this.prisma.user.update({
       where: { id: userId },
-      data: { refreshTokenHash: null },
+      data: { refreshTokenHash: null, sessionVersion: { increment: 1 } },
     });
   }
 

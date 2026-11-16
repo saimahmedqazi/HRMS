@@ -335,13 +335,13 @@ describe('AuthService', () => {
   });
 
   describe('logout', () => {
-    it('should clear refresh token hash from user record', async () => {
+    it('should revoke access and refresh tokens', async () => {
       mockPrisma.user.update.mockResolvedValueOnce({});
 
       await service.logout('user-1');
       expect(mockPrisma.user.update).toHaveBeenCalledWith({
         where: { id: 'user-1' },
-        data: { refreshTokenHash: null },
+        data: { refreshTokenHash: null, sessionVersion: { increment: 1 } },
       });
     });
   });
