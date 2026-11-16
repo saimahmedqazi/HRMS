@@ -9,6 +9,7 @@ import * as z from 'zod';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { PasswordInput } from '@/components/ui/password-input';
+import { AuthExperiencePanel } from '@/components/auth/auth-experience-panel';
 
 const loginSchema = z.object({
   email: z.string().email('Please enter a valid email address'),
@@ -87,8 +88,12 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4 dark:bg-slate-950">
-      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-xl border border-slate-100 dark:bg-slate-900 dark:border-slate-800">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(440px,.92fr)]">
+      <div className="lg:sticky lg:top-0 lg:h-screen">
+        <AuthExperiencePanel />
+      </div>
+      <main className="flex min-h-[calc(100vh-260px)] items-center justify-center p-4 sm:p-8 lg:min-h-screen">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-slate-100 dark:bg-slate-900 dark:border-slate-800 sm:p-8">
         <div className="mb-8 text-center">
           <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-white font-bold text-2xl mb-3 shadow-lg shadow-blue-500/30">
             Z
@@ -221,6 +226,7 @@ export default function LoginPage() {
           </p>
         </div>
       </div>
+      </main>
     </div>
   );
 }

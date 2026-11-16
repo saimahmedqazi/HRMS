@@ -19,3 +19,45 @@ body {
   background: var(--background);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
+
+/* Keep browser scrollbars visible while matching ZenHR's light and dark themes. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #e2e8f0;
+}
+
+html.dark {
+  scrollbar-color: #475569 #0f172a;
+}
+
+*::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #e2e8f0;
+}
+
+html.dark *::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 3px solid #e2e8f0;
+  border-radius: 999px;
+  background: #94a3b8;
+}
+
+html.dark *::-webkit-scrollbar-thumb {
+  border-color: #0f172a;
+  background: #475569;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+html.dark *::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
