@@ -244,6 +244,72 @@ describe('AiAssistantService', () => {
       expect(result.reply).not.toContain('required when you submit');
     });
 
+    it('answers annual leave request questions quickly without inventing a medical certificate requirement', async () => {
+      const generateContent = jest.fn();
+      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
+        models: { generateContent },
+      }) as unknown as GoogleGenAI);
+      const configuredService = new AiAssistantService(prisma, new ConfigService({
+        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '',
+      }));
+
+      const result = await configuredService.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'In one short paragraph, what steps should I follow to request annual leave in this HR portal?' },
+      );
+
+      expect(generateContent).not.toHaveBeenCalled();
+      expect(result.model).toBe('zenhr-policy-engine');
+      expect(result.reply).toContain('Submit Leave Request');
+      expect(result.reply).toContain('A reason is optional');
+      expect(result.reply).toContain('a medical certificate is not required');
+      expect(result.reply).toContain("organization's approval workflow");
+      expect(prisma.leaveTypeSetting.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { companyId: mockCompanyId, leaveType: 'ANNUAL' },
+      }));
+    });
+
+    it('includes the configured prescription rule in sick leave request guidance', async () => {
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How do I submit a sick leave request?' },
+      );
+
+      expect(result.model).toBe('zenhr-policy-engine');
+      expect(result.reply).toContain('A reason is optional');
+      expect(result.reply).toContain('a medical doctor prescription or certificate is required');
+    });
+
+    it('does not apply the sick leave certificate rule to annual leave policy questions', async () => {
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'Does annual leave require a doctor certificate?' },
+      );
+
+      expect(result.model).toBe('zenhr-policy-engine');
+      expect(result.reply).toContain('Annual Leave');
+      expect(result.reply).toContain('A medical certificate is not required');
+      expect(result.reply).not.toContain('Sick Leave');
+    });
+
+    it('answers leave entitlement questions with annual allocation, not personal balance', async () => {
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How many days of sick leave are allocated per year?' },
+      );
+
+      expect(result.reply).toContain('12 days of Sick Leave per year');
+      expect(result.reply).not.toContain('days available');
+    });
+
     it('uses tenant leave allocations in the Gemini context', async () => {
       const generateContent = jest.fn().mockResolvedValue({ text: 'Please contact HR for details.' });
       jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({

@@ -96,7 +96,10 @@ export class AiAssistantService {
     if (query.includes('probation')) {
       return `According to ${companyName} policy, all newly hired employees undergo a 3-month probation period (90 days from hire date). During active probation, regular leave requests are locked. For medical or emergency absences, please consult HR directly.`;
     }
-    if (query.includes('balance') || query.includes('how many days')) {
+    if (query.includes('balance') || (
+      query.includes('how many days') &&
+      ['left', 'remaining', 'available', 'do i have', 'my'].some((term) => query.includes(term))
+    )) {
       const available = (balance: typeof casualBalance, fallback: number) =>
         balance ? balance.allocated + balance.carried - balance.used - balance.pending : fallback;
       return `Here is your current leave balance:\n• Casual Leave: ${available(casualBalance, 10)} days available\n• Sick Leave: ${available(sickBalance, 14)} days available\n• Annual Leave: ${available(annualBalance, 14)} days available`;
@@ -136,9 +139,22 @@ export class AiAssistantService {
     dto: ChatRequestDto,
   ) {
     const query = dto.message.toLowerCase();
-    const isBalanceQuery = query.includes('balance') || query.includes('how many days');
-    const isSickPolicyQuery = !isBalanceQuery && (
-      query.includes('sick') || query.includes('doctor') || query.includes('prescription')
+    const requestedLeaveType = query.includes('sick')
+      ? 'SICK'
+      : query.includes('annual')
+        ? 'ANNUAL'
+        : query.includes('casual')
+          ? 'CASUAL'
+          : undefined;
+    const isBalanceQuery = query.includes('balance') || (
+      query.includes('how many days') &&
+      ['left', 'remaining', 'available', 'do i have', 'my'].some((term) => query.includes(term))
+    );
+    const isLeaveWorkflowQuery = query.includes('leave') &&
+      ['request', 'apply', 'submit'].some((verb) => query.includes(verb));
+    const isSickPolicyQuery = !isBalanceQuery && !isLeaveWorkflowQuery && (
+      requestedLeaveType === 'SICK' ||
+      (!requestedLeaveType && (query.includes('doctor') || query.includes('prescription')))
     );
 
     // Most common HR questions should not load the full employee context. Keep these
@@ -184,6 +200,68 @@ export class AiAssistantService {
       });
       return {
         reply: this.getFastPolicyReply(query, 'Your organization', [], leavePolicies)!,
+        model: 'zenhr-policy-engine',
+      };
+    }
+
+    if (!isBalanceQuery && !isLeaveWorkflowQuery && requestedLeaveType && requestedLeaveType !== 'SICK') {
+      const policy = (await this.prisma.leaveTypeSetting.findMany({
+        where: { companyId, leaveType: requestedLeaveType },
+        select: {
+          leaveType: true,
+          annualAllocation: true,
+          requiresReason: true,
+          requiresMedicalCert: true,
+          isActive: true,
+        },
+      })).find((item) => item.leaveType === requestedLeaveType);
+      const title = requestedLeaveType === 'ANNUAL' ? 'Annual' : 'Casual';
+      if (policy && !policy.isActive) {
+        return {
+          reply: `${title} Leave is currently unavailable under your organization's policy. Please contact HR.`,
+          model: 'zenhr-policy-engine',
+        };
+      }
+      const allocation = policy?.annualAllocation;
+      const reasonRule = policy?.requiresReason ? 'A reason is required.' : 'A reason is optional.';
+      const certificateRule = policy?.requiresMedicalCert
+        ? 'A medical doctor prescription or certificate is required.'
+        : 'A medical certificate is not required.';
+      return {
+        reply: `${title} Leave${allocation === undefined ? '' : ` provides ${allocation} days per year`} under your organization's policy. ${reasonRule} ${certificateRule}`,
+        model: 'zenhr-policy-engine',
+      };
+    }
+
+    if (isLeaveWorkflowQuery) {
+      const leaveType = requestedLeaveType;
+      const policies = leaveType
+        ? await this.prisma.leaveTypeSetting.findMany({
+            where: { companyId, leaveType },
+            select: {
+              leaveType: true,
+              annualAllocation: true,
+              requiresReason: true,
+              requiresMedicalCert: true,
+              isActive: true,
+            },
+          })
+        : [];
+      const policy = policies.find((item) => item.leaveType === leaveType);
+      const title = leaveType === 'SICK' ? 'Sick' : leaveType === 'ANNUAL' ? 'Annual' : leaveType === 'CASUAL' ? 'Casual' : undefined;
+
+      if (policy && !policy.isActive) {
+        return {
+          reply: `${title} Leave is currently unavailable under your organization's policy. Please contact HR.`,
+          model: 'zenhr-policy-engine',
+        };
+      }
+
+      const requirements = policy
+        ? `${policy.requiresReason ? 'A reason is required' : 'A reason is optional'}; ${policy.requiresMedicalCert ? 'a medical doctor prescription or certificate is required' : 'a medical certificate is not required'} under your current policy.`
+        : 'Check the selected leave type for any required reason or medical document.';
+      return {
+        reply: `To request${title ? ` ${title}` : ''} Leave, open **My Leave** (or **Leave Management**, depending on your role), choose **Submit Leave Request**, select the leave type and dates, then submit. ${requirements} Track the request status in My Leave; it follows your organization's approval workflow.`,
         model: 'zenhr-policy-engine',
       };
     }
