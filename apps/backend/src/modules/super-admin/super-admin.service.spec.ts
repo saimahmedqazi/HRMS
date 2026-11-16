@@ -177,6 +177,14 @@ describe('SuperAdminService', () => {
       expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
     });
 
+    it('rejects a non-super-admin even if the service is called directly', async () => {
+      await expect(service.resetOperationManagerPassword({
+        ...mockSuperAdmin,
+        role: UserRole.OPERATION_MANAGER,
+      })).rejects.toThrow('Only the Platform Super Admin');
+      expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+    });
+
     it('refuses to reset a missing or non-platform account', async () => {
       mockPrisma.user.findUnique.mockResolvedValueOnce(null);
       await expect(service.resetOperationManagerPassword(mockSuperAdmin)).rejects.toThrow('account was not found');

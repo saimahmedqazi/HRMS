@@ -140,6 +140,9 @@ export class SuperAdminService {
     ipAddress?: string,
     userAgent?: string,
   ) {
+    if (adminUser.role !== UserRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only the Platform Super Admin can reset Operation Manager access.');
+    }
     if (adminUser.supportModeCompanyId) {
       throw new ForbiddenException('Exit Support Mode before resetting platform account access.');
     }
