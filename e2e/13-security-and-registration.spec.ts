@@ -2,6 +2,58 @@ import { test, expect } from '@playwright/test';
 import { authenticator } from 'otplib';
 import { openFixtureDatabase } from './fixture-database';
 
+test('Frontend pages include the expected security headers', async ({ request }) => {
+  const response = await request.get('/login');
+  expect(response.ok()).toBeTruthy();
+
+  const headers = response.headers();
+  expect(headers['content-security-policy']).toContain("default-src 'self'");
+  expect(headers['content-security-policy']).toContain("frame-ancestors 'none'");
+  expect(headers['x-content-type-options']).toBe('nosniff');
+  expect(headers['x-frame-options']).toBe('DENY');
+  expect(headers['referrer-policy']).toBe('no-referrer');
+  expect(headers['permissions-policy']).toContain('geolocation=(self)');
+});
+
+test('OpenAPI authentication metadata matches the httpOnly cookie session', async ({ request }) => {
+  const response = await request.get('/api/docs-json');
+  expect(response.ok()).toBeTruthy();
+  const spec = await response.json();
+  const schemes = spec.components.securitySchemes;
+
+  expect(schemes.cookie).toEqual({ type: 'apiKey', in: 'cookie', name: 'access_token' });
+  expect(schemes.bearer).toBeUndefined();
+
+  const publicOperations = new Set([
+    'POST /api/v1/auth/register',
+    'POST /api/v1/auth/login',
+    'POST /api/v1/auth/login/2fa',
+    'POST /api/v1/auth/refresh',
+    'POST /api/v1/auth/forgot-password',
+    'POST /api/v1/auth/reset-password',
+    'GET /api/v1/auth/verify-email',
+    'POST /api/v1/subscriptions/webhook',
+  ]);
+  const foundPublicOperations = new Set<string>();
+
+  for (const [path, operations] of Object.entries(spec.paths) as [string, Record<string, { security?: Array<Record<string, string[]>> }>][]) {
+    for (const [method, operation] of Object.entries(operations)) {
+      if (!['get', 'post', 'put', 'patch', 'delete', 'options', 'head'].includes(method)) continue;
+      const operationName = `${method.toUpperCase()} ${path}`;
+      const security = operation.security ?? [];
+      for (const requirement of security) {
+        for (const name of Object.keys(requirement)) expect(schemes[name]).toBeDefined();
+      }
+      if (security.length === 0) foundPublicOperations.add(operationName);
+    }
+  }
+
+  expect(foundPublicOperations).toEqual(publicOperations);
+  expect(spec.paths['/api/v1/auth/me'].get.security).toEqual([{ cookie: [] }]);
+  expect(spec.paths['/api/v1/companies/me'].get.security).toEqual([{ cookie: [] }]);
+  expect(spec.paths['/api/v1/super-admin/companies'].get.security).toEqual([{ cookie: [] }]);
+});
+
 test.describe('Security & Tenant Registration Lifecycle', () => {
   test.beforeEach(async () => {
     const prisma = openFixtureDatabase();

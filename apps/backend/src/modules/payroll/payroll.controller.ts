@@ -10,7 +10,7 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import { Response } from 'express';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiCookieAuth } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
@@ -21,7 +21,7 @@ import { CreatePayrollStructureDto } from './dto/create-payroll-structure.dto';
 import { ExecutePayrollRunDto } from './dto/execute-payroll-run.dto';
 
 @ApiTags('Payroll Management')
-@ApiBearerAuth()
+@ApiCookieAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll')
 export class PayrollController {

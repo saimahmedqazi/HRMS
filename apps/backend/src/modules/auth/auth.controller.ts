@@ -13,7 +13,7 @@ import {
   HttpStatus,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiCookieAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
@@ -113,6 +113,7 @@ export class AuthController {
   }
 
   @Post('logout')
+  @ApiCookieAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Logout and clear authentication cookies' })
   async logout(
@@ -153,6 +154,7 @@ export class AuthController {
   }
 
   @Post('2fa/generate')
+  @ApiCookieAuth()
   @Header('Cache-Control', 'no-store')
   @ApiOperation({ summary: 'Generate TOTP 2FA secret and QR code' })
   async generateTotp(@CurrentUser() user: AuthenticatedUser) {
@@ -160,6 +162,7 @@ export class AuthController {
   }
 
   @Post('2fa/enable')
+  @ApiCookieAuth()
   @Header('Cache-Control', 'no-store')
   @Throttle({ short: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Verify TOTP code and enable 2FA' })
@@ -171,6 +174,7 @@ export class AuthController {
   }
 
   @Post('2fa/disable')
+  @ApiCookieAuth()
   @Throttle({ short: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Disable 2FA' })
   async disableTotp(
@@ -182,6 +186,7 @@ export class AuthController {
   }
 
   @Get('me')
+  @ApiCookieAuth()
   @SessionProbe('access_token')
   @ApiOperation({ summary: 'Get current user profile, company, and employee context' })
   async getMe(@CurrentUser() user: AuthenticatedUser) {
@@ -189,12 +194,14 @@ export class AuthController {
   }
 
   @Patch('me/location-consent')
+  @ApiCookieAuth()
   @ApiOperation({ summary: 'Set device location consent for your attendance punches' })
   async updateLocationConsent(@CurrentUser() user: AuthenticatedUser, @Body() dto: LocationConsentDto) {
     return this.authService.updateLocationConsent((user.id || user.sub)!, user.companyId, dto.locationConsent);
   }
 
   @Get('me/modules')
+  @ApiCookieAuth()
   @ApiOperation({ summary: 'Get allowed modules manifest for current user role (server-driven sidebar)' })
   async getMyModules(@CurrentUser() user: AuthenticatedUser) {
     if (user.role === UserRole.SUPER_ADMIN && user.supportModeCompanyId) {

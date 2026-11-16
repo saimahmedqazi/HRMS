@@ -4,7 +4,7 @@ import {
   Body,
   UseGuards,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiCookieAuth } from '@nestjs/swagger';
 import { SubscriptionTier } from '@prisma/client';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
@@ -15,7 +15,7 @@ import { AiAssistantService } from './ai-assistant.service';
 import { ChatRequestDto } from './dto/chat-request.dto';
 
 @ApiTags('Gemini AI Assistant')
-@ApiBearerAuth()
+@ApiCookieAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, SubscriptionTierGuard)
 @RequireSubscriptionTier(SubscriptionTier.PREMIUM)
 @Controller('ai')

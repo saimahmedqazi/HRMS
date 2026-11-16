@@ -8,7 +8,7 @@ import {
   UseGuards,
   Res,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiCookieAuth } from '@nestjs/swagger';
 import { Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { SuperAdminService } from './super-admin.service';
@@ -21,6 +21,7 @@ import { UpdateCompanyStatusDto } from './dto/update-company-status.dto';
 import { UserRole } from '@prisma/client';
 
 @ApiTags('super-admin')
+@ApiCookieAuth()
 @Controller('super-admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class SuperAdminController {

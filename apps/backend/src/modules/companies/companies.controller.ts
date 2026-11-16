@@ -6,7 +6,7 @@ import {
   UseGuards,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiCookieAuth } from '@nestjs/swagger';
 import { CompaniesService, UpdateCompanySettingsDto } from './companies.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -15,6 +15,7 @@ import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-
 import { UserRole } from '@prisma/client';
 
 @ApiTags('companies')
+@ApiCookieAuth()
 @Controller('companies')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class CompaniesController {

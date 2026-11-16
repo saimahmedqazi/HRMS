@@ -18,7 +18,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
-  ApiBearerAuth,
+  ApiCookieAuth,
   ApiConsumes,
 } from '@nestjs/swagger';
 import { LeaveStatus, UserRole } from '@prisma/client';
@@ -32,7 +32,7 @@ import { ApproveStepDto } from './dto/approve-step.dto';
 import { UpdateLeaveTypeDto } from './dto/update-leave-type.dto';
 
 @ApiTags('Leave Management')
-@ApiBearerAuth()
+@ApiCookieAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('leave')
 export class LeaveController {

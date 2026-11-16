@@ -9,7 +9,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiCookieAuth } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
@@ -25,7 +25,7 @@ export class SubscriptionsController {
   constructor(private readonly subscriptionsService: SubscriptionsService) {}
 
   @Get('current')
-  @ApiBearerAuth()
+  @ApiCookieAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @ApiOperation({ summary: 'Get current company subscription tier and feature matrix' })
   async getCurrentSubscription(@CurrentUser() user: any) {
@@ -33,7 +33,7 @@ export class SubscriptionsController {
   }
 
   @Post('checkout-session')
-  @ApiBearerAuth()
+  @ApiCookieAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.COMPANY_ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Create Stripe Checkout session for upgrading to Premium' })
@@ -42,7 +42,7 @@ export class SubscriptionsController {
   }
 
   @Post('portal-session')
-  @ApiBearerAuth()
+  @ApiCookieAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.COMPANY_ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Create Stripe Customer Portal session for billing management' })

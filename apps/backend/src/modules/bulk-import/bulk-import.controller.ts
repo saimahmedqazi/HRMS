@@ -15,7 +15,7 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiCookieAuth, ApiConsumes } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
@@ -27,7 +27,7 @@ import { BulkImportJobsService } from './bulk-import-jobs.service';
 const spreadsheetUploadLimits = { fileSize: 10 * 1024 * 1024 };
 
 @ApiTags('Bulk Employee Import')
-@ApiBearerAuth()
+@ApiCookieAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('employees/bulk')
 export class BulkImportController {

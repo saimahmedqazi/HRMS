@@ -1,11 +1,11 @@
 import { Controller, Get, Patch, UnauthorizedException, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiCookieAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { AuthenticatedUser, CurrentUser } from '@common/decorators/current-user.decorator';
 import { PrismaService } from '@common/prisma/prisma.service';
 
 @ApiTags('Notifications')
-@ApiBearerAuth()
+@ApiCookieAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('notifications')
 export class NotificationsController {
