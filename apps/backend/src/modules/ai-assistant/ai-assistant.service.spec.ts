@@ -30,8 +30,15 @@ describe('AiAssistantService', () => {
       leaveBalance: {
         findMany: jest.fn().mockResolvedValue([
           { leaveType: 'CASUAL', allocated: 10, used: 2, pending: 0, carried: 0 },
-          { leaveType: 'SICK', allocated: 14, used: 0, pending: 0, carried: 0 },
+          { leaveType: 'SICK', allocated: 12, used: 0, pending: 0, carried: 0 },
           { leaveType: 'ANNUAL', allocated: 14, used: 5, pending: 0, carried: 0 },
+        ]),
+      },
+      leaveTypeSetting: {
+        findMany: jest.fn().mockResolvedValue([
+          { leaveType: 'CASUAL', annualAllocation: 10, requiresReason: true, requiresMedicalCert: false, isActive: true },
+          { leaveType: 'SICK', annualAllocation: 12, requiresReason: false, requiresMedicalCert: true, isActive: true },
+          { leaveType: 'ANNUAL', annualAllocation: 14, requiresReason: false, requiresMedicalCert: false, isActive: true },
         ]),
       },
     };
@@ -197,8 +204,46 @@ describe('AiAssistantService', () => {
         { message: 'How do I take sick leave?' },
       );
 
+      expect(result.reply).toContain('12 days of Sick Leave per year');
       expect(result.reply).toContain('medical doctor prescription or certificate');
-      expect(result.reply).toContain('strictly mandatory');
+      expect(result.reply).toContain('required when you submit');
+      expect(result.reply).not.toContain('14 days of Sick Leave');
+    });
+
+    it('uses the tenant medical certificate setting instead of claiming it is mandatory', async () => {
+      prisma.leaveTypeSetting.findMany.mockResolvedValueOnce([
+        { leaveType: 'SICK', annualAllocation: 8, requiresReason: false, requiresMedicalCert: false, isActive: true },
+      ]);
+
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How do I take sick leave?' },
+      );
+
+      expect(result.reply).toContain('8 days of Sick Leave per year');
+      expect(result.reply).toContain('does not require a medical certificate');
+      expect(result.reply).not.toContain('required when you submit');
+    });
+
+    it('uses tenant leave allocations in the Gemini context', async () => {
+      const generateContent = jest.fn().mockResolvedValue({ text: 'Please contact HR for details.' });
+      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
+        models: { generateContent },
+      }) as unknown as GoogleGenAI);
+      const configuredService = new AiAssistantService(prisma, new ConfigService({
+        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '',
+      }));
+
+      await configuredService.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How do I plan time away from work?' },
+      );
+
+      expect(generateContent.mock.calls[0][0].config.systemInstruction).toContain('- Sick Leave: 12 days/year (medical doctor prescription/certificate required).');
     });
 
     it('should refuse to leak other employees confidential salary or compensation details', async () => {

@@ -71,7 +71,6 @@ export class AiAssistantService {
   private getFastPolicyReply(
     query: string,
     companyName: string,
-    firstName: string | undefined,
     balances: Array<{
       leaveType: string;
       allocated: number;
@@ -79,16 +78,33 @@ export class AiAssistantService {
       used: number;
       pending: number;
     }>,
+    leavePolicies: Array<{
+      leaveType: string;
+      annualAllocation: number;
+      requiresReason: boolean;
+      requiresMedicalCert: boolean;
+      isActive: boolean;
+    }>,
   ): string | undefined {
     const casualBalance = balances.find((balance) => balance.leaveType === 'CASUAL');
     const sickBalance = balances.find((balance) => balance.leaveType === 'SICK');
     const annualBalance = balances.find((balance) => balance.leaveType === 'ANNUAL');
+    const casualPolicy = leavePolicies.find((policy) => policy.leaveType === 'CASUAL');
+    const sickPolicy = leavePolicies.find((policy) => policy.leaveType === 'SICK');
+    const annualPolicy = leavePolicies.find((policy) => policy.leaveType === 'ANNUAL');
 
     if (query.includes('probation')) {
       return `According to ${companyName} policy, all newly hired employees undergo a 3-month probation period (90 days from hire date). During active probation, regular leave requests are locked. For medical or emergency absences, please consult HR directly.`;
     }
     if (query.includes('sick') || query.includes('doctor') || query.includes('prescription')) {
-      return `You have 14 days of Sick Leave allocated annually. Important: To request Sick Leave, uploading an official medical doctor prescription or certificate (PDF/JPG/PNG) is strictly mandatory during submission.`;
+      if (sickPolicy && !sickPolicy.isActive) {
+        return `Sick Leave is currently unavailable under ${companyName}'s leave policy. Please contact HR for guidance.`;
+      }
+      const allocation = sickPolicy?.annualAllocation ?? sickBalance?.allocated ?? 14;
+      const medicalCertificateRule = (sickPolicy?.requiresMedicalCert ?? true)
+        ? ' An official medical doctor prescription or certificate (PDF/JPG/PNG) is required when you submit a Sick Leave request.'
+        : ' Your current Sick Leave policy does not require a medical certificate when you submit the request.';
+      return `${companyName} allocates ${allocation} days of Sick Leave per year.${medicalCertificateRule}`;
     }
     if (query.includes('balance') || query.includes('how many days')) {
       const available = (balance: typeof casualBalance, fallback: number) =>
@@ -120,14 +136,26 @@ export class AiAssistantService {
     dto: ChatRequestDto,
   ) {
     // 1. Fetch Company & Employee Context
-    const company = await this.prisma.company.findUnique({ where: { id: companyId } });
-    const employee = await this.prisma.employee.findFirst({
-      where: { companyId, userId },
-      include: {
-        department: true,
-        designation: true,
-      },
-    });
+    const [company, employee, leavePolicies] = await Promise.all([
+      this.prisma.company.findUnique({ where: { id: companyId } }),
+      this.prisma.employee.findFirst({
+        where: { companyId, userId },
+        include: {
+          department: true,
+          designation: true,
+        },
+      }),
+      this.prisma.leaveTypeSetting.findMany({
+        where: { companyId },
+        select: {
+          leaveType: true,
+          annualAllocation: true,
+          requiresReason: true,
+          requiresMedicalCert: true,
+          isActive: true,
+        },
+      }),
+    ]);
 
     // 2. Fetch User's Leave Balances
     const currentYear = new Date().getFullYear();
@@ -141,17 +169,29 @@ export class AiAssistantService {
     const sickBalance = balances.find((b) => b.leaveType === 'SICK');
     const annualBalance = balances.find((b) => b.leaveType === 'ANNUAL');
 
-    // 3. Construct System Prompt with ZenHR Policy Knowledge & Guardrails
+    const policyFor = (leaveType: string, fallbackAllocation: number, fallbackReason = false, fallbackMedicalCert = false) => {
+      const policy = leavePolicies.find((item) => item.leaveType === leaveType);
+      const title = leaveType === 'CASUAL' ? 'Casual' : leaveType === 'SICK' ? 'Sick' : 'Annual';
+      if (policy && !policy.isActive) return `- ${title} Leave: not currently available.`;
+      const allocation = policy?.annualAllocation ?? fallbackAllocation;
+      const details = [
+        (policy?.requiresReason ?? fallbackReason) ? 'reason required' : undefined,
+        (policy?.requiresMedicalCert ?? fallbackMedicalCert) ? 'medical doctor prescription/certificate required' : undefined,
+      ].filter(Boolean).join('; ');
+      return `- ${title} Leave: ${allocation} days/year${details ? ` (${details})` : ''}.`;
+    };
+
+    // 3. Construct System Prompt with the tenant's configured leave policy and guardrails.
     const systemPrompt = `
 You are ZenHR AI, an intelligent, empathetic, and professional HR policy assistant for ${company?.name || 'ZenHR Enterprise'}.
 Your role is to assist employees and managers with clear, accurate answers about company policies, leave, attendance, and operational workflows.
 
 ORGANIZATIONAL POLICIES:
 1. Probation Period: New employees have a standard 3-month probation period (90 days from hire date). Leave requests are locked during probation.
-2. Leave Allocations:
-   - Casual Leave: 10 days/year. Reason required.
-   - Sick Leave: 14 days/year. Medical doctor prescription/certificate is strictly mandatory.
-   - Annual Leave: 14 days/year.
+2. Leave Policies:
+   ${policyFor('CASUAL', 10, true)}
+   ${policyFor('SICK', 14, false, true)}
+   ${policyFor('ANNUAL', 14)}
 3. Approval Line:
    - Employees route to Team Lead (Step 1) -> HR Manager (Step 2).
    - Team Leads route to Department Manager (Step 1) -> HR Manager (Step 2).
@@ -184,8 +224,8 @@ SECURITY & PRIVACY RULES:
     const fastPolicyReply = this.getFastPolicyReply(
       query,
       company?.name || 'ZenHR',
-      employee?.firstName,
       balances,
+      leavePolicies,
     );
     if (fastPolicyReply) return { reply: fastPolicyReply, model: 'zenhr-policy-engine' };
 
