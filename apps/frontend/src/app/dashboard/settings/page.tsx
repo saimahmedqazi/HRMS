@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   KeyRound,
 } from 'lucide-react';
+import { PasswordInput } from '@/components/ui/password-input';
 
 type CompanyProfile = {
   name: string;
@@ -656,9 +657,8 @@ export default function SettingsPage() {
                 Confirm your password to disable 2FA
               </label>
               <div className="flex gap-2">
-                <input
+                <PasswordInput
                   id="totp-disable-password"
-                  type="password"
                   autoComplete="current-password"
                   value={disablePassword}
                   onChange={(e) => setDisablePassword(e.target.value)}

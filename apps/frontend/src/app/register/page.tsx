@@ -8,6 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { PasswordInput } from '@/components/ui/password-input';
 
 const registerSchema = z.object({
   companyName: z.string().trim().min(2, 'Company name must be at least 2 characters'),
@@ -155,13 +156,12 @@ export default function RegisterPage() {
             <label htmlFor="register-password" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
               Admin Password (min. 8 characters) *
             </label>
-            <input
+            <PasswordInput
               {...register('adminPassword')}
               id="register-password"
               autoComplete="new-password"
               aria-invalid={!!errors.adminPassword}
               aria-describedby={errors.adminPassword ? 'register-password-error' : undefined}
-              type="password"
               placeholder="••••••••"
               className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm outline-none transition focus:border-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
             />

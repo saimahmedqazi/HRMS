@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { PasswordInput } from '@/components/ui/password-input';
 
 export function RecoveryForm({ initialToken, resetOnly = false }: {
   initialToken?: string;
@@ -137,9 +138,8 @@ export function RecoveryForm({ initialToken, resetOnly = false }: {
               <label htmlFor="new-password" className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
                 New Password (min 8 chars)
               </label>
-              <input
+              <PasswordInput
                 id="new-password"
-                type="password"
                 disabled={!isReady}
                 autoComplete="new-password"
                 required
