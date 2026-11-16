@@ -3,6 +3,7 @@ import { SuperAdminService } from './super-admin.service';
 import { ConfigService } from '@nestjs/config';
 import { UserRole } from '@prisma/client';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { ROLES_KEY } from '../../common/decorators/roles.decorator';
 
 describe('SuperAdminController', () => {
   let controller: SuperAdminController;
@@ -23,6 +24,7 @@ describe('SuperAdminController', () => {
       updateCompanyStatus: jest.fn(),
       enterSupportMode: jest.fn(),
       exitSupportMode: jest.fn(),
+      resetOperationManagerPassword: jest.fn(),
     };
 
     mockConfigService = {
@@ -76,6 +78,29 @@ describe('SuperAdminController', () => {
         'support-token-123',
         expect.objectContaining({ httpOnly: true, maxAge: 3600000 }),
       );
+    });
+  });
+
+  describe('resetOperationManagerPassword', () => {
+    it('delegates the one-time reset and records request network metadata', async () => {
+      const result = {
+        email: 'ops@zenhr.com',
+        temporaryPassword: 'one-time-temporary-secret',
+        message: 'shown once',
+      };
+      (mockSuperAdminService.resetOperationManagerPassword as jest.Mock).mockResolvedValue(result);
+      const req: any = { ip: '203.0.113.9', get: jest.fn().mockReturnValue('Test Browser') };
+
+      await expect(controller.resetOperationManagerPassword(mockAdmin, req)).resolves.toEqual(result);
+      expect(mockSuperAdminService.resetOperationManagerPassword).toHaveBeenCalledWith(
+        mockAdmin,
+        '203.0.113.9',
+        'Test Browser',
+      );
+      expect(Reflect.getMetadata(
+        ROLES_KEY,
+        SuperAdminController.prototype.resetOperationManagerPassword,
+      )).toEqual([UserRole.SUPER_ADMIN]);
     });
   });
 });

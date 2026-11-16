@@ -1,9 +1,13 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, ForbiddenException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CompanyStatus, CompanySuspensionReason, UserRole, AuditAction } from '@prisma/client';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+
+const OPERATION_MANAGER_EMAIL = 'ops@zenhr.com';
 
 @Injectable()
 export class SuperAdminService {
@@ -129,6 +133,87 @@ export class SuperAdminService {
       });
       return updated;
     });
+  }
+
+  async resetOperationManagerPassword(
+    adminUser: AuthenticatedUser,
+    ipAddress?: string,
+    userAgent?: string,
+  ) {
+    if (adminUser.supportModeCompanyId) {
+      throw new ForbiddenException('Exit Support Mode before resetting platform account access.');
+    }
+
+    const operationManager = await this.prisma.user.findUnique({
+      where: { email: OPERATION_MANAGER_EMAIL },
+    });
+    if (!operationManager || operationManager.deletedAt) {
+      throw new NotFoundException('The Operation Manager account was not found.');
+    }
+    if (operationManager.role !== UserRole.OPERATION_MANAGER || operationManager.companyId !== null) {
+      throw new ConflictException('The configured Operation Manager account is not a platform account.');
+    }
+
+    const temporaryPassword = crypto.randomBytes(24).toString('base64url');
+    const saltRounds = this.configService.get<number>('app.security.bcryptRounds', 12);
+    const passwordHash = await bcrypt.hash(temporaryPassword, saltRounds);
+    const actorId = (adminUser.id || adminUser.sub)!;
+
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.updateMany({
+        where: {
+          id: operationManager.id,
+          role: UserRole.OPERATION_MANAGER,
+          companyId: null,
+          deletedAt: null,
+          sessionVersion: operationManager.sessionVersion,
+        },
+        data: {
+          passwordHash,
+          refreshTokenHash: null,
+          sessionVersion: { increment: 1 },
+          passwordResetToken: null,
+          passwordResetExpiry: null,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+        },
+      });
+
+      if (updated.count !== 1) {
+        throw new ConflictException('Operation Manager account changed during reset. Reload and try again.');
+      }
+
+      await tx.auditLog.create({
+        data: {
+          userId: actorId,
+          action: AuditAction.PASSWORD_RESET,
+          entity: 'User',
+          entityId: operationManager.id,
+          oldValues: {
+            email: operationManager.email,
+            role: operationManager.role,
+            failedLoginAttempts: operationManager.failedLoginAttempts,
+            wasLocked: Boolean(operationManager.lockedUntil && operationManager.lockedUntil > new Date()),
+          },
+          newValues: {
+            email: operationManager.email,
+            role: operationManager.role,
+            method: 'SUPER_ADMIN_RECOVERY',
+            resetBy: adminUser.email,
+            sessionVersion: operationManager.sessionVersion + 1,
+          },
+          ipAddress,
+          userAgent,
+        },
+      });
+    });
+
+    return {
+      email: OPERATION_MANAGER_EMAIL,
+      temporaryPassword,
+      twoFactorEnabled: operationManager.twoFaEnabled,
+      message: 'Temporary password created. It is shown only once; store it securely.',
+    };
   }
 
   async enterSupportMode(companyId: string, reason: string, adminUser: AuthenticatedUser) {

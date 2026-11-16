@@ -5,6 +5,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { CompanyStatus, CompanySuspensionReason, UserRole, AuditAction } from '@prisma/client';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import * as bcrypt from 'bcrypt';
 
 describe('SuperAdminService', () => {
   let service: SuperAdminService;
@@ -20,6 +21,8 @@ describe('SuperAdminService', () => {
     },
     user: {
       count: jest.fn(),
+      findUnique: jest.fn(),
+      updateMany: jest.fn(),
     },
     supportModeSession: {
       create: jest.fn(),
@@ -99,6 +102,99 @@ describe('SuperAdminService', () => {
           entityId: 'comp-1',
         }),
       });
+    });
+  });
+
+  describe('resetOperationManagerPassword', () => {
+    const operationManager = {
+      id: 'ops-1',
+      email: 'ops@zenhr.com',
+      role: UserRole.OPERATION_MANAGER,
+      companyId: null,
+      deletedAt: null,
+      sessionVersion: 4,
+      failedLoginAttempts: 5,
+      lockedUntil: new Date(Date.now() + 60_000),
+      twoFaEnabled: true,
+    };
+
+    it('resets only the platform operation manager, revokes sessions, and audits without the password', async () => {
+      mockPrisma.user.findUnique.mockResolvedValueOnce(operationManager);
+      mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 });
+      mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+      const result = await service.resetOperationManagerPassword(mockSuperAdmin, '203.0.113.7', 'QA browser');
+
+      expect(result.email).toBe('ops@zenhr.com');
+      expect(result.temporaryPassword).toMatch(/^[A-Za-z0-9_-]{32}$/);
+      expect(result.twoFactorEnabled).toBe(true);
+      expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({ where: { email: 'ops@zenhr.com' } });
+      expect(mockPrisma.user.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 'ops-1',
+          role: UserRole.OPERATION_MANAGER,
+          companyId: null,
+          deletedAt: null,
+          sessionVersion: 4,
+        },
+        data: expect.objectContaining({
+          refreshTokenHash: null,
+          sessionVersion: { increment: 1 },
+          passwordResetToken: null,
+          passwordResetExpiry: null,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+        }),
+      });
+      const passwordHash = mockPrisma.user.updateMany.mock.calls[0][0].data.passwordHash;
+      await expect(bcrypt.compare(result.temporaryPassword, passwordHash)).resolves.toBe(true);
+
+      const auditData = mockPrisma.auditLog.create.mock.calls[0][0].data;
+      expect(auditData).toMatchObject({
+        userId: 'super-admin-1',
+        action: AuditAction.PASSWORD_RESET,
+        entity: 'User',
+        entityId: 'ops-1',
+        ipAddress: '203.0.113.7',
+        userAgent: 'QA browser',
+        newValues: {
+          email: 'ops@zenhr.com',
+          role: UserRole.OPERATION_MANAGER,
+          method: 'SUPER_ADMIN_RECOVERY',
+          resetBy: 'superadmin@zenhr.com',
+          sessionVersion: 5,
+        },
+      });
+      expect(JSON.stringify(auditData)).not.toContain(result.temporaryPassword);
+      expect(JSON.stringify(mockPrisma.user.updateMany.mock.calls[0][0])).not.toContain(result.temporaryPassword);
+    });
+
+    it('does not reset an account while the super admin is in support mode', async () => {
+      await expect(service.resetOperationManagerPassword({
+        ...mockSuperAdmin,
+        supportModeCompanyId: 'tenant-1',
+      })).rejects.toThrow('Exit Support Mode');
+      expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('refuses to reset a missing or non-platform account', async () => {
+      mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+      await expect(service.resetOperationManagerPassword(mockSuperAdmin)).rejects.toThrow('account was not found');
+
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        ...operationManager,
+        role: UserRole.COMPANY_ADMIN,
+      });
+      await expect(service.resetOperationManagerPassword(mockSuperAdmin)).rejects.toThrow('not a platform account');
+      expect(mockPrisma.user.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('does not issue a password if the target changed concurrently', async () => {
+      mockPrisma.user.findUnique.mockResolvedValueOnce(operationManager);
+      mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.resetOperationManagerPassword(mockSuperAdmin)).rejects.toThrow('changed during reset');
+      expect(mockPrisma.auditLog.create).not.toHaveBeenCalled();
     });
   });
 

@@ -7,9 +7,12 @@ import {
   Body,
   UseGuards,
   Res,
+  Req,
+  Header,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiCookieAuth } from '@nestjs/swagger';
-import { Response } from 'express';
+import { Throttle } from '@nestjs/throttler';
+import { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { SuperAdminService } from './super-admin.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -53,6 +56,23 @@ export class SuperAdminController {
     @CurrentUser() adminUser: AuthenticatedUser,
   ) {
     return this.superAdminService.updateCompanyStatus(id, dto.status, adminUser);
+  }
+
+  @Post('platform-accounts/operation-manager/reset-password')
+  @Roles(UserRole.SUPER_ADMIN)
+  @Throttle({ short: { limit: 1, ttl: 60_000 } })
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({ summary: 'Reset the platform Operation Manager password (Super Admin only)' })
+  @ApiResponse({ status: 200, description: 'One-time temporary password; not written to logs or audit data.' })
+  async resetOperationManagerPassword(
+    @CurrentUser() adminUser: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    return this.superAdminService.resetOperationManagerPassword(
+      adminUser,
+      req.ip,
+      req.get('user-agent'),
+    );
   }
 
   @Post('companies/:id/support-mode/enter')
