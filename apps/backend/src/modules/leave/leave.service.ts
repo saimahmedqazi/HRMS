@@ -174,6 +174,10 @@ export class LeaveService {
    * Ensure default leave types exist for a company.
    */
   async ensureDefaultLeaveTypes(companyId: string) {
+    if (!companyId) {
+      throw new ForbiddenException('Company context required.');
+    }
+
     const existing = await this.prisma.leaveTypeSetting.findMany({
       where: { companyId },
     });

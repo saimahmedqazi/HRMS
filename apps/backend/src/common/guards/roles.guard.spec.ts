@@ -2,6 +2,8 @@ import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { RolesGuard } from './roles.guard';
 import { UserRole } from '@prisma/client';
+import { LeaveController } from '../../modules/leave/leave.controller';
+import { ROLES_KEY } from '../decorators/roles.decorator';
 
 describe('RolesGuard', () => {
   let guard: RolesGuard;
@@ -75,5 +77,29 @@ describe('RolesGuard', () => {
       supportModeCompanyId: 'comp-1',
     });
     expect(guard.canActivate(context)).toBe(true);
+  });
+
+  it('should require tenant roles for leave routes while allowing Super Admin in support mode', () => {
+    const handler = LeaveController.prototype.getLeaveTypes;
+    const contextFor = (user: Record<string, unknown>) => ({
+      getHandler: () => handler,
+      getClass: () => LeaveController,
+      switchToHttp: () => ({ getRequest: () => ({ user }) }),
+    } as unknown as ExecutionContext);
+
+    expect(reflector.getAllAndOverride(ROLES_KEY, [handler, LeaveController])).toEqual([
+      UserRole.COMPANY_ADMIN,
+      UserRole.HR_MANAGER,
+      UserRole.DEPARTMENT_MANAGER,
+      UserRole.TEAM_LEAD,
+      UserRole.EMPLOYEE,
+    ]);
+    expect(() => guard.canActivate(contextFor({ id: 'sa-1', role: UserRole.SUPER_ADMIN })))
+      .toThrow(ForbiddenException);
+    expect(guard.canActivate(contextFor({
+      id: 'sa-1',
+      role: UserRole.SUPER_ADMIN,
+      supportModeCompanyId: 'company-1',
+    }))).toBe(true);
   });
 });

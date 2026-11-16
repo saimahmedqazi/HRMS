@@ -34,6 +34,13 @@ import { UpdateLeaveTypeDto } from './dto/update-leave-type.dto';
 @ApiTags('Leave Management')
 @ApiCookieAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(
+  UserRole.COMPANY_ADMIN,
+  UserRole.HR_MANAGER,
+  UserRole.DEPARTMENT_MANAGER,
+  UserRole.TEAM_LEAD,
+  UserRole.EMPLOYEE,
+)
 @Controller('leave')
 export class LeaveController {
   constructor(private readonly leaveService: LeaveService) {}

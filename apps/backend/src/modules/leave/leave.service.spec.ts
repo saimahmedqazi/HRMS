@@ -90,6 +90,15 @@ describe('LeaveService', () => {
     service = module.get<LeaveService>(LeaveService);
   });
 
+  describe('ensureDefaultLeaveTypes', () => {
+    it('requires a tenant context before querying leave policies', async () => {
+      await expect(service.ensureDefaultLeaveTypes(undefined as unknown as string))
+        .rejects.toThrow(ForbiddenException);
+      expect(prisma.leaveTypeSetting.findMany).not.toHaveBeenCalled();
+      expect(prisma.leaveTypeSetting.createMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('createLeaveRequest', () => {
     it('should throw NotFoundException if employee is not found', async () => {
       prisma.employee.findFirst.mockResolvedValue(null);
