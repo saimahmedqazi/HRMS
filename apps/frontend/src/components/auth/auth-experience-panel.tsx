@@ -1,27 +1,59 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const sampleQuotes = [
   {
     quote:
       '“A clearer view of our people and everyday HR work, all in one place.”',
-    attribution: 'Sample testimonial · HR team lead',
+    attribution: 'Maya Rahman · HR team lead',
   },
   {
     quote:
       '“The leave and attendance workflows make routine tasks easier to follow.”',
-    attribution: 'Sample testimonial · People operations',
+    attribution: 'Aariz Hasan · People operations',
   },
   {
     quote:
       '“Managers and employees can find the tools they need without the paperwork.”',
-    attribution: 'Sample testimonial · Department manager',
+    attribution: 'Nida Malik · Department manager',
   },
 ];
 
+const AUTOPLAY_INTERVAL_MS = 6_500;
+
 export function AuthExperiencePanel() {
   const [activeQuote, setActiveQuote] = useState(0);
+  const [isHovered, setIsHovered] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [isAutoplayEnabled, setIsAutoplayEnabled] = useState(true);
+  const isPaused = isHovered || isFocused || prefersReducedMotion || !isAutoplayEnabled;
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const updatePreference = (event: MediaQueryListEvent | MediaQueryList) => {
+      setPrefersReducedMotion(event.matches);
+    };
+
+    updatePreference(mediaQuery);
+    setIsAutoplayEnabled(!mediaQuery.matches);
+    mediaQuery.addEventListener('change', updatePreference);
+    return () => mediaQuery.removeEventListener('change', updatePreference);
+  }, []);
+
+  useEffect(() => {
+    if (isPaused) return;
+
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        setActiveQuote((current) => (current + 1) % sampleQuotes.length);
+      }
+    }, AUTOPLAY_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [isPaused]);
+
   const changeQuote = (direction: number) => {
     setActiveQuote((current) => (current + direction + sampleQuotes.length) % sampleQuotes.length);
   };
@@ -31,7 +63,13 @@ export function AuthExperiencePanel() {
   return (
     <section
       aria-label="ZenHR introduction"
-      className="relative flex h-[260px] min-h-[260px] overflow-hidden bg-slate-950 text-white sm:h-[300px] lg:h-screen lg:min-h-[620px]"
+      className="relative flex h-[340px] min-h-[340px] overflow-hidden bg-slate-950 text-white sm:h-[360px] lg:h-screen lg:min-h-[620px]"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      onFocusCapture={() => setIsFocused(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsFocused(false);
+      }}
       style={{
         backgroundImage:
           "linear-gradient(115deg, rgba(8, 19, 43, .92) 0%, rgba(17, 38, 79, .72) 52%, rgba(10, 22, 48, .78) 100%), url('/zenhr-auth-hero.webp')",
@@ -65,7 +103,7 @@ export function AuthExperiencePanel() {
             <div className="mb-2 inline-flex rounded-full border border-white/25 bg-slate-950/40 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-wider text-blue-100 sm:text-[10px]">
               Fictional demo quote
             </div>
-            <div aria-live="polite" aria-atomic="true" key={activeQuote}>
+            <div aria-live="off" aria-atomic="true">
               <p className="text-sm leading-relaxed text-white/90 sm:text-base">{current.quote}</p>
               <p className="mt-1.5 text-[10px] text-blue-100/80 sm:mt-2 sm:text-xs">
                 {current.attribution}
@@ -73,6 +111,16 @@ export function AuthExperiencePanel() {
             </div>
 
             <div className="mt-3 flex items-center gap-3 sm:mt-4">
+              <button
+                type="button"
+                onClick={() => setIsAutoplayEnabled((enabled) => !enabled)}
+                disabled={prefersReducedMotion}
+                aria-label={isAutoplayEnabled ? 'Pause testimonial carousel' : 'Play testimonial carousel'}
+                title={prefersReducedMotion ? 'Automatic rotation is disabled by your motion preference' : undefined}
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-slate-950/30 text-xs transition hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span aria-hidden="true">{isAutoplayEnabled ? 'Ⅱ' : '▶'}</span>
+              </button>
               <button
                 type="button"
                 onClick={() => changeQuote(-1)}

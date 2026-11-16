@@ -71,12 +71,12 @@ describe('AiAssistantService', () => {
       }));
 
       const result = await configuredService.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How do I apply to work from home?' },
+        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How can departments coordinate their work?' },
       );
 
       expect(generateContent).toHaveBeenCalledTimes(1);
       expect(result.model).toBe('gemini-policy-engine');
-      expect(result.reply).toContain('New Remote Work Request');
+      expect(result.reply).toContain('Hello John');
     });
 
     it('returns a nonempty Gemini reply when available', async () => {
@@ -89,13 +89,13 @@ describe('AiAssistantService', () => {
       }));
 
       const result = await configuredService.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How do I apply to work from home?' },
+        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How can departments coordinate their work?' },
       );
 
       expect(generateContent).toHaveBeenCalledTimes(1);
       expect(generateContent).toHaveBeenCalledWith({
         model: 'gemini-3.5-flash',
-        contents: 'How do I apply to work from home?',
+        contents: 'How can departments coordinate their work?',
         config: expect.objectContaining({
           systemInstruction: expect.stringContaining('New Remote Work Request'),
           abortSignal: expect.objectContaining({ aborted: false }),
@@ -123,7 +123,7 @@ describe('AiAssistantService', () => {
 
       try {
         const result = await configuredService.processQuery(
-          mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How do I apply to work from home?' },
+          mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How can departments coordinate their work?' },
         );
         expect(deadline).toHaveBeenCalledWith(15_000);
         expect(deadline).toHaveBeenCalledWith(5_000);
@@ -132,7 +132,7 @@ describe('AiAssistantService', () => {
         expect(generateContent.mock.calls[0][0].config.thinkingConfig).toBeUndefined();
         expect(generateContent).toHaveBeenCalledTimes(1);
         expect(result.model).toBe('gemini-policy-engine');
-        expect(result.reply).toContain('New Remote Work Request');
+        expect(result.reply).toContain('Hello John');
       } finally {
         deadline.mockRestore();
       }
@@ -141,7 +141,7 @@ describe('AiAssistantService', () => {
     it('uses the default Gemini model when the preferred model is unavailable', async () => {
       const unavailable = Object.assign(new ApiError({ message: 'Unavailable', status: 503 }), { status: 503 });
       const generateContent = jest.fn().mockRejectedValueOnce(unavailable)
-        .mockResolvedValueOnce({ text: 'Open Attendance and select New Remote Work Request.' });
+        .mockResolvedValueOnce({ text: 'Department managers route leave to the CEO.' });
       jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
         models: { generateContent },
       }) as unknown as GoogleGenAI);
@@ -150,12 +150,32 @@ describe('AiAssistantService', () => {
       }));
 
       const result = await configuredService.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How do I apply to work from home?' },
+        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How can departments coordinate their work?' },
       );
 
       expect(generateContent.mock.calls.map(([request]) => request.model)).toEqual(['gemini-3.8-flash', 'gemini-3.5-flash']);
       expect(generateContent.mock.calls[0][0].config.httpOptions).toEqual({ timeout: 10_000, retryOptions: { attempts: 1 } });
-      expect(result).toMatchObject({ model: 'gemini-3.5-flash', reply: expect.stringContaining('New Remote Work Request') });
+      expect(result).toMatchObject({ model: 'gemini-3.5-flash', reply: 'Department managers route leave to the CEO.' });
+    });
+
+    it('answers common policy questions immediately without a Gemini network call', async () => {
+      const generateContent = jest.fn();
+      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
+        models: { generateContent },
+      }) as unknown as GoogleGenAI);
+      const configuredService = new AiAssistantService(prisma, new ConfigService({
+        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: 'gemini-2.0-flash',
+      }));
+
+      const result = await configuredService.processQuery(
+        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How do I apply to work from home?' },
+      );
+
+      expect(generateContent).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        model: 'zenhr-policy-engine',
+        reply: expect.stringContaining('New Remote Work Request'),
+      });
     });
 
     it('should answer questions about probation period accurately according to policy', async () => {

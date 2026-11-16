@@ -68,6 +68,48 @@ export class AiAssistantService {
     }
   }
 
+  private getFastPolicyReply(
+    query: string,
+    companyName: string,
+    firstName: string | undefined,
+    balances: Array<{
+      leaveType: string;
+      allocated: number;
+      carried: number;
+      used: number;
+      pending: number;
+    }>,
+  ): string | undefined {
+    const casualBalance = balances.find((balance) => balance.leaveType === 'CASUAL');
+    const sickBalance = balances.find((balance) => balance.leaveType === 'SICK');
+    const annualBalance = balances.find((balance) => balance.leaveType === 'ANNUAL');
+
+    if (query.includes('probation')) {
+      return `According to ${companyName} policy, all newly hired employees undergo a 3-month probation period (90 days from hire date). During active probation, regular leave requests are locked. For medical or emergency absences, please consult HR directly.`;
+    }
+    if (query.includes('sick') || query.includes('doctor') || query.includes('prescription')) {
+      return `You have 14 days of Sick Leave allocated annually. Important: To request Sick Leave, uploading an official medical doctor prescription or certificate (PDF/JPG/PNG) is strictly mandatory during submission.`;
+    }
+    if (query.includes('balance') || query.includes('how many days')) {
+      const available = (balance: typeof casualBalance, fallback: number) =>
+        balance ? balance.allocated + balance.carried - balance.used - balance.pending : fallback;
+      return `Here is your current leave balance:\n• Casual Leave: ${available(casualBalance, 10)} days available\n• Sick Leave: ${available(sickBalance, 14)} days available\n• Annual Leave: ${available(annualBalance, 14)} days available`;
+    }
+    if (query.includes('break') || query.includes('timer') || query.includes('alert')) {
+      return 'The ZenHR Work Timer tracks your active time and breaks. If your cumulative break time exceeds 60 minutes in a single shift, a real-time overstay notification is broadcast to your Team Lead and Department Manager.';
+    }
+    if (query.includes('work from home') || query.includes('remote') || query.includes('wfh') || query.includes('home')) {
+      return 'To apply to work from home (Remote Work):\n1. Open **Attendance** or **My Attendance** on your dashboard.\n2. In Remote Work Requests, click **New Remote Work Request**.\n3. Enter the start date, end date, and reason.\n4. Submit the request for Step 1 recommendation and Step 2 approval.\n\nOnce approved, you can punch in remotely without triggering HR exceptions.';
+    }
+    if (
+      (query.includes('salary') || query.includes('compensation') || query.includes('earns') || query.includes('pay')) &&
+      !query.includes('my salary') && !query.includes('my pay') && !query.includes('my compensation')
+    ) {
+      return 'For privacy and data compliance reasons, I cannot disclose personal or compensation details of other staff members. You can review your own personal payslips under the My Payslips tab.';
+    }
+    return undefined;
+  }
+
   /**
    * Process conversational HR policy queries with grounded tenant context and security guardrails.
    */
@@ -138,47 +180,23 @@ SECURITY & PRIVACY RULES:
 - Keep responses concise, supportive, and formatted in bullet points where appropriate.
 `;
 
-    // 4. If live Gemini API key is configured, invoke Gemini API
+    const query = dto.message.toLowerCase();
+    const fastPolicyReply = this.getFastPolicyReply(
+      query,
+      company?.name || 'ZenHR',
+      employee?.firstName,
+      balances,
+    );
+    if (fastPolicyReply) return { reply: fastPolicyReply, model: 'zenhr-policy-engine' };
+
+    // Common HR policy prompts use the local policy engine above to avoid network latency.
+    // Keep Gemini for questions that need a broader, generated explanation.
     const liveReply = await this.requestGemini(systemPrompt, dto.message);
     if (liveReply) return liveReply;
 
-    // 5. Intelligent Deterministic Sandbox Fallback
-    const query = dto.message.toLowerCase();
-    let reply = '';
-
-    if (query.includes('probation')) {
-      reply = `According to ${company?.name || 'ZenHR'} policy, all newly hired employees undergo a 3-month probation period (90 days from hire date). During active probation, regular leave requests are locked. For medical or emergency absences, please consult HR directly.`;
-    } else if (query.includes('sick') || query.includes('doctor') || query.includes('prescription')) {
-      reply = `You have 14 days of Sick Leave allocated annually. Important: To request Sick Leave, uploading an official medical doctor prescription or certificate (PDF/JPG/PNG) is strictly mandatory during submission.`;
-    } else if (query.includes('balance') || query.includes('how many days')) {
-      const availCasual = casualBalance
-        ? casualBalance.allocated + (casualBalance.carried || 0) - casualBalance.used - (casualBalance.pending || 0)
-        : 10;
-      const availSick = sickBalance
-        ? sickBalance.allocated + (sickBalance.carried || 0) - sickBalance.used - (sickBalance.pending || 0)
-        : 14;
-      const availAnnual = annualBalance
-        ? annualBalance.allocated + (annualBalance.carried || 0) - annualBalance.used - (annualBalance.pending || 0)
-        : 14;
-      reply = `Here is your current leave balance:\n• Casual Leave: ${availCasual} days available\n• Sick Leave: ${availSick} days available\n• Annual Leave: ${availAnnual} days available`;
-    } else if (query.includes('break') || query.includes('timer') || query.includes('alert')) {
-      reply = `The ZenHR Work Timer tracks your active time and breaks. If your cumulative break time exceeds 60 minutes in a single shift, a real-time overstay notification is broadcast to your Team Lead and Department Manager.`;
-    } else if (
-      query.includes('work from home') ||
-      query.includes('remote') ||
-      query.includes('wfh') ||
-      query.includes('home')
-    ) {
-      reply = `To apply to work from home (Remote Work):\n1. Open **Attendance** or **My Attendance** on your dashboard.\n2. In Remote Work Requests, click **New Remote Work Request**.\n3. Enter the start date, end date, and reason.\n4. Submit the request for Step 1 recommendation and Step 2 approval.\n\nOnce approved, you can punch in remotely without triggering HR exceptions.`;
-    } else if (
-      (query.includes('salary') || query.includes('compensation') || query.includes('earns') || query.includes('pay')) &&
-      !query.includes('my salary') && !query.includes('my pay') && !query.includes('my compensation')
-    ) {
-      reply = `For privacy and data compliance reasons, I cannot disclose personal or compensation details of other staff members. You can review your own personal payslips under the My Payslips tab.`;
-    } else {
-      reply = `Hello ${employee?.firstName || 'there'}! I am your ZenHR AI Assistant. I can help answer questions regarding your leave balances, probation guidelines, attendance policies, and approval workflows. How can I assist you today?`;
-    }
-
-    return { reply, model: 'gemini-policy-engine' };
+    return {
+      reply: `Hello ${employee?.firstName || 'there'}! I am your ZenHR AI Assistant. I can help answer questions regarding your leave balances, probation guidelines, attendance policies, and approval workflows. How can I assist you today?`,
+      model: 'gemini-policy-engine',
+    };
   }
 }

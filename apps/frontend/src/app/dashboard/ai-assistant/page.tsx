@@ -9,7 +9,6 @@ import {
   Bot,
   User,
   Send,
-  Sparkles,
   Lock,
   ArrowRight,
   ShieldAlert,
@@ -148,10 +147,6 @@ export default function AiAssistantPage() {
           </div>
         </div>
 
-        <div className="hidden sm:flex items-center gap-1.5 text-xs text-gray-400">
-          <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-          <span>Gemini 2.0 Flash</span>
-        </div>
       </div>
 
       {!canChat && (

@@ -60,7 +60,7 @@ export default function RegisterPage() {
       <div className="lg:sticky lg:top-0 lg:h-screen">
         <AuthExperiencePanel />
       </div>
-      <main className="flex min-h-[calc(100vh-260px)] items-center justify-center p-4 sm:p-8 lg:min-h-screen">
+      <main className="flex min-h-[calc(100vh-340px)] items-center justify-center p-4 sm:p-8 lg:min-h-screen">
       <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl border border-slate-100 dark:bg-slate-900 dark:border-slate-800 sm:p-8">
         <div className="mb-6 text-center">
           <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-white font-bold text-2xl mb-2 shadow-lg shadow-blue-500/30">
