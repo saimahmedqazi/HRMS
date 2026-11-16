@@ -12,8 +12,8 @@ test.describe('Authentication presentation', () => {
       const panel = page.getByRole('region', { name: 'ZenHR introduction', exact: true });
       await expect(panel).toBeVisible();
       await expect(panel).toContainText('Fictional demo quote');
-      await expect(panel).toContainText('Fictional demo quote');
-      await expect(panel).toContainText('Maya Rahman');
+      await expect(panel).toContainText('A clearer view of our people and everyday HR work, all in one place.');
+      await expect(panel).toContainText('Maya Rahman · HR team lead');
       const controls = panel.getByRole('button', { name: 'Next sample testimonial' });
       const panelBox = await panel.boundingBox();
       const controlsBox = await controls.boundingBox();
@@ -35,13 +35,14 @@ test.describe('Authentication presentation', () => {
   });
 
   test('sample testimonial carousel auto-advances and pauses while hovered', async ({ page }) => {
+    await page.clock.install();
     await page.goto('/login');
     const panel = page.getByRole('region', { name: 'Sample testimonials', exact: true });
     await expect(panel).toContainText('Maya Rahman');
-    await page.waitForTimeout(7000);
+    await page.clock.fastForward(6_500);
     await expect(panel).toContainText('Aariz Hasan');
     await panel.hover();
-    await page.waitForTimeout(7000);
+    await page.clock.fastForward(6_500);
     await expect(panel).toContainText('Aariz Hasan');
   });
 
