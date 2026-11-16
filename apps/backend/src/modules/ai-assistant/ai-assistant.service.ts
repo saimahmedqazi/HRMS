@@ -135,6 +135,59 @@ export class AiAssistantService {
     userRole: UserRole,
     dto: ChatRequestDto,
   ) {
+    const query = dto.message.toLowerCase();
+    const isBalanceQuery = query.includes('balance') || query.includes('how many days');
+    const isSickPolicyQuery = !isBalanceQuery && (
+      query.includes('sick') || query.includes('doctor') || query.includes('prescription')
+    );
+
+    // Most common HR questions should not load the full employee context. Keep these
+    // deterministic answers off Gemini and avoid unrelated database round trips.
+    if (query.includes('probation') || query.includes('break') || query.includes('timer') ||
+      query.includes('alert') || query.includes('work from home') || query.includes('remote') ||
+      query.includes('wfh') || query.includes('home') ||
+      ((query.includes('salary') || query.includes('compensation') || query.includes('earns') || query.includes('pay')) &&
+        !query.includes('my salary') && !query.includes('my pay') && !query.includes('my compensation'))) {
+      return {
+        reply: this.getFastPolicyReply(query, 'ZenHR', [], [])!,
+        model: 'zenhr-policy-engine',
+      };
+    }
+
+    if (isBalanceQuery) {
+      const employee = await this.prisma.employee.findFirst({
+        where: { companyId, userId },
+        select: { id: true },
+      });
+      const balances = employee
+        ? await this.prisma.leaveBalance.findMany({
+            where: { companyId, employeeId: employee.id, year: new Date().getFullYear() },
+            select: { leaveType: true, allocated: true, carried: true, used: true, pending: true },
+          })
+        : [];
+      return {
+        reply: this.getFastPolicyReply(query, 'ZenHR', balances, [])!,
+        model: 'zenhr-policy-engine',
+      };
+    }
+
+    if (isSickPolicyQuery) {
+      const leavePolicies = await this.prisma.leaveTypeSetting.findMany({
+        where: { companyId },
+        select: {
+          leaveType: true,
+          annualAllocation: true,
+          requiresReason: true,
+          requiresMedicalCert: true,
+          isActive: true,
+        },
+      });
+      return {
+        reply: this.getFastPolicyReply(query, 'Your organization', [], leavePolicies)!,
+        model: 'zenhr-policy-engine',
+      };
+    }
+
     // 1. Fetch Company & Employee Context
     const [company, employee, leavePolicies] = await Promise.all([
       this.prisma.company.findUnique({ where: { id: companyId } }),
@@ -220,7 +273,6 @@ SECURITY & PRIVACY RULES:
 - Keep responses concise, supportive, and formatted in bullet points where appropriate.
 `;
 
-    const query = dto.message.toLowerCase();
     const fastPolicyReply = this.getFastPolicyReply(
       query,
       company?.name || 'ZenHR',

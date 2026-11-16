@@ -206,6 +206,8 @@ describe('AiAssistantService', () => {
 
       expect(result.reply).toContain('Sick Leave: 12 days available');
       expect(result.reply).not.toContain('allocates 12 days of Sick Leave per year');
+      expect(prisma.company.findUnique).not.toHaveBeenCalled();
+      expect(prisma.leaveTypeSetting.findMany).not.toHaveBeenCalled();
     });
 
     it('should emphasize mandatory medical doctor prescription for sick leave', async () => {
@@ -220,6 +222,9 @@ describe('AiAssistantService', () => {
       expect(result.reply).toContain('medical doctor prescription or certificate');
       expect(result.reply).toContain('required when you submit');
       expect(result.reply).not.toContain('14 days of Sick Leave');
+      expect(prisma.company.findUnique).not.toHaveBeenCalled();
+      expect(prisma.employee.findFirst).not.toHaveBeenCalled();
+      expect(prisma.leaveBalance.findMany).not.toHaveBeenCalled();
     });
 
     it('uses the tenant medical certificate setting instead of claiming it is mandatory', async () => {
