@@ -29,6 +29,14 @@ function isThirdPartyCompensationQuery(query: string): boolean {
   return asksForIndividualAmount;
 }
 
+function isLeaveBalanceQuery(query: string): boolean {
+  return query.includes('balance') || (
+    /\bhow many\b/.test(query) &&
+    /\bdays?\b/.test(query) &&
+    /\b(left|remaining|available|do i have|my)\b/.test(query)
+  );
+}
+
 @Injectable()
 export class AiAssistantService {
   private readonly logger = new Logger(AiAssistantService.name);
@@ -115,10 +123,7 @@ export class AiAssistantService {
     if (query.includes('probation')) {
       return `According to ${companyName} policy, all newly hired employees undergo a 3-month probation period (90 days from hire date). During active probation, regular leave requests are locked. For medical or emergency absences, please consult HR directly.`;
     }
-    if (query.includes('balance') || (
-      query.includes('how many days') &&
-      ['left', 'remaining', 'available', 'do i have', 'my'].some((term) => query.includes(term))
-    )) {
+    if (isLeaveBalanceQuery(query)) {
       const available = (balance: typeof casualBalance, fallback: number) =>
         balance ? balance.allocated + balance.carried - balance.used - balance.pending : fallback;
       return `Here is your current leave balance:\n• Casual Leave: ${available(casualBalance, 10)} days available\n• Sick Leave: ${available(sickBalance, 12)} days available\n• Annual Leave: ${available(annualBalance, 14)} days available`;
@@ -165,10 +170,7 @@ export class AiAssistantService {
         : query.includes('casual')
           ? 'CASUAL'
           : undefined;
-    const isBalanceQuery = query.includes('balance') || (
-      query.includes('how many days') &&
-      ['left', 'remaining', 'available', 'do i have', 'my'].some((term) => query.includes(term))
-    );
+    const isBalanceQuery = isLeaveBalanceQuery(query);
     const isLeaveWorkflowQuery = query.includes('leave') &&
       ['request', 'apply', 'submit'].some((verb) => query.includes(verb));
     const isSickPolicyQuery = !isBalanceQuery && !isLeaveWorkflowQuery && (

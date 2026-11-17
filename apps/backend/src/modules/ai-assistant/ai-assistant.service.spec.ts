@@ -225,6 +225,21 @@ describe('AiAssistantService', () => {
       expect(prisma.leaveTypeSetting.findMany).not.toHaveBeenCalled();
     });
 
+    it('recognizes leave type before the word days in balance questions', async () => {
+      prisma.employee.findFirst.mockResolvedValueOnce(null);
+
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How many sick leave days do I have left?' },
+      );
+
+      expect(result.reply).toContain('Sick Leave: 12 days available');
+      expect(result.reply).not.toContain('allocates 12 days of Sick Leave per year');
+      expect(prisma.leaveBalance.findMany).not.toHaveBeenCalled();
+    });
+
     it('should emphasize mandatory medical doctor prescription for sick leave', async () => {
       const result = await service.processQuery(
         mockCompanyId,
