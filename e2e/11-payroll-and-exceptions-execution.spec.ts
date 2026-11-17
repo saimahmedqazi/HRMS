@@ -6,6 +6,9 @@ test.describe('Payroll Execution & Exceptions Management Lifecycle', () => {
     let attempts = 0;
     await page.route('**/api/v1/**', (route) => {
       const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/auth/me/modules')) return route.fulfill({ json: { data: {
+        role: 'HR_MANAGER', allowedModules: ['dashboard', 'payroll'],
+      } } });
       if (path.endsWith('/auth/me')) return route.fulfill({ json: { data: {
         id: 'fixture-hr', email: 'fixture@example.test', firstName: 'Fixture', lastName: 'HR',
         companyId: 'fixture-company', role: 'HR_MANAGER',

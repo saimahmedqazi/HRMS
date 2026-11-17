@@ -15,6 +15,9 @@ test.describe('Leave form policy', () => {
         id: 'fixture-employee', role: 'EMPLOYEE', firstName: 'Fixture', lastName: 'Employee', companyId: 'fixture-company',
         employee: { id: 'profile', status: 'ACTIVE' },
       } } });
+      if (path.endsWith('/auth/me/modules')) return route.fulfill({ json: { data: {
+        role: 'EMPLOYEE', allowedModules: ['dashboard', 'my-leave', 'my-profile'],
+      } } });
       if (path.endsWith('/leave/types')) return route.fulfill({ json: { data: settings } });
       if (path.endsWith('/leave/requests') && request.method() === 'POST') {
         submissions.push(request.postData() ?? '');
@@ -314,8 +317,8 @@ test.describe('Leave Management & 2-Step Approval Lifecycle', () => {
     await page.click('button[type="submit"]');
     await page.waitForURL('**/dashboard', { timeout: 15000 });
 
-    await page.click('a[href="/dashboard/leave"]');
-    await page.waitForURL('**/dashboard/leave');
+    await page.click('a[href="/dashboard/my-leave"]');
+    await page.waitForURL('**/dashboard/my-leave');
 
     // Wait for leave data to load
     await expect(page.locator('text=CASUAL LEAVE').first()).toBeVisible({ timeout: 10000 });
@@ -413,8 +416,8 @@ test.describe('Leave Management & 2-Step Approval Lifecycle', () => {
     await page.click('button[type="submit"]');
     await page.waitForURL('**/dashboard', { timeout: 15000 });
 
-    await page.click('a[href="/dashboard/leave"]');
-    await page.waitForURL('**/dashboard/leave');
+    await page.click('a[href="/dashboard/my-leave"]');
+    await page.waitForURL('**/dashboard/my-leave');
 
     // Request table should now display APPROVED badge for this request
     const approvedRow = page.locator(`tr:has-text("${testReason}")`).first();

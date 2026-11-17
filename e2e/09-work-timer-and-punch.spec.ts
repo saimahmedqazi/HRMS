@@ -10,9 +10,13 @@ test('Attendance recovers from a failed lookup and Basic users cannot start the 
   let punchRequests = 0;
   await page.route('**/api/v1/**', (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/auth/me/modules')) return route.fulfill({ json: { data: {
+      role: 'EMPLOYEE', allowedModules: ['dashboard', 'my-attendance', 'work-timer'],
+    } } });
     if (path.endsWith('/auth/me')) return route.fulfill({ json: { data: {
       id: 'fixture-employee', role: 'EMPLOYEE', companyId: 'fixture-company',
       company: { id: 'fixture-company', name: 'Basic Company', subscriptionTier: 'BASIC' },
+      employee: { id: 'fixture-profile', status: 'ACTIVE' },
     } } });
     if (path.endsWith('/attendance/today')) {
       return lookupAvailable
@@ -47,6 +51,9 @@ test('the shared attendance calendar shows approved leave and history validates 
     }));
     await page.route('**/api/v1/**', (route) => {
       const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/auth/me/modules')) return route.fulfill({ json: { data: {
+        role: 'HR_MANAGER', allowedModules: ['dashboard', 'attendance'],
+      } } });
       if (path.endsWith('/auth/me')) return route.fulfill({ json: { data: { id: 'fixture-hr', role: 'HR_MANAGER', firstName: 'Fixture', lastName: 'HR', companyId: 'fixture-company' } } });
       if (path.endsWith('/analytics/overview')) return route.fulfill({ json: { data: { attendanceDate: day } } });
       return route.fulfill({ json: { data: path.endsWith('/attendance/records') ? records : [] } });

@@ -18,7 +18,7 @@ async function mockPlatformSession(page: Page, role: 'SUPER_ADMIN' | 'OPERATION_
       } } });
     }
     if (path.endsWith('/auth/me/modules')) {
-      return route.fulfill({ json: { data: { role, allowedModules: [] } } });
+      return route.fulfill({ json: { data: { role, allowedModules: ['dashboard', 'settings'] } } });
     }
     if (path.endsWith('/notifications')) return route.fulfill({ json: { data: [] } });
     if (path.endsWith('/super-admin/platform-accounts/operation-manager/reset-password')) {
