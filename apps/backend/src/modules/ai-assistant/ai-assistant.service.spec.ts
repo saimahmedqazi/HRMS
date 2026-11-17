@@ -194,6 +194,21 @@ describe('AiAssistantService', () => {
       );
 
       expect(result.reply).toContain('3-month probation period (90 days');
+      expect(result.reply).toContain('Acme Corp policy');
+    });
+
+    it('uses the tenant name for break and remote-work answers', async () => {
+      const breakResult = await service.processQuery(
+        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'Who gets a break overstay alert?' },
+      );
+      const remoteResult = await service.processQuery(
+        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How do I request remote work?' },
+      );
+
+      expect(breakResult.reply).toContain("Acme Corp's ZenHR workspace");
+      expect(breakResult.reply).toContain('Company Admin and HR');
+      expect(breakResult.reply).toContain('Team Lead and Department Manager');
+      expect(remoteResult.reply).toContain("According to Acme Corp's policy");
     });
 
     it('answers a sick leave balance question with available days rather than annual allocation', async () => {
@@ -222,7 +237,10 @@ describe('AiAssistantService', () => {
       expect(result.reply).toContain('medical doctor prescription or certificate');
       expect(result.reply).toContain('required when you submit');
       expect(result.reply).not.toContain('14 days of Sick Leave');
-      expect(prisma.company.findUnique).not.toHaveBeenCalled();
+      expect(prisma.company.findUnique).toHaveBeenCalledWith({
+        where: { id: mockCompanyId },
+        select: { name: true },
+      });
       expect(prisma.employee.findFirst).not.toHaveBeenCalled();
       expect(prisma.leaveBalance.findMany).not.toHaveBeenCalled();
     });
@@ -242,6 +260,17 @@ describe('AiAssistantService', () => {
       expect(result.reply).toContain('8 days of Sick Leave per year');
       expect(result.reply).toContain('does not require a medical certificate');
       expect(result.reply).not.toContain('required when you submit');
+    });
+
+    it('uses the configured 12-day sick allocation when a new tenant has no leave rows yet', async () => {
+      prisma.leaveTypeSetting.findMany.mockResolvedValueOnce([]);
+      prisma.company.findUnique.mockResolvedValueOnce({ id: mockCompanyId, name: 'NewCo' });
+
+      const result = await service.processQuery(
+        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How many sick leave days are allocated?' },
+      );
+
+      expect(result.reply).toContain('NewCo allocates 12 days of Sick Leave per year');
     });
 
     it('answers annual leave request questions quickly without inventing a medical certificate requirement', async () => {
@@ -338,6 +367,31 @@ describe('AiAssistantService', () => {
       );
 
       expect(result.reply).toContain('cannot disclose personal or compensation details of other staff');
+    });
+
+    it('does not mistake payroll processing questions for another employee salary requests', async () => {
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'When will payroll be processed?' },
+      );
+
+      expect(result.model).toBe('zenhr-policy-engine');
+      expect(result.reply).toContain('payroll processing date is not shown');
+      expect(result.reply).not.toContain('cannot disclose');
+      expect(prisma.employee.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('keeps payroll workflow questions distinct from private compensation questions', async () => {
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How does payroll processing work?' },
+      );
+
+      expect(result.reply).not.toContain('cannot disclose');
     });
   });
 });

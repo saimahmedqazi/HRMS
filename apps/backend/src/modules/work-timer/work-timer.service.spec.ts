@@ -138,10 +138,12 @@ describe('WorkTimerService', () => {
       });
       mockPrisma.timerBreak.update.mockResolvedValueOnce({});
       mockPrisma.user.findMany.mockResolvedValueOnce([
-        { id: 'ceo-1', email: 'ceo@acme.com' },
+        { id: 'admin-1', email: 'admin@acme.com' },
+        { id: 'hr-1', email: 'hr@acme.com' },
         { id: 'lead-user', email: 'lead@acme.com' },
+        { id: 'manager-user', email: 'manager@acme.com' },
       ]);
-      mockPrisma.notification.createMany.mockResolvedValueOnce({ count: 2 });
+      mockPrisma.notification.createMany.mockResolvedValueOnce({ count: 4 });
       mockPrisma.workTimerEntry.update.mockResolvedValueOnce({
         id: 'timer-1',
         status: TimerStatus.RUNNING,
@@ -151,16 +153,28 @@ describe('WorkTimerService', () => {
       expect(result.status).toBe(TimerStatus.RUNNING);
       expect(mockGateway.broadcastBreakAlert).toHaveBeenCalledWith(
         'comp-premium',
-        ['ceo-1', 'lead-user'],
+        ['admin-1', 'hr-1', 'lead-user', 'manager-user'],
       );
+      expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          companyId: 'comp-premium',
+          OR: expect.arrayContaining([
+            { role: { in: [UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER] } },
+            { role: UserRole.TEAM_LEAD, employee: { id: 'lead-1', companyId: 'comp-premium' } },
+            { role: UserRole.DEPARTMENT_MANAGER, employee: { id: 'mgr-1', companyId: 'comp-premium' } },
+          ]),
+        }),
+      }));
       expect(mockPrisma.workTimerEntry.updateMany).toHaveBeenCalledWith(expect.objectContaining({
         where: expect.objectContaining({ id: 'timer-1', companyId: 'comp-premium', breakAlertedAt: null }),
       }));
       expect(mockPrisma.notification.createMany).toHaveBeenCalledWith({ data: [
-        expect.objectContaining({ companyId: 'comp-premium', userId: 'ceo-1' }),
+        expect.objectContaining({ companyId: 'comp-premium', userId: 'admin-1' }),
+        expect.objectContaining({ companyId: 'comp-premium', userId: 'hr-1' }),
         expect.objectContaining({ companyId: 'comp-premium', userId: 'lead-user' }),
+        expect.objectContaining({ companyId: 'comp-premium', userId: 'manager-user' }),
       ] });
-      expect(mockMailService.sendMail).toHaveBeenCalledTimes(2);
+      expect(mockMailService.sendMail).toHaveBeenCalledTimes(4);
     });
   });
 

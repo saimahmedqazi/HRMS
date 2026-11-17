@@ -10,6 +10,25 @@ const GEMINI_TIMEOUT_MS = 15_000;
 const PREFERRED_MODEL_TIMEOUT_MS = 5_000;
 const GEMINI_MIN_SERVER_TIMEOUT_MS = 10_000;
 
+function isThirdPartyCompensationQuery(query: string): boolean {
+  const asksAboutCompensation = /\b(salar(?:y|ies)|compensation|earnings?|wages?|remuneration|pay)\b/.test(query);
+  if (!asksAboutCompensation) return false;
+
+  // Payroll processing and general HR policy are not requests for a coworker's
+  // private salary. Keep a focused privacy guard for requests about people.
+  const isPayrollOrPolicyQuestion = /\b(payroll|pay run|processing|processed|pay date|payday|salary review|salary band|salary structure|compensation policy|wage policy)\b/.test(query);
+  if (isPayrollOrPolicyQuestion) return false;
+
+  const refersToAnotherPerson = /\b(other|another|someone else|colleague|coworker|co-worker|employee|employees|staff|team member|team members|their|his|her|them)\b/.test(query);
+  if (refersToAnotherPerson) return true;
+
+  const isAboutCurrentUser = /\b(my|mine|me|i|i'm|i am|our|we)\b/.test(query);
+  if (isAboutCurrentUser) return false;
+
+  const asksForIndividualAmount = /\b(how much|what is|what's|show|tell|list|give)\b/.test(query);
+  return asksForIndividualAmount;
+}
+
 @Injectable()
 export class AiAssistantService {
   private readonly logger = new Logger(AiAssistantService.name);
@@ -102,28 +121,28 @@ export class AiAssistantService {
     )) {
       const available = (balance: typeof casualBalance, fallback: number) =>
         balance ? balance.allocated + balance.carried - balance.used - balance.pending : fallback;
-      return `Here is your current leave balance:\n• Casual Leave: ${available(casualBalance, 10)} days available\n• Sick Leave: ${available(sickBalance, 14)} days available\n• Annual Leave: ${available(annualBalance, 14)} days available`;
+      return `Here is your current leave balance:\n• Casual Leave: ${available(casualBalance, 10)} days available\n• Sick Leave: ${available(sickBalance, 12)} days available\n• Annual Leave: ${available(annualBalance, 14)} days available`;
     }
     if (query.includes('sick') || query.includes('doctor') || query.includes('prescription')) {
       if (sickPolicy && !sickPolicy.isActive) {
         return `Sick Leave is currently unavailable under ${companyName}'s leave policy. Please contact HR for guidance.`;
       }
-      const allocation = sickPolicy?.annualAllocation ?? sickBalance?.allocated ?? 14;
+      const allocation = sickPolicy?.annualAllocation ?? sickBalance?.allocated ?? 12;
       const medicalCertificateRule = (sickPolicy?.requiresMedicalCert ?? true)
         ? ' An official medical doctor prescription or certificate (PDF/JPG/PNG) is required when you submit a Sick Leave request.'
         : ' Your current Sick Leave policy does not require a medical certificate when you submit the request.';
       return `${companyName} allocates ${allocation} days of Sick Leave per year.${medicalCertificateRule}`;
     }
     if (query.includes('break') || query.includes('timer') || query.includes('alert')) {
-      return 'The ZenHR Work Timer tracks your active time and breaks. If your cumulative break time exceeds 60 minutes in a single shift, a real-time overstay notification is broadcast to your Team Lead and Department Manager.';
+      return `The Work Timer in ${companyName}'s ZenHR workspace tracks active time and breaks. When cumulative break time exceeds the allowed limit for a shift, an overstay alert goes to Company Admin and HR, and to the employee's Team Lead and Department Manager when those roles are assigned.`;
     }
     if (query.includes('work from home') || query.includes('remote') || query.includes('wfh') || query.includes('home')) {
-      return 'To apply to work from home (Remote Work):\n1. Open **Attendance** or **My Attendance** on your dashboard.\n2. In Remote Work Requests, click **New Remote Work Request**.\n3. Enter the start date, end date, and reason.\n4. Submit the request for Step 1 recommendation and Step 2 approval.\n\nOnce approved, you can punch in remotely without triggering HR exceptions.';
+      return `According to ${companyName}'s policy, to apply to work from home (Remote Work):\n1. Open **Attendance** or **My Attendance** on your dashboard.\n2. In Remote Work Requests, click **New Remote Work Request**.\n3. Enter the start date, end date, and reason.\n4. Submit the request for Step 1 recommendation and Step 2 approval.\n\nOnce approved, you can punch in remotely without triggering HR exceptions.`;
     }
-    if (
-      (query.includes('salary') || query.includes('compensation') || query.includes('earns') || query.includes('pay')) &&
-      !query.includes('my salary') && !query.includes('my pay') && !query.includes('my compensation')
-    ) {
+    if (query.includes('payroll') && /\b(when|date|process|processed|processing|run|payday)\b/.test(query)) {
+      return `${companyName}'s payroll processing date is not shown in the assistant. Check My Payslips for issued payslips, or ask HR about the next processing date.`;
+    }
+    if (isThirdPartyCompensationQuery(query)) {
       return 'For privacy and data compliance reasons, I cannot disclose personal or compensation details of other staff members. You can review your own personal payslips under the My Payslips tab.';
     }
     return undefined;
@@ -159,13 +178,19 @@ export class AiAssistantService {
 
     // Most common HR questions should not load the full employee context. Keep these
     // deterministic answers off Gemini and avoid unrelated database round trips.
-    if (query.includes('probation') || query.includes('break') || query.includes('timer') ||
+    const isFastPolicyQuery = query.includes('probation') || query.includes('break') || query.includes('timer') ||
       query.includes('alert') || query.includes('work from home') || query.includes('remote') ||
       query.includes('wfh') || query.includes('home') ||
-      ((query.includes('salary') || query.includes('compensation') || query.includes('earns') || query.includes('pay')) &&
-        !query.includes('my salary') && !query.includes('my pay') && !query.includes('my compensation'))) {
+      (query.includes('payroll') && /\b(when|date|process|processed|processing|run|payday)\b/.test(query)) ||
+      isThirdPartyCompensationQuery(query);
+
+    if (isFastPolicyQuery) {
+      const company = await this.prisma.company.findUnique({
+        where: { id: companyId },
+        select: { name: true },
+      });
       return {
-        reply: this.getFastPolicyReply(query, 'ZenHR', [], [])!,
+        reply: this.getFastPolicyReply(query, company?.name || 'your company', [], [])!,
         model: 'zenhr-policy-engine',
       };
     }
@@ -182,7 +207,7 @@ export class AiAssistantService {
           })
         : [];
       return {
-        reply: this.getFastPolicyReply(query, 'ZenHR', balances, [])!,
+        reply: this.getFastPolicyReply(query, 'your company', balances, [])!,
         model: 'zenhr-policy-engine',
       };
     }
@@ -198,8 +223,12 @@ export class AiAssistantService {
           isActive: true,
         },
       });
+      const company = await this.prisma.company.findUnique({
+        where: { id: companyId },
+        select: { name: true },
+      });
       return {
-        reply: this.getFastPolicyReply(query, 'Your organization', [], leavePolicies)!,
+        reply: this.getFastPolicyReply(query, company?.name || 'your company', [], leavePolicies)!,
         model: 'zenhr-policy-engine',
       };
     }
@@ -321,7 +350,7 @@ ORGANIZATIONAL POLICIES:
 1. Probation Period: New employees have a standard 3-month probation period (90 days from hire date). Leave requests are locked during probation.
 2. Leave Policies:
    ${policyFor('CASUAL', 10, true)}
-   ${policyFor('SICK', 14, false, true)}
+   ${policyFor('SICK', 12, false, true)}
    ${policyFor('ANNUAL', 14)}
 3. Approval Line:
    - Employees route to Team Lead (Step 1) -> HR Manager (Step 2).
@@ -329,7 +358,7 @@ ORGANIZATIONAL POLICIES:
    - Department Managers route directly to CEO / Company Admin.
 4. Attendance & Timer:
    - Work Timer tracks active hours and breaks.
-   - Accumulated break time exceeding 60 minutes triggers real-time alerts to the Team Lead and Department Manager.
+   - A break that exceeds the shift's allowed break time triggers alerts to Company Admin and HR, and to the employee's assigned Team Lead and Department Manager when present.
    - Overtime is computed on checkout when work exceeds standard shift hours.
 5. Remote Work / Work From Home (WFH):
    - Employees can request remote work permission from the Attendance page by clicking "New Remote Work Request".
@@ -342,7 +371,7 @@ EMPLOYEE CONTEXT:
 - Department: ${employee?.department?.name || 'General'}
 - Available Leave Balances:
   - Casual: ${casualBalance ? casualBalance.allocated + casualBalance.carried - casualBalance.used - casualBalance.pending : 10} days
-  - Sick: ${sickBalance ? sickBalance.allocated + sickBalance.carried - sickBalance.used - sickBalance.pending : 14} days
+  - Sick: ${sickBalance ? sickBalance.allocated + sickBalance.carried - sickBalance.used - sickBalance.pending : 12} days
   - Annual: ${annualBalance ? annualBalance.allocated + annualBalance.carried - annualBalance.used - annualBalance.pending : 14} days
 
 SECURITY & PRIVACY RULES:
