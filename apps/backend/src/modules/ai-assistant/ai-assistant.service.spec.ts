@@ -408,5 +408,16 @@ describe('AiAssistantService', () => {
 
       expect(result.reply).not.toContain('cannot disclose');
     });
+
+    it('does not treat a general pay policy question as a request for a coworker salary', async () => {
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'What does the pay scale mean?' },
+      );
+
+      expect(result.reply).not.toContain('cannot disclose');
+    });
   });
 });

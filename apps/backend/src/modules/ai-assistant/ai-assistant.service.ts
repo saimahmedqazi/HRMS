@@ -20,13 +20,7 @@ function isThirdPartyCompensationQuery(query: string): boolean {
   if (isPayrollOrPolicyQuestion) return false;
 
   const refersToAnotherPerson = /\b(other|another|someone else|colleague|coworker|co-worker|employee|employees|staff|team member|team members|their|his|her|them)\b/.test(query);
-  if (refersToAnotherPerson) return true;
-
-  const isAboutCurrentUser = /\b(my|mine|me|i|i'm|i am|our|we)\b/.test(query);
-  if (isAboutCurrentUser) return false;
-
-  const asksForIndividualAmount = /\b(how much|what is|what's|show|tell|list|give)\b/.test(query);
-  return asksForIndividualAmount;
+  return refersToAnotherPerson;
 }
 
 function isLeaveBalanceQuery(query: string): boolean {
