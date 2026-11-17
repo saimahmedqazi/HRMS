@@ -410,6 +410,14 @@ describe('AiAssistantService', () => {
     });
 
     it('does not treat a general pay policy question as a request for a coworker salary', async () => {
+      const generateContent = jest.fn();
+      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
+        models: { generateContent },
+      }) as unknown as GoogleGenAI);
+      const configuredService = new AiAssistantService(prisma, new ConfigService({
+        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '',
+      }));
+
       const result = await service.processQuery(
         mockCompanyId,
         mockUserId,
@@ -417,7 +425,22 @@ describe('AiAssistantService', () => {
         { message: 'What does the pay scale mean?' },
       );
 
+      expect(result.reply).toContain('At Acme Corp');
+      expect(result.reply).toContain('base pay');
       expect(result.reply).not.toContain('cannot disclose');
+      expect(result.model).toBe('zenhr-policy-engine');
+      expect(generateContent).not.toHaveBeenCalled();
+    });
+
+    it('still refuses a coworker pay-scale question', async () => {
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'What pay scale does my colleague have?' },
+      );
+
+      expect(result.reply).toContain('cannot disclose personal or compensation details of other staff');
     });
   });
 });

@@ -14,13 +14,12 @@ function isThirdPartyCompensationQuery(query: string): boolean {
   const asksAboutCompensation = /\b(salar(?:y|ies)|compensation|earnings?|wages?|remuneration|pay)\b/.test(query);
   if (!asksAboutCompensation) return false;
 
-  // Payroll processing and general HR policy are not requests for a coworker's
-  // private salary. Keep a focused privacy guard for requests about people.
-  const isPayrollOrPolicyQuestion = /\b(payroll|pay run|processing|processed|pay date|payday|salary review|salary band|salary structure|compensation policy|wage policy)\b/.test(query);
-  if (isPayrollOrPolicyQuestion) return false;
-
-  const refersToAnotherPerson = /\b(other|another|someone else|colleague|coworker|co-worker|employee|employees|staff|team member|team members|their|his|her|them)\b/.test(query);
-  return refersToAnotherPerson;
+  // Refuse requests about another person's compensation, including a pay
+  // band or structure. A generic policy question may mention employees as a
+  // group, so broad role nouns alone are not enough to trigger the refusal.
+  return /\b(other|another|someone else|somebody else|colleague|coworker|co-worker|their|his|her|them)\b/.test(query) ||
+    /\b(?:employee|staff member|team member)'s\b/.test(query) ||
+    /\b(?:salary|pay|compensation|earnings?|wages?)\s+(?:of|for)\s+(?:an?\s+)?(?:employee|staff member|team member)\b/.test(query);
 }
 
 function isLeaveBalanceQuery(query: string): boolean {
@@ -144,6 +143,9 @@ export class AiAssistantService {
     if (isThirdPartyCompensationQuery(query)) {
       return 'For privacy and data compliance reasons, I cannot disclose personal or compensation details of other staff members. You can review your own personal payslips under the My Payslips tab.';
     }
+    if (/\b(pay scale|pay band|salary band|salary structure|compensation policy|wage policy)\b/.test(query)) {
+      return `At ${companyName}, a pay scale or salary structure describes the base pay and any recurring earnings, deductions, and configured tax rules for a role or employee package. HR sets the actual values for each package. Check My Payslips for your own issued pay or ask HR about your assigned structure.`;
+    }
     return undefined;
   }
 
@@ -178,6 +180,7 @@ export class AiAssistantService {
       query.includes('alert') || query.includes('work from home') || query.includes('remote') ||
       query.includes('wfh') || query.includes('home') ||
       (query.includes('payroll') && /\b(when|date|process|processed|processing|run|payday)\b/.test(query)) ||
+      /\b(pay scale|pay band|salary band|salary structure|compensation policy|wage policy)\b/.test(query) ||
       isThirdPartyCompensationQuery(query);
 
     if (isFastPolicyQuery) {
