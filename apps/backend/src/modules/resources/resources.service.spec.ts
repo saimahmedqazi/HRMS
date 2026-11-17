@@ -108,6 +108,32 @@ describe('ResourcesService', () => {
     });
   });
 
+  describe('getResourceRequests', () => {
+    it.each([UserRole.SUPER_ADMIN, UserRole.OPERATION_MANAGER])(
+      'returns no tenant requests for platform role %s without a company context',
+      async (role) => {
+        await expect(service.getResourceRequests('', { id: mockUserId, role })).resolves.toEqual([]);
+        expect(prisma.resourceRequest.findMany).not.toHaveBeenCalled();
+      },
+    );
+
+    it('constrains company-admin requests to the active company', async () => {
+      prisma.resourceRequest.findMany.mockResolvedValue([]);
+
+      await service.getResourceRequests(mockCompanyId, {
+        id: mockUserId,
+        role: UserRole.COMPANY_ADMIN,
+      });
+
+      expect(prisma.resourceRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          companyId: mockCompanyId,
+          requestedBy: { companyId: mockCompanyId, deletedAt: null },
+        }),
+      }));
+    });
+  });
+
   describe('approveResourceRequest', () => {
     it('should approve resource request and transition status to STEP_1_APPROVED', async () => {
       const mockReq = {
