@@ -8,6 +8,7 @@ import {
   Res,
   UseGuards,
   StreamableFile,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiCookieAuth } from '@nestjs/swagger';
@@ -67,8 +68,9 @@ export class PayrollController {
     @Query('month') month?: string,
     @Query('year') year?: string,
   ) {
+    const companyId = this.requireCompanyId(user);
     return this.payrollService.getDepartmentPayrollSummary(
-      user.companyId,
+      companyId,
       user,
       month ? parseInt(month, 10) : undefined,
       year ? parseInt(year, 10) : undefined,
@@ -83,7 +85,8 @@ export class PayrollController {
     @Query('year') year?: string,
     @Query('employeeId') employeeId?: string,
   ) {
-    return this.payrollService.getPayslips(user.companyId, user, {
+    const companyId = this.requireCompanyId(user);
+    return this.payrollService.getPayslips(companyId, user, {
       month: month ? parseInt(month, 10) : undefined,
       year: year ? parseInt(year, 10) : undefined,
       employeeId,
@@ -96,7 +99,8 @@ export class PayrollController {
     @CurrentUser() user: any,
     @Param('id') id: string,
   ) {
-    return this.payrollService.getPayslipById(user.companyId, id, user);
+    const companyId = this.requireCompanyId(user);
+    return this.payrollService.getPayslipById(companyId, id, user);
   }
 
   @Get('payslips/:id/pdf')
@@ -106,8 +110,9 @@ export class PayrollController {
     @Param('id') id: string,
     @Res({ passthrough: true }) res: Response,
   ) {
+    const companyId = this.requireCompanyId(user);
     const { buffer, filename } = await this.payrollService.generatePayslipPdfBuffer(
-      user.companyId,
+      companyId,
       id,
       user,
     );
@@ -147,5 +152,13 @@ export class PayrollController {
     });
 
     return new StreamableFile(buffer);
+  }
+
+  private requireCompanyId(user: { companyId?: string | null; supportModeCompanyId?: string | null }): string {
+    const companyId = user.supportModeCompanyId || user.companyId;
+    if (!companyId) {
+      throw new ForbiddenException('Company context required');
+    }
+    return companyId;
   }
 }
