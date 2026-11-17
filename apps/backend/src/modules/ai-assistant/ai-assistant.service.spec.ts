@@ -442,5 +442,41 @@ describe('AiAssistantService', () => {
 
       expect(result.reply).toContain('cannot disclose personal or compensation details of other staff');
     });
+
+    it('answers a general pay question without asking Gemini to infer a privacy violation', async () => {
+      const generateContent = jest.fn();
+      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
+        models: { generateContent },
+      }) as unknown as GoogleGenAI);
+      const configuredService = new AiAssistantService(prisma, new ConfigService({
+        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '',
+      }));
+
+      const result = await configuredService.processQuery(
+        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How is pay determined?' },
+      );
+
+      expect(result.model).toBe('zenhr-policy-engine');
+      expect(result.reply).toContain('At Acme Corp, pay is managed');
+      expect(result.reply).not.toContain('cannot disclose');
+      expect(generateContent).not.toHaveBeenCalled();
+    });
+
+    it('directs employees to their own payslips for personal pay questions', async () => {
+      const result = await service.processQuery(
+        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'What is my pay?' },
+      );
+
+      expect(result.reply).toContain('check My Payslips');
+      expect(result.reply).not.toContain('cannot disclose');
+    });
+
+    it('still refuses a direct request for a colleague’s pay', async () => {
+      const result = await service.processQuery(
+        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How much does my colleague get paid?' },
+      );
+
+      expect(result.reply).toContain('cannot disclose personal or compensation details of other staff');
+    });
   });
 });

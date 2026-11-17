@@ -11,7 +11,7 @@ const PREFERRED_MODEL_TIMEOUT_MS = 5_000;
 const GEMINI_MIN_SERVER_TIMEOUT_MS = 10_000;
 
 function isThirdPartyCompensationQuery(query: string): boolean {
-  const asksAboutCompensation = /\b(salar(?:y|ies)|compensation|earnings?|wages?|remuneration|pay)\b/.test(query);
+  const asksAboutCompensation = /\b(salar(?:y|ies)|compensation|earnings?|wages?|remuneration|pay(?:ing|ed)?|paid)\b/.test(query);
   if (!asksAboutCompensation) return false;
 
   // Refuse requests about another person's compensation, including a pay
@@ -20,6 +20,14 @@ function isThirdPartyCompensationQuery(query: string): boolean {
   return /\b(other|another|someone else|somebody else|colleague|coworker|co-worker|their|his|her|them)\b/.test(query) ||
     /\b(?:employee|staff member|team member)'s\b/.test(query) ||
     /\b(?:salary|pay|compensation|earnings?|wages?)\s+(?:of|for)\s+(?:an?\s+)?(?:employee|staff member|team member)\b/.test(query);
+}
+
+function isCompensationQuery(query: string): boolean {
+  return /\b(salar(?:y|ies)|compensation|earnings?|wages?|remuneration|pay(?:ing|ed)?|paid)\b/.test(query);
+}
+
+function isPersonalCompensationQuery(query: string): boolean {
+  return /\b(my|mine|me|i|i'm|i am)\b/.test(query);
 }
 
 function isLeaveBalanceQuery(query: string): boolean {
@@ -143,8 +151,14 @@ export class AiAssistantService {
     if (isThirdPartyCompensationQuery(query)) {
       return 'For privacy and data compliance reasons, I cannot disclose personal or compensation details of other staff members. You can review your own personal payslips under the My Payslips tab.';
     }
+    if (isCompensationQuery(query) && isPersonalCompensationQuery(query)) {
+      return 'For your own pay details, check My Payslips for issued payslips or ask HR about your assigned pay structure.';
+    }
     if (/\b(pay scale|pay band|salary band|salary structure|compensation policy|wage policy)\b/.test(query)) {
       return `At ${companyName}, a pay scale or salary structure describes the base pay and any recurring earnings, deductions, and configured tax rules for a role or employee package. HR sets the actual values for each package. Check My Payslips for your own issued pay or ask HR about your assigned structure.`;
+    }
+    if (isCompensationQuery(query)) {
+      return `At ${companyName}, pay is managed through the organization's configured payroll and compensation policies. Individual pay details are private; ask HR about the policy or assigned pay structure.`;
     }
     return undefined;
   }
@@ -180,8 +194,7 @@ export class AiAssistantService {
       query.includes('alert') || query.includes('work from home') || query.includes('remote') ||
       query.includes('wfh') || query.includes('home') ||
       (query.includes('payroll') && /\b(when|date|process|processed|processing|run|payday)\b/.test(query)) ||
-      /\b(pay scale|pay band|salary band|salary structure|compensation policy|wage policy)\b/.test(query) ||
-      isThirdPartyCompensationQuery(query);
+      isCompensationQuery(query);
 
     if (isFastPolicyQuery) {
       const company = await this.prisma.company.findUnique({
