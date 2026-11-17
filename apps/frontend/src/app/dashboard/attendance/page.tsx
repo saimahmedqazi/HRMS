@@ -84,7 +84,8 @@ function getPunchLocation(userId: string): Promise<{ latitude: number; longitude
 export default function AttendanceDashboardPage() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const canUseTimer = (user?.supportModeCompany ?? user?.company)?.subscriptionTier === 'PREMIUM';
+  const hasEmployeeContext = Boolean(user?.employee?.id);
+  const canUseTimer = hasEmployeeContext && (user?.supportModeCompany ?? user?.company)?.subscriptionTier === 'PREMIUM';
   const isHrOrAdmin =
     user?.role === 'SUPER_ADMIN' ||
     user?.role === 'COMPANY_ADMIN' ||
@@ -104,14 +105,15 @@ export default function AttendanceDashboardPage() {
 
   // Fetch today's attendance
   const attendanceQuery = useQuery({
-    queryKey: ['attendance-today'],
+    queryKey: ['attendance-today', user?.id, user?.supportModeCompanyId ?? user?.companyId, user?.employee?.id],
     queryFn: () => api.get<any>('/attendance/today'),
+    enabled: hasEmployeeContext,
     refetchInterval: 60_000,
   });
 
   // Fetch today's work timer
   const timerQuery = useQuery({
-    queryKey: ['timer-today'],
+    queryKey: ['timer-today', user?.id, user?.supportModeCompanyId ?? user?.companyId, user?.employee?.id],
     queryFn: () => api.get<any>('/timer/today'),
     enabled: canUseTimer,
     refetchInterval: 60_000,
@@ -471,6 +473,7 @@ export default function AttendanceDashboardPage() {
       {/* Main Grid: Punch Card + Work Timer */}
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         {/* Attendance Punch Card */}
+        {hasEmployeeContext ? (
         <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
@@ -631,6 +634,16 @@ export default function AttendanceDashboardPage() {
             </div>
           )}
         </div>
+        ) : (
+          <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+            <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+              <Clock className="h-5 w-5 text-indigo-600" /> Daily Punch
+            </h2>
+            <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
+              Personal check-in and check-out are available to users with an employee profile. You can still review this organization&apos;s attendance records below.
+            </p>
+          </div>
+        )}
 
         {/* Work Timer (Premium) */}
         <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
@@ -660,7 +673,7 @@ export default function AttendanceDashboardPage() {
           )}
           <div className="flex items-center justify-center gap-3">
             {!canUseTimer ? (
-              <p className="text-center text-sm text-zinc-500">Work Timer is available on ZenHR Premium.</p>
+              <p className="text-center text-sm text-zinc-500">{hasEmployeeContext ? 'Work Timer is available on ZenHR Premium.' : 'Work Timer is available to users with an employee profile.'}</p>
             ) : timerQuery.isError ? (
               <div className="text-center text-sm text-rose-700 dark:text-rose-300">
                 <p role="alert">The work timer couldn&apos;t load.</p>

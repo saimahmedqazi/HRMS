@@ -61,6 +61,7 @@ export interface UserProfile {
 interface AuthContextType {
   user: UserProfile | null;
   allowedModules: string[];
+  modulesLoading: boolean;
   isLoading: boolean;
   sessionUnavailable: boolean;
   isAuthenticated: boolean;
@@ -71,6 +72,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>({
   user: null,
   allowedModules: [],
+  modulesLoading: true,
   isLoading: true,
   sessionUnavailable: false,
   isAuthenticated: false,
@@ -93,7 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
   const user = sessionError instanceof ApiError && sessionError.status === 401 ? null : cachedUser;
 
-  const { data: moduleData } = useQuery({
+  const { data: moduleData, isLoading: modulesLoading } = useQuery({
     queryKey: ['auth', 'modules'],
     queryFn: () => api.get<{ role: UserRole; allowedModules: string[] }>('/auth/me/modules'),
     enabled: !!user,
@@ -114,6 +116,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         user: user || null,
         allowedModules: moduleData?.allowedModules || [],
+        modulesLoading,
         isLoading: userLoading,
         sessionUnavailable: !user && !!sessionError && !(sessionError instanceof ApiError && sessionError.status === 401),
         isAuthenticated: !!user,

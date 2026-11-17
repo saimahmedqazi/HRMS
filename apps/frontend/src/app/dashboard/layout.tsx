@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useAuth, type UserRole } from '@/lib/auth-context';
+import { useAuth, type UserProfile, type UserRole } from '@/lib/auth-context';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
 import { SupportModeBanner } from '@/components/layout/support-mode-banner';
@@ -13,10 +13,51 @@ const tenantRouteRoles: Partial<Record<string, readonly UserRole[]>> = {
   '/dashboard/attendance/exceptions': ['SUPER_ADMIN', 'COMPANY_ADMIN', 'HR_MANAGER'],
 };
 
+const moduleRoutePrefixes: ReadonlyArray<readonly [string, string]> = [
+  ['/dashboard/employees', 'employees'],
+  ['/dashboard/team-members', 'team-members'],
+  ['/dashboard/departments', 'departments'],
+  ['/dashboard/attendance', 'attendance'],
+  ['/dashboard/my-attendance', 'my-attendance'],
+  ['/dashboard/work-timer', 'work-timer'],
+  ['/dashboard/leave-approvals', 'leave-approvals'],
+  ['/dashboard/my-leave', 'my-leave'],
+  ['/dashboard/leave', 'leave'],
+  ['/dashboard/payroll-view', 'payroll-view'],
+  ['/dashboard/my-payslips', 'my-payslips'],
+  ['/dashboard/payroll', 'payroll'],
+  ['/dashboard/bulk-import', 'bulk-import'],
+  ['/dashboard/resources', 'resources'],
+  ['/dashboard/ai-assistant', 'ai-assistant'],
+  ['/dashboard/my-profile', 'my-profile'],
+  ['/dashboard/support-mode', 'support-mode'],
+  ['/dashboard/companies', 'companies'],
+  ['/dashboard/billing', 'billing'],
+  ['/dashboard/settings', 'settings'],
+];
+
+function hasModuleAccess(pathname: string, user: UserProfile, allowedModules: string[]): boolean {
+  if (pathname === '/dashboard' || pathname === '/dashboard/') {
+    return allowedModules.includes('dashboard');
+  }
+
+  const employeeDetailPrefix = '/dashboard/employees/';
+  if (pathname.startsWith(employeeDetailPrefix)) {
+    if (allowedModules.includes('employees') || allowedModules.includes('team-members')) return true;
+    const employeeId = pathname.slice(employeeDetailPrefix.length).split('/')[0];
+    return allowedModules.includes('my-profile') && Boolean(user.employee?.id) && employeeId === user.employee?.id;
+  }
+
+  const requiredModule = moduleRoutePrefixes.find(([prefix]) =>
+    pathname === prefix || pathname.startsWith(`${prefix}/`),
+  )?.[1];
+  return !requiredModule || allowedModules.includes(requiredModule);
+}
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, isLoading, sessionUnavailable, refetchUser } = useAuth();
+  const { user, allowedModules, modulesLoading, isLoading, sessionUnavailable, refetchUser } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
 
@@ -54,6 +95,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const canOpenRoute = !requiredRoles || (
     requiredRoles.includes(user.role) && Boolean(user.companyId || user.supportModeCompanyId)
   );
+  const canOpenModule = hasModuleAccess(pathname, user, allowedModules);
+
+  if (modulesLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <div className="flex flex-col items-center gap-2">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent" />
+          <p className="text-sm text-slate-500">Checking page access…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950">
@@ -62,7 +115,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <Header onMenuClick={() => setMobileMenuOpen(true)} mobileMenuOpen={mobileMenuOpen} />
         <SupportModeBanner />
         <main className="flex-1 overflow-y-auto p-4 md:p-6 min-w-0">
-          {canOpenRoute ? children : (
+          {canOpenRoute && canOpenModule ? children : (
             <section className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
               <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Access Denied</h1>
               <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">You don’t have access to this page.</p>
