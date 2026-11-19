@@ -108,5 +108,17 @@ describe('DataScopeService', () => {
       expect(modules).not.toContain('companies');
       expect(modules).not.toContain('billing');
     });
+
+    it('grants my-payslips to TEAM_LEAD and DEPARTMENT_MANAGER while preserving payroll admin boundaries', () => {
+      const leadModules = service.getAllowedModules(UserRole.TEAM_LEAD);
+      expect(leadModules).toContain('my-payslips');
+      expect(leadModules).not.toContain('payroll');
+      expect(leadModules).not.toContain('payroll-view');
+
+      const mgrModules = service.getAllowedModules(UserRole.DEPARTMENT_MANAGER);
+      expect(mgrModules).toContain('my-payslips');
+      expect(mgrModules).toContain('payroll-view');
+      expect(mgrModules).not.toContain('payroll');
+    });
   });
 });

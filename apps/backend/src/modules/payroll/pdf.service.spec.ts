@@ -68,5 +68,31 @@ describe('PdfService', () => {
       expect(buffer.length).toBeGreaterThan(500);
       expect(buffer.subarray(0, 4).toString()).toBe('%PDF');
     });
+
+    it('supports non-USD currencies, performance bonuses, and adjustment notes in single and bulk PDFs', async () => {
+      const sample = {
+        companyName: 'Acme Europe',
+        employeeName: 'Ada Lovelace',
+        employeeCode: 'EMP-042',
+        departmentName: 'Engineering',
+        month: 11,
+        year: 2026,
+        currencyCode: 'EUR',
+        baseSalary: 5000,
+        allowances: 500,
+        bonuses: 750,
+        deductions: 200,
+        taxAmount: 600,
+        netSalary: 5450,
+        adjustmentNote: 'Annual performance bonus',
+      };
+
+      const single = await service.generatePayslipPdf(sample);
+      const bulk = await service.generateBulkPayslipsPdf([sample]);
+
+      expect(single.subarray(0, 4).toString()).toBe('%PDF');
+      expect(bulk.subarray(0, 4).toString()).toBe('%PDF');
+      expect(bulk.length).toBeGreaterThan(400);
+    });
   });
 });

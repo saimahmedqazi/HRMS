@@ -2,6 +2,8 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
+  Delete,
   Body,
   Param,
   Query,
@@ -9,6 +11,7 @@ import {
   UseGuards,
   StreamableFile,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiCookieAuth } from '@nestjs/swagger';
@@ -20,6 +23,8 @@ import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { PayrollService } from './payroll.service';
 import { CreatePayrollStructureDto } from './dto/create-payroll-structure.dto';
 import { ExecutePayrollRunDto } from './dto/execute-payroll-run.dto';
+import { UpdatePayslipDto } from './dto/update-payslip.dto';
+import { MarkPayrollPaidDto } from './dto/mark-payroll-paid.dto';
 
 @ApiTags('Payroll Management')
 @ApiCookieAuth()
@@ -35,14 +40,39 @@ export class PayrollController {
     @CurrentUser() user: any,
     @Body() dto: CreatePayrollStructureDto,
   ) {
-    return this.payrollService.createStructure(user.companyId, dto);
+    const companyId = this.requireTenantPayrollWriteCompanyId(user);
+    return this.payrollService.createStructure(companyId, dto);
   }
 
   @Get('structures')
   @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
   @ApiOperation({ summary: 'List company salary structures' })
   async getStructures(@CurrentUser() user: any) {
-    return this.payrollService.getStructures(user.companyId);
+    const companyId = this.requireCompanyId(user);
+    return this.payrollService.getStructures(companyId);
+  }
+
+  @Patch('structures/:id')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  @ApiOperation({ summary: 'Update a company salary structure' })
+  async updateStructure(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() dto: CreatePayrollStructureDto,
+  ) {
+    const companyId = this.requireTenantPayrollWriteCompanyId(user);
+    return this.payrollService.updateStructure(companyId, id, dto);
+  }
+
+  @Delete('structures/:id')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  @ApiOperation({ summary: 'Archive (soft-delete) an unused non-default salary structure' })
+  async deleteStructure(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+  ) {
+    const companyId = this.requireTenantPayrollWriteCompanyId(user);
+    return this.payrollService.deleteStructure(companyId, id, user.id);
   }
 
   @Post('runs')
@@ -52,7 +82,19 @@ export class PayrollController {
     @CurrentUser() user: any,
     @Body() dto: ExecutePayrollRunDto,
   ) {
-    return this.payrollService.executePayrollRun(user.companyId, user.id, dto);
+    const companyId = this.requireTenantPayrollWriteCompanyId(user);
+    return this.payrollService.executePayrollRun(companyId, user.id, dto);
+  }
+
+  @Post('runs/mark-paid')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  @ApiOperation({ summary: 'Mark all payslips in a month/year period as PAID' })
+  async markPeriodPaid(
+    @CurrentUser() user: any,
+    @Body() dto: MarkPayrollPaidDto,
+  ) {
+    const companyId = this.requireTenantPayrollWriteCompanyId(user);
+    return this.payrollService.markPeriodPaid(companyId, user.id, dto);
   }
 
   @Get('department-summary')
@@ -72,8 +114,8 @@ export class PayrollController {
     return this.payrollService.getDepartmentPayrollSummary(
       companyId,
       user,
-      month ? parseInt(month, 10) : undefined,
-      year ? parseInt(year, 10) : undefined,
+      this.parseOptionalInt(month, 'month', 1, 12),
+      this.parseOptionalInt(year, 'year', 2020, 2100),
     );
   }
 
@@ -87,8 +129,8 @@ export class PayrollController {
   ) {
     const companyId = this.requireCompanyId(user);
     return this.payrollService.getPayslips(companyId, user, {
-      month: month ? parseInt(month, 10) : undefined,
-      year: year ? parseInt(year, 10) : undefined,
+      month: this.parseOptionalInt(month, 'month', 1, 12),
+      year: this.parseOptionalInt(year, 'year', 2020, 2100),
       employeeId,
     });
   }
@@ -101,6 +143,29 @@ export class PayrollController {
   ) {
     const companyId = this.requireCompanyId(user);
     return this.payrollService.getPayslipById(companyId, id, user);
+  }
+
+  @Patch('payslips/:id')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  @ApiOperation({ summary: 'Adjust an individual unpaid payslip (bonuses, deductions, base override)' })
+  async updatePayslip(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() dto: UpdatePayslipDto,
+  ) {
+    const companyId = this.requireTenantPayrollWriteCompanyId(user);
+    return this.payrollService.updatePayslip(companyId, id, user.id, dto);
+  }
+
+  @Patch('payslips/:id/mark-paid')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  @ApiOperation({ summary: 'Mark a single payslip as PAID (finalizes against further edits)' })
+  async markPayslipPaid(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+  ) {
+    const companyId = this.requireTenantPayrollWriteCompanyId(user);
+    return this.payrollService.markPayslipPaid(companyId, id, user.id);
   }
 
   @Get('payslips/:id/pdf')
@@ -135,11 +200,12 @@ export class PayrollController {
     @Query('year') year: string,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const m = parseInt(month, 10);
-    const y = parseInt(year, 10);
+    const companyId = this.requireCompanyId(user);
+    const m = this.parseRequiredInt(month, 'month', 1, 12);
+    const y = this.parseRequiredInt(year, 'year', 2020, 2100);
 
     const { buffer, filename } = await this.payrollService.generateBulkPayslipsPdfBuffer(
-      user.companyId,
+      companyId,
       m,
       y,
       user,
@@ -160,5 +226,44 @@ export class PayrollController {
       throw new ForbiddenException('Company context required');
     }
     return companyId;
+  }
+
+  private requireTenantPayrollWriteCompanyId(user: {
+    role?: UserRole | string;
+    companyId?: string | null;
+    supportModeCompanyId?: string | null;
+  }): string {
+    if (user.role === UserRole.SUPER_ADMIN) {
+      throw new ForbiddenException(
+        'Payroll modifications are restricted to tenant HR Managers and Company Admins.',
+      );
+    }
+    return this.requireCompanyId(user);
+  }
+
+  private parseOptionalInt(
+    raw: string | undefined,
+    name: string,
+    min: number,
+    max: number,
+  ): number | undefined {
+    if (raw === undefined || raw === '') return undefined;
+    return this.parseRequiredInt(raw, name, min, max);
+  }
+
+  private parseRequiredInt(
+    raw: string | undefined,
+    name: string,
+    min: number,
+    max: number,
+  ): number {
+    if (raw === undefined || !/^\d+$/.test(raw.trim())) {
+      throw new BadRequestException(`Invalid ${name} parameter. Expected an integer between ${min} and ${max}.`);
+    }
+    const parsed = Number(raw.trim());
+    if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+      throw new BadRequestException(`Invalid ${name} parameter. Expected an integer between ${min} and ${max}.`);
+    }
+    return parsed;
   }
 }

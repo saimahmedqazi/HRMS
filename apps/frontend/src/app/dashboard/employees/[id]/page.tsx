@@ -81,6 +81,8 @@ export default function EmployeeDetailPage() {
   const [jobDesignationId, setJobDesignationId] = useState('');
   const [jobTeamId, setJobTeamId] = useState('');
   const [jobReportingManagerId, setJobReportingManagerId] = useState('');
+  const [jobPayrollStructureId, setJobPayrollStructureId] = useState('');
+  const [jobBaseSalary, setJobBaseSalary] = useState('');
   const initialJobValues = useRef<Record<string, string>>({});
 
   // Action feedback notification banner
@@ -115,6 +117,11 @@ export default function EmployeeDetailPage() {
   const { data: employeeOptions } = useQuery({
     queryKey: ['employee-edit-reporting-managers', user?.id, user?.supportModeCompanyId ?? user?.companyId],
     queryFn: () => api.get<{ items: any[] }>('/employees?limit=100'),
+    enabled: canEditJobDetails,
+  });
+  const { data: payrollStructures = [] } = useQuery({
+    queryKey: ['employee-edit-payroll-structures', user?.id, user?.supportModeCompanyId ?? user?.companyId],
+    queryFn: () => api.get<any[]>('/payroll/structures'),
     enabled: canEditJobDetails,
   });
 
@@ -168,30 +175,72 @@ export default function EmployeeDetailPage() {
     },
   });
 
+  const effectiveStructure =
+    payrollStructures.find((item: any) => item.id === (emp?.payrollStructureId || '')) ||
+    payrollStructures.find((item: any) => item.isDefault);
+  const effectiveCurrency = effectiveStructure?.currencyCode || 'USD';
+  const modalStructure =
+    payrollStructures.find((item: any) => item.id === jobPayrollStructureId) ||
+    payrollStructures.find((item: any) => item.isDefault);
+  const modalCurrency = modalStructure?.currencyCode || 'USD';
+  const formatMoney = (amount: number, currencyCode = 'USD') => {
+    try {
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: currencyCode }).format(amount);
+    } catch {
+      return `${currencyCode} ${amount.toLocaleString()}`;
+    }
+  };
+
   const openJobModal = () => {
     if (!emp) return;
     jobMutation.reset();
+    const storedSalary =
+      emp.baseSalary !== null && emp.baseSalary !== undefined && String(emp.baseSalary).trim() !== ''
+        ? String(Number(emp.baseSalary))
+        : '';
     const values = {
       departmentId: emp.departmentId || '',
       designationId: emp.designationId || '',
       teamId: emp.teamId || '',
       reportingManagerId: emp.reportingManagerId || '',
+      payrollStructureId: emp.payrollStructureId || '',
+      salary: storedSalary,
     };
     initialJobValues.current = values;
     setJobDepartmentId(values.departmentId);
     setJobDesignationId(values.designationId);
     setJobTeamId(values.teamId);
     setJobReportingManagerId(values.reportingManagerId);
+    setJobPayrollStructureId(values.payrollStructureId);
+    setJobBaseSalary(values.salary);
     setShowJobModal(true);
   };
 
-  const jobChanges = Object.fromEntries(Object.entries({
+  const trimmedJobSalary = jobBaseSalary.trim();
+  const parsedJobSalary = trimmedJobSalary === '' ? null : Number(trimmedJobSalary);
+  const jobSalaryInvalid =
+    trimmedJobSalary !== '' &&
+    (!Number.isFinite(parsedJobSalary) ||
+      (parsedJobSalary as number) < 0 ||
+      (parsedJobSalary as number) > 9_999_999_999.99 ||
+      !/^\d+(?:\.\d{1,2})?$/.test(trimmedJobSalary));
+  const initialJobSalary = initialJobValues.current.salary ?? '';
+  const jobSalaryChanged =
+    trimmedJobSalary === ''
+      ? initialJobSalary !== ''
+      : initialJobSalary === '' || Number(trimmedJobSalary) !== Number(initialJobSalary);
+
+  const jobChanges: Record<string, string | number | null> = Object.fromEntries(Object.entries({
     departmentId: jobDepartmentId,
     designationId: jobDesignationId,
     teamId: jobTeamId,
     reportingManagerId: jobReportingManagerId,
+    payrollStructureId: jobPayrollStructureId,
   }).filter(([field, value]) => value !== (initialJobValues.current[field] || ''))
     .map(([field, value]) => [field, value || null]));
+  if (jobSalaryChanged && !jobSalaryInvalid) {
+    jobChanges.salary = parsedJobSalary;
+  }
 
   const jobMutation = useMutation({
     mutationFn: () => api.patch(`/employees/${id}`, jobChanges),
@@ -531,6 +580,22 @@ export default function EmployeeDetailPage() {
                 <dt className="text-zinc-500">Team</dt>
                 <dd className="font-medium text-zinc-900 dark:text-zinc-100">{emp.team?.name || '—'}</dd>
               </div>
+              <div className="flex justify-between py-2.5">
+                <dt className="text-zinc-500">Salary Structure</dt>
+                <dd className="font-medium text-zinc-900 dark:text-zinc-100">{emp.payrollStructure?.name || 'Company default'}</dd>
+              </div>
+              {canEditJobDetails && (
+                <div className="flex justify-between py-2.5">
+                  <dt className="text-zinc-500">Monthly Base Salary</dt>
+                  <dd className="font-medium text-zinc-900 dark:text-zinc-100">
+                    {emp.baseSalary !== null && emp.baseSalary !== undefined && String(emp.baseSalary).trim() !== ''
+                      ? formatMoney(Number(emp.baseSalary), effectiveCurrency)
+                      : effectiveStructure
+                        ? `Structure default (${formatMoney(Number(effectiveStructure.baseSalary), effectiveCurrency)})`
+                        : 'Structure default'}
+                  </dd>
+                </div>
+              )}
               <div className="flex justify-between py-2.5">
                 <dt className="text-zinc-500">Reporting Line</dt>
                 <dd className="font-medium text-zinc-900 dark:text-zinc-100">
@@ -1169,7 +1234,7 @@ export default function EmployeeDetailPage() {
               <h2 id="employee-job-details-title" className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Edit Job Details</h2>
               <button type="button" onClick={() => setShowJobModal(false)} disabled={jobMutation.isPending} aria-label="Close job details editor" className="text-zinc-400 hover:text-zinc-600 disabled:opacity-50">&times;</button>
             </div>
-            <form onSubmit={(event) => { event.preventDefault(); if (Object.keys(jobChanges).length && !jobMutation.isPending) jobMutation.mutate(); }} className="mt-4 space-y-4">
+            <form onSubmit={(event) => { event.preventDefault(); if (!jobSalaryInvalid && Object.keys(jobChanges).length && !jobMutation.isPending) jobMutation.mutate(); }} className="mt-4 space-y-4">
               <div>
                 <label htmlFor="job-department" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Department</label>
                 <select id="job-department" value={jobDepartmentId} onChange={(event) => { setJobDepartmentId(event.target.value); setJobTeamId(''); }} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
@@ -1199,10 +1264,41 @@ export default function EmployeeDetailPage() {
                 </select>
                 <p className="mt-1 text-[11px] text-zinc-500">Select from the first 100 employees in your authorized scope.</p>
               </div>
+              <div>
+                <label htmlFor="job-payroll-structure" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Salary Structure</label>
+                <select id="job-payroll-structure" value={jobPayrollStructureId} onChange={(event) => setJobPayrollStructureId(event.target.value)} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
+                  <option value="">Use company default</option>
+                  {payrollStructures.map((item: any) => <option key={item.id} value={item.id}>{item.name} ({item.currencyCode || 'USD'}){item.isDefault ? ' · default' : ''}</option>)}
+                </select>
+                <p className="mt-1 text-[11px] text-zinc-500">This employee’s assigned package is used when HR prepares payroll.</p>
+              </div>
+              <div>
+                <label htmlFor="job-base-salary" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Monthly Base Salary ({modalCurrency})</label>
+                <input
+                  id="job-base-salary"
+                  type="number"
+                  min="0"
+                  max="9999999999.99"
+                  step="0.01"
+                  value={jobBaseSalary}
+                  onChange={(event) => setJobBaseSalary(event.target.value)}
+                  placeholder={modalStructure ? `Leave blank for structure default (${formatMoney(Number(modalStructure.baseSalary), modalCurrency)})` : 'Leave blank to use salary structure default'}
+                  className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+                />
+                {jobSalaryInvalid ? (
+                  <p role="alert" className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">
+                    Enter a valid non-negative monthly base salary with up to 2 decimal places.
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-zinc-500">
+                    Overrides the assigned salary structure’s default base pay. Leave blank to inherit the structure default.
+                  </p>
+                )}
+              </div>
               {jobMutation.error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-950 dark:text-rose-300">{jobMutation.error.message}</p>}
               <div className="flex justify-end gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
                 <button type="button" onClick={() => setShowJobModal(false)} disabled={jobMutation.isPending} className="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-300">Cancel</button>
-                <button type="submit" disabled={!Object.keys(jobChanges).length || jobMutation.isPending} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{jobMutation.isPending ? 'Saving...' : 'Save Job Details'}</button>
+                <button type="submit" disabled={jobSalaryInvalid || !Object.keys(jobChanges).length || jobMutation.isPending} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{jobMutation.isPending ? 'Saving...' : 'Save Job Details'}</button>
               </div>
             </form>
           </div>

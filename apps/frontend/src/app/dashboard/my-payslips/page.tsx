@@ -3,12 +3,24 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, API_PREFIX } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { CreditCard, Download } from 'lucide-react';
 
 export default function MyPayslipsPage() {
+  const { user } = useAuth();
+  const tenantScope = user?.supportModeCompanyId ?? user?.companyId;
+
+  const formatMoney = (amount: number, currencyCode = 'USD') => {
+    try {
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: currencyCode }).format(amount);
+    } catch {
+      return `${currencyCode} ${amount.toLocaleString()}`;
+    }
+  };
+
   const { data: payslips = [], isLoading, isError, refetch } = useQuery({
-    queryKey: ['my-payslips'],
+    queryKey: ['my-payslips', user?.id, tenantScope],
     queryFn: () => api.get<any[]>('/payroll/payslips'),
   });
 
@@ -57,6 +69,7 @@ export default function MyPayslipsPage() {
                   <th className="px-4 py-3">Pay Period</th>
                   <th className="px-4 py-3">Base Salary</th>
                   <th className="px-4 py-3">Allowances</th>
+                  <th className="px-4 py-3">Bonuses</th>
                   <th className="px-4 py-3">Deductions</th>
                   <th className="px-4 py-3">Income Tax</th>
                   <th className="px-4 py-3">Net Disbursed</th>
@@ -71,19 +84,22 @@ export default function MyPayslipsPage() {
                       {p.month.toString().padStart(2, '0')}/{p.year}
                     </td>
                     <td className="px-4 py-3 text-gray-700 dark:text-gray-300">
-                      ${Number(p.baseSalary).toLocaleString()}
+                      {formatMoney(Number(p.baseSalary), p.currencyCode)}
                     </td>
                     <td className="px-4 py-3 text-emerald-600 dark:text-emerald-400">
-                      +${Number(p.allowances).toLocaleString()}
+                      +{formatMoney(Number(p.allowances), p.currencyCode)}
+                    </td>
+                    <td className="px-4 py-3 text-emerald-600 dark:text-emerald-400">
+                      +{formatMoney(Number(p.bonuses || 0), p.currencyCode)}
                     </td>
                     <td className="px-4 py-3 text-rose-500">
-                      -${Number(p.deductions).toLocaleString()}
+                      -{formatMoney(Number(p.deductions), p.currencyCode)}
                     </td>
                     <td className="px-4 py-3 text-rose-500">
-                      -${Number(p.taxAmount).toLocaleString()}
+                      -{formatMoney(Number(p.taxAmount), p.currencyCode)}
                     </td>
                     <td className="px-4 py-3 font-extrabold text-emerald-600 dark:text-emerald-400">
-                      ${Number(p.netSalary).toLocaleString()}
+                      {formatMoney(Number(p.netSalary), p.currencyCode)}
                     </td>
                     <td className="px-4 py-3">
                       <StatusBadge status={p.status} />

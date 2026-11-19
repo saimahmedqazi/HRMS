@@ -106,4 +106,9 @@ export class CreateEmployeeDto {
   @Min(0)
   @IsOptional()
   salary?: number;
+
+  @ApiPropertyOptional({ example: 'cuid_payroll_structure_id' })
+  @IsString()
+  @IsOptional()
+  payrollStructureId?: string;
 }

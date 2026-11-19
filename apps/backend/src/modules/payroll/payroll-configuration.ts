@@ -1,15 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
-export type PayrollComponent = { name: string; type: 'ALLOWANCE' | 'DEDUCTION'; value: number; isPercentage: boolean };
+export type PayrollComponent = { name: string; type: 'ALLOWANCE' | 'DEDUCTION'; value: number; isPercentage: boolean; isPreTax?: boolean };
 export type PayrollTaxBracket = { min: number; max: number | null; rate: number };
 export type PayrollTaxRules = { brackets: PayrollTaxBracket[] };
 
 const MAX_PAYROLL_AMOUNT = 9_999_999_999.99;
-
-export const DEFAULT_TAX_BRACKETS: PayrollTaxBracket[] = [
-  { min: 0, max: 30000, rate: 0 },
-  { min: 30000, max: 80000, rate: 0.1 },
-  { min: 80000, max: null, rate: 0.2 },
-];
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -32,10 +26,17 @@ export function readPayrollConfiguration(components: unknown, taxRules: unknown)
     if (!isObject(value) || typeof value.name !== 'string' || !value.name.trim() ||
         (value.type !== 'ALLOWANCE' && value.type !== 'DEDUCTION') ||
         !isNonNegativeNumber(value.value) || typeof value.isPercentage !== 'boolean' ||
+        (value.isPreTax !== undefined && typeof value.isPreTax !== 'boolean') ||
         (!value.isPercentage && value.value > MAX_PAYROLL_AMOUNT)) {
       throw new BadRequestException(`Salary component ${index + 1} needs a name, an allowance or deduction type, a valid nonnegative amount, and a percentage flag.`);
     }
-    return { name: value.name, type: value.type, value: value.value, isPercentage: value.isPercentage };
+    return {
+      name: value.name,
+      type: value.type,
+      value: value.value,
+      isPercentage: value.isPercentage,
+      ...(value.type === 'DEDUCTION' ? { isPreTax: value.isPreTax !== false } : {}),
+    };
   });
 
   if (taxRules == null || (isObject(taxRules) && Object.keys(taxRules).length === 0)) {
@@ -60,6 +61,12 @@ export function readPayrollConfiguration(components: unknown, taxRules: unknown)
     if (previousMax === null || sorted[index].min < previousMax) {
       throw new BadRequestException('Tax brackets must not overlap. Only the highest bracket can have an open upper bound.');
     }
+    if (sorted[index].min > previousMax) {
+      throw new BadRequestException('Tax brackets must be contiguous so taxable income is not unintentionally skipped.');
+    }
   }
-  return { components: validComponents, taxRules: { brackets } };
+  if (sorted.length > 0 && sorted[sorted.length - 1].max !== null) {
+    throw new BadRequestException('The highest tax bracket must have an open upper bound.');
+  }
+  return { components: validComponents, taxRules: { brackets: sorted } };
 }

@@ -617,7 +617,18 @@ export default function DashboardHubPage() {
             <CreditCard className="w-4 h-4" />
           </div>
           <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-            {empStats.latestPayslip ? `$${empStats.latestPayslip.netSalary.toLocaleString()}` : '—'}
+            {empStats.latestPayslip
+              ? (() => {
+                  const currency = empStats.latestPayslip.currencyCode || 'USD';
+                  try {
+                    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(
+                      Number(empStats.latestPayslip.netSalary),
+                    );
+                  } catch {
+                    return `${currency} ${Number(empStats.latestPayslip.netSalary).toLocaleString()}`;
+                  }
+                })()
+              : '—'}
           </p>
           <Link href="/dashboard/my-payslips" className="text-xs text-primary-600 hover:underline mt-2 inline-block">
             Download Payslip PDF &rarr;

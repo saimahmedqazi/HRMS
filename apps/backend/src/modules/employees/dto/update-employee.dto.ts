@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -80,11 +81,23 @@ export class UpdateEmployeeDto {
   @IsOptional()
   reportingManagerId?: string | null;
 
-  @ApiPropertyOptional({ example: 92000 })
-  @IsNumber()
+  @ApiPropertyOptional({ example: 92000, nullable: true })
+  @Transform(({ obj, key }) => {
+    const raw = obj[key];
+    if (raw === undefined) return undefined;
+    if (raw === null || raw === '') return null;
+    return typeof raw === 'number' ? raw : Number(raw);
+  })
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(9_999_999_999.99)
   @IsOptional()
-  salary?: number;
+  salary?: number | null;
+
+  @ApiPropertyOptional({ example: 'cuid_payroll_structure_id', nullable: true })
+  @IsString()
+  @IsOptional()
+  payrollStructureId?: string | null;
 
   @ApiPropertyOptional({ example: 'https://res.cloudinary.com/zenhr/image/upload/avatar.png' })
   @IsString()

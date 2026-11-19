@@ -6,8 +6,9 @@ import { DataScopeService } from '../../common/services/data-scope.service';
 import { MailService } from '../../common/mail/mail.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
-import { ConflictException, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ConflictException, BadRequestException, ForbiddenException, NotFoundException, ValidationPipe } from '@nestjs/common';
 import { UserRole, EmployeeStatus, AuditAction } from '@prisma/client';
+import { UpdateEmployeeDto } from './dto/update-employee.dto';
 
 describe('EmployeesService', () => {
   let service: EmployeesService;
@@ -29,6 +30,9 @@ describe('EmployeesService', () => {
       updateMany: jest.fn(),
     },
     department: {
+      findFirst: jest.fn(),
+    },
+    payrollStructure: {
       findFirst: jest.fn(),
     },
     designation: {
@@ -413,6 +417,15 @@ describe('EmployeesService', () => {
       expect(mockPrisma.employee.update).not.toHaveBeenCalled();
     });
 
+    it('rejects assigning a payroll structure from another company', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-1', companyId: 'comp-1', userId: 'employee-user' });
+      mockPrisma.payrollStructure.findFirst.mockResolvedValueOnce(null);
+
+      await expect(service.updateEmployee('emp-1', { payrollStructureId: 'foreign-structure' }, mockAdminUser))
+        .rejects.toThrow('Invalid payroll structure for this organization');
+      expect(mockPrisma.employee.update).not.toHaveBeenCalled();
+    });
+
     it('should prevent employee from selecting themselves as their reporting manager', async () => {
       mockPrisma.employee.findFirst.mockResolvedValueOnce({
         id: 'emp-1',
@@ -463,6 +476,90 @@ describe('EmployeesService', () => {
           { id: 'user-lead', email: 'lead@acme.com', role: UserRole.TEAM_LEAD, companyId: 'comp-1' },
         ),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('updates monthly base salary and assigned payroll structure for HR/Admin', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-1', companyId: 'comp-1', userId: 'employee-user' });
+      mockPrisma.payrollStructure.findFirst.mockResolvedValueOnce({ id: 'struct-eu' });
+      mockPrisma.employee.update.mockResolvedValueOnce({
+        id: 'emp-1',
+        baseSalary: 6500.5,
+        payrollStructureId: 'struct-eu',
+      });
+
+      await service.updateEmployee(
+        'emp-1',
+        { salary: 6500.5, payrollStructureId: 'struct-eu' },
+        mockAdminUser,
+      );
+
+      expect(mockPrisma.payrollStructure.findFirst).toHaveBeenCalledWith({
+        where: { id: 'struct-eu', companyId: 'comp-1', deletedAt: null },
+        select: { id: true },
+      });
+      expect(mockPrisma.employee.update).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'emp-1', companyId: 'comp-1', deletedAt: null },
+        data: { baseSalary: 6500.5, payrollStructureId: 'struct-eu' },
+      }));
+    });
+
+    it('clears individual base salary override to null without changing payrollStructureId', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({
+        id: 'emp-1',
+        companyId: 'comp-1',
+        userId: 'employee-user',
+        baseSalary: 6500,
+        payrollStructureId: 'struct-eu',
+      });
+      mockPrisma.employee.update.mockResolvedValueOnce({ id: 'emp-1', baseSalary: null });
+
+      await service.updateEmployee('emp-1', { salary: null }, mockAdminUser);
+
+      const updateArg = mockPrisma.employee.update.mock.calls[0][0];
+      expect(updateArg.data).toEqual({ baseSalary: null });
+      expect(updateArg.data).not.toHaveProperty('payrollStructureId');
+    });
+
+    it('does not touch baseSalary or payrollStructureId when editing unrelated job fields', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({
+        id: 'emp-1',
+        companyId: 'comp-1',
+        userId: 'employee-user',
+        baseSalary: 7200,
+        payrollStructureId: 'struct-1',
+      });
+      mockPrisma.designation.findFirst.mockResolvedValueOnce({ id: 'desig-2' });
+      mockPrisma.employee.update.mockResolvedValueOnce({ id: 'emp-1', designationId: 'desig-2' });
+
+      await service.updateEmployee('emp-1', { designationId: 'desig-2' }, mockAdminUser);
+
+      const updateArg = mockPrisma.employee.update.mock.calls[0][0];
+      expect(updateArg.data).toEqual({ designationId: 'desig-2' });
+      expect(updateArg.data).not.toHaveProperty('baseSalary');
+      expect(updateArg.data).not.toHaveProperty('payrollStructureId');
+    });
+
+    it('validates UpdateEmployeeDto salary values without coercing null to zero', async () => {
+      const pipe = new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+        transformOptions: { enableImplicitConversion: true },
+      });
+      const metadata = { type: 'body' as const, metatype: UpdateEmployeeDto };
+
+      await expect(pipe.transform({ salary: 5500.25 }, metadata)).resolves.toMatchObject({ salary: 5500.25 });
+      await expect(pipe.transform({ salary: 0 }, metadata)).resolves.toMatchObject({ salary: 0 });
+      await expect(pipe.transform({ salary: null }, metadata)).resolves.toMatchObject({ salary: null });
+      await expect(pipe.transform({ salary: '' }, metadata)).resolves.toMatchObject({ salary: null });
+
+      const omitted = await pipe.transform({ phone: '+1-555-0100' }, metadata);
+      expect(omitted.salary).toBeUndefined();
+
+      await expect(pipe.transform({ salary: -1 }, metadata)).rejects.toThrow(BadRequestException);
+      await expect(pipe.transform({ salary: 100.123 }, metadata)).rejects.toThrow(BadRequestException);
+      await expect(pipe.transform({ salary: 10_000_000_000 }, metadata)).rejects.toThrow(BadRequestException);
+      await expect(pipe.transform({ baseSalary: 5000 }, metadata)).rejects.toThrow(BadRequestException);
     });
   });
 

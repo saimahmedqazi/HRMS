@@ -3,26 +3,32 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import {
   Building2,
-  Users,
-  DollarSign,
-  TrendingUp,
-  CreditCard,
-  ShieldAlert,
   Info,
 } from 'lucide-react';
 
 export default function DepartmentPayrollSummaryPage() {
+  const { user } = useAuth();
+  const tenantScope = user?.supportModeCompanyId ?? user?.companyId;
   const currentMonth = new Date().getMonth() + 1;
   const currentYear = new Date().getFullYear();
 
   const [month, setMonth] = useState(currentMonth);
   const [year, setYear] = useState(currentYear);
 
+  const formatMoney = (amount: number, currencyCode = 'USD') => {
+    try {
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: currencyCode }).format(amount);
+    } catch {
+      return `${currencyCode} ${amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
+    }
+  };
+
   // Fetch Department Summary
-  const { data: summary, isLoading, error } = useQuery({
-    queryKey: ['department-payroll-summary', month, year],
+  const { data: summary, isLoading, isError, refetch } = useQuery({
+    queryKey: ['department-payroll-summary', user?.id, tenantScope, month, year],
     queryFn: () =>
       api.get<any>(`/payroll/department-summary?month=${month}&year=${year}`),
   });
@@ -82,7 +88,22 @@ export default function DepartmentPayrollSummaryPage() {
       </div>
 
       {/* KPI Cards */}
-      {(Array.isArray(summary) ? summary : summary ? [summary] : []).length > 0 ? (
+      {isLoading ? (
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-12 text-center shadow-sm">
+          <p role="status" className="text-sm text-gray-500">Loading department payroll summary…</p>
+        </div>
+      ) : isError ? (
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-12 text-center shadow-sm">
+          <p role="alert" className="text-sm text-gray-700 dark:text-gray-200">Could not load department payroll summary.</p>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            className="mt-3 rounded-lg bg-primary-600 px-4 py-2 text-xs font-semibold text-white hover:bg-primary-700"
+          >
+            Try again
+          </button>
+        </div>
+      ) : (Array.isArray(summary) ? summary : summary ? [summary] : []).length > 0 ? (
         <div className="space-y-6">
           {(Array.isArray(summary) ? summary : [summary]).map((deptSummary: any, idx: number) => (
             <div
@@ -116,28 +137,28 @@ export default function DepartmentPayrollSummaryPage() {
                 <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
                   <span className="text-xs uppercase text-gray-500 font-medium">Total Gross</span>
                   <p className="text-xl font-bold text-gray-900 dark:text-white mt-1">
-                    ${Number(deptSummary.totalGross || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    {formatMoney(Number(deptSummary.totalGross || 0), deptSummary.currencyCode || 'USD')}
                   </p>
                 </div>
 
                 <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
                   <span className="text-xs uppercase text-gray-500 font-medium">Total Withholding</span>
                   <p className="text-xl font-bold text-rose-500 mt-1">
-                    ${Number(deptSummary.totalDeductions || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    {formatMoney(Number(deptSummary.totalDeductions || 0), deptSummary.currencyCode || 'USD')}
                   </p>
                 </div>
 
                 <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
                   <span className="text-xs uppercase text-gray-500 font-medium">Total Net Payout</span>
                   <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                    ${Number(deptSummary.totalNet || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    {formatMoney(Number(deptSummary.totalNet || 0), deptSummary.currencyCode || 'USD')}
                   </p>
                 </div>
 
                 <div className="p-4 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
                   <span className="text-xs uppercase text-gray-500 font-medium">Average Net / Head</span>
                   <p className="text-xl font-bold text-blue-600 dark:text-blue-400 mt-1">
-                    ${Number(deptSummary.averageNet || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    {formatMoney(Number(deptSummary.averageNet || 0), deptSummary.currencyCode || 'USD')}
                   </p>
                 </div>
               </div>

@@ -8,6 +8,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   Min,
 } from 'class-validator';
 
@@ -35,6 +36,11 @@ export class SalaryComponentDto {
   @ApiProperty({ example: false })
   @IsBoolean()
   isPercentage!: boolean;
+
+  @ApiPropertyOptional({ example: true, description: 'Whether this deduction reduces taxable pay; defaults to true for backward compatibility' })
+  @IsBoolean()
+  @IsOptional()
+  isPreTax?: boolean;
 }
 
 export class CreatePayrollStructureDto {
@@ -42,6 +48,11 @@ export class CreatePayrollStructureDto {
   @IsString()
   @IsNotEmpty()
   name!: string;
+
+  @ApiPropertyOptional({ example: 'USD', description: 'Three-letter ISO 4217 currency code' })
+  @Matches(/^[A-Z]{3}$/)
+  @IsOptional()
+  currencyCode?: string = 'USD';
 
   @ApiProperty({ example: 60000 })
   @Transform(originalValue, { toClassOnly: true })

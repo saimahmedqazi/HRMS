@@ -173,7 +173,13 @@ export class AnalyticsService {
           available: b.allocated + b.carried - b.used - b.pending,
         })),
         latestPayslip: latestPayslip
-          ? { id: latestPayslip.id, month: latestPayslip.month, year: latestPayslip.year, netSalary: Number(latestPayslip.netSalary) }
+          ? {
+              id: latestPayslip.id,
+              month: latestPayslip.month,
+              year: latestPayslip.year,
+              netSalary: Number(latestPayslip.netSalary),
+              currencyCode: latestPayslip.currencyCode || 'USD',
+            }
           : null,
       };
     }

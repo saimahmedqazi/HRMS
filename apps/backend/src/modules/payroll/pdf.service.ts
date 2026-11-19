@@ -9,16 +9,26 @@ export interface PayslipPdfData {
   designationName?: string;
   month: number;
   year: number;
+  currencyCode?: string;
   baseSalary: number;
   allowances: number;
   bonuses: number;
   deductions: number;
   taxAmount: number;
   netSalary: number;
+  adjustmentNote?: string;
 }
 
 @Injectable()
 export class PdfService {
+  private formatMoney(amount: number, currencyCode = 'USD'): string {
+    try {
+      return new Intl.NumberFormat('en', { style: 'currency', currency: currencyCode }).format(amount);
+    } catch {
+      return `${currencyCode} ${amount.toLocaleString('en', { minimumFractionDigits: 2 })}`;
+    }
+  }
+
   /**
    * Generates a streaming PDF buffer for an employee payslip.
    */
@@ -54,24 +64,24 @@ export class PdfService {
       doc.fontSize(11).font('Helvetica-Bold').fillColor('#1E293B').text('Earnings Breakdown', 40, tableY, { underline: true });
       doc.fontSize(10).font('Helvetica').fillColor('#475569');
       doc.text('Base Salary:', 40, tableY + 20);
-      doc.text(`$${data.baseSalary.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 200, tableY + 20);
+      doc.text(this.formatMoney(data.baseSalary, data.currencyCode), 200, tableY + 20);
 
-      doc.text('Allowances (Medical/Transport):', 40, tableY + 36);
-      doc.text(`$${data.allowances.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 200, tableY + 36);
+      doc.text('Total Allowances:', 40, tableY + 36);
+      doc.text(this.formatMoney(data.allowances, data.currencyCode), 200, tableY + 36);
 
       if (data.bonuses > 0) {
         doc.text('Performance Bonuses:', 40, tableY + 52);
-        doc.text(`$${data.bonuses.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 200, tableY + 52);
+        doc.text(this.formatMoney(data.bonuses, data.currencyCode), 200, tableY + 52);
       }
 
       // Deductions column
       doc.fontSize(11).font('Helvetica-Bold').fillColor('#1E293B').text('Deductions & Withholding', 320, tableY, { underline: true });
       doc.fontSize(10).font('Helvetica').fillColor('#475569');
-      doc.text('Pre-tax Deductions:', 320, tableY + 20);
-      doc.text(`$${data.deductions.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 470, tableY + 20);
+      doc.text('Total Deductions:', 320, tableY + 20);
+      doc.text(this.formatMoney(data.deductions, data.currencyCode), 470, tableY + 20);
 
       doc.text('Income Tax:', 320, tableY + 36);
-      doc.text(`$${data.taxAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 470, tableY + 36);
+      doc.text(this.formatMoney(data.taxAmount, data.currencyCode), 470, tableY + 36);
 
       // Summary Net Box
       const summaryY = tableY + 95;
@@ -80,10 +90,19 @@ export class PdfService {
 
       doc.fillColor('#0F172A').font('Helvetica-Bold').fontSize(14).text('NET SALARY PAYABLE:', 55, summaryY + 18);
       doc.fillColor('#059669').fontSize(16).text(
-        `$${data.netSalary.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+        this.formatMoney(data.netSalary, data.currencyCode),
         360,
         summaryY + 16,
       );
+
+      if (data.adjustmentNote) {
+        doc.font('Helvetica').fontSize(9).fillColor('#475569').text(
+          `Adjustment Note: ${data.adjustmentNote}`,
+          40,
+          summaryY + 64,
+          { width: 515 },
+        );
+      }
 
       // Security Footer
       doc.fontSize(8).fillColor('#94A3B8').text(
@@ -130,26 +149,40 @@ export class PdfService {
         doc.fontSize(11).fillColor('#1E293B').text('Earnings Breakdown', 40, tableY, { underline: true });
         doc.fontSize(10).fillColor('#475569');
         doc.text('Base Salary:', 40, tableY + 20);
-        doc.text(`$${data.baseSalary.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 200, tableY + 20);
-        doc.text('Allowances:', 40, tableY + 36);
-        doc.text(`$${data.allowances.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 200, tableY + 36);
+        doc.text(this.formatMoney(data.baseSalary, data.currencyCode), 200, tableY + 20);
+        doc.text('Total Allowances:', 40, tableY + 36);
+        doc.text(this.formatMoney(data.allowances, data.currencyCode), 200, tableY + 36);
+
+        if (data.bonuses > 0) {
+          doc.text('Performance Bonuses:', 40, tableY + 52);
+          doc.text(this.formatMoney(data.bonuses, data.currencyCode), 200, tableY + 52);
+        }
 
         doc.fontSize(11).fillColor('#1E293B').text('Deductions & Taxes', 320, tableY, { underline: true });
         doc.fontSize(10).fillColor('#475569');
-        doc.text('Deductions:', 320, tableY + 20);
-        doc.text(`$${data.deductions.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 470, tableY + 20);
+        doc.text('Total Deductions:', 320, tableY + 20);
+        doc.text(this.formatMoney(data.deductions, data.currencyCode), 470, tableY + 20);
         doc.text('Income Tax:', 320, tableY + 36);
-        doc.text(`$${data.taxAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 470, tableY + 36);
+        doc.text(this.formatMoney(data.taxAmount, data.currencyCode), 470, tableY + 36);
 
         const summaryY = tableY + 95;
         doc.rect(40, summaryY, 515, 50).fill('#F8FAFC');
         doc.rect(40, summaryY, 515, 50).strokeColor('#CBD5E1').stroke();
         doc.fillColor('#0F172A').fontSize(14).text('NET SALARY PAYABLE:', 55, summaryY + 18);
         doc.fillColor('#059669').fontSize(16).text(
-          `$${data.netSalary.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+          this.formatMoney(data.netSalary, data.currencyCode),
           360,
           summaryY + 16,
         );
+
+        if (data.adjustmentNote) {
+          doc.fontSize(9).fillColor('#475569').text(
+            `Adjustment Note: ${data.adjustmentNote}`,
+            40,
+            summaryY + 64,
+            { width: 515 },
+          );
+        }
 
         doc.fontSize(8).fillColor('#94A3B8').text(
           'ZenHR Multi-Tenant SaaS Platform • Strictly Confidential',

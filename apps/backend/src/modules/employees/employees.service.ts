@@ -163,6 +163,7 @@ export class EmployeesService {
         department: true,
         designation: true,
         team: true,
+        payrollStructure: { select: { id: true, name: true, isDefault: true } },
         reportingManager: {
           select: {
             id: true,
@@ -281,6 +282,14 @@ export class EmployeesService {
       if (!manager) throw new BadRequestException('Reporting manager not found in this company');
     }
 
+    if (dto.payrollStructureId) {
+      const structure = await this.prisma.payrollStructure.findFirst({
+        where: { id: dto.payrollStructureId, companyId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!structure) throw new BadRequestException('Invalid payroll structure for this organization');
+    }
+
     // Generate the initial password before opening the database transaction.
     const tempPassword = `ZenHR@${crypto.randomBytes(3).toString('hex')}!`;
     const passwordHash = await bcrypt.hash(tempPassword, 10);
@@ -332,6 +341,7 @@ export class EmployeesService {
           teamId: dto.teamId,
           reportingManagerId: dto.reportingManagerId,
           baseSalary: dto.salary,
+          payrollStructureId: dto.payrollStructureId,
         },
       });
 
@@ -460,6 +470,14 @@ export class EmployeesService {
       if (!mgr) throw new BadRequestException('Reporting manager not found in this company');
     }
 
+    if (dto.payrollStructureId) {
+      const structure = await this.prisma.payrollStructure.findFirst({
+        where: { id: dto.payrollStructureId, companyId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!structure) throw new BadRequestException('Invalid payroll structure for this organization');
+    }
+
     return this.prisma.employee.update({
       where: { id, companyId, deletedAt: null },
       data: {
@@ -477,6 +495,7 @@ export class EmployeesService {
         ...(teamIdToSave !== undefined ? { teamId: teamIdToSave } : {}),
         ...(dto.reportingManagerId !== undefined ? { reportingManagerId: dto.reportingManagerId } : {}),
         ...(dto.salary !== undefined ? { baseSalary: dto.salary } : {}),
+        ...(dto.payrollStructureId !== undefined ? { payrollStructureId: dto.payrollStructureId } : {}),
         ...(dto.profilePictureUrl !== undefined ? { profilePictureUrl: dto.profilePictureUrl } : {}),
       },
     });
