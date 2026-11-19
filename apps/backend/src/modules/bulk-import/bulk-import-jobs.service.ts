@@ -13,6 +13,8 @@ type ImportPayload = { workbook?: string };
 const QUEUE_NAME = 'zenhr-employee-imports';
 const pendingStatuses: BulkImportStatus[] = [BulkImportStatus.QUEUED, BulkImportStatus.PROCESSING];
 const JOB_FAILURE = 'The import stopped before all rows were processed. Review the results before retrying.';
+const FATAL_REDIS_ERROR_PATTERN = /max (?:daily )?requests? limit exceeded|NOAUTH|WRONGPASS|NOPERM/i;
+const REDIS_WARN_COOLDOWN_MS = 60_000;
 
 function getRedisConnection(env: NodeJS.ProcessEnv): RedisOptions | undefined {
   if (!env.REDIS_URL) {
@@ -44,6 +46,9 @@ export class BulkImportJobsService implements OnModuleInit, OnModuleDestroy {
   private queue?: Queue<ImportPayload>;
   private worker?: Worker<ImportPayload>;
   private reconciling = false;
+  private disablingRedis = false;
+  private lastQueueWarnAt = 0;
+  private lastWorkerWarnAt = 0;
 
   constructor(private readonly prisma: PrismaService, private readonly imports: BulkImportService) {}
 
@@ -61,17 +66,52 @@ export class BulkImportJobsService implements OnModuleInit, OnModuleDestroy {
     });
     this.worker = new Worker(QUEUE_NAME, (job: Job<ImportPayload>) => this.process(job), {
       connection: { ...connection, maxRetriesPerRequest: null },
+      drainDelay: 30,
     });
-    this.queue.on('error', () => this.logger.warn('Bulk import queue connection is unavailable.'));
-    this.worker.on('error', () => this.logger.warn('Bulk import worker connection is unavailable.'));
+    this.queue.on('error', (error) => this.handleRedisError('queue', error));
+    this.worker.on('error', (error) => this.handleRedisError('worker', error));
     this.worker.on('failed', (job) => {
       if (job?.id) void this.recordTerminalFailure(job).catch(() => this.logger.warn('Could not record bulk import failure.'));
     });
   }
 
+  private handleRedisError(source: 'queue' | 'worker', error?: Error) {
+    const message = error?.message ?? '';
+    if (FATAL_REDIS_ERROR_PATTERN.test(message)) {
+      if (!this.disablingRedis) {
+        this.logger.warn(`Bulk import ${source} connection disabled due to Redis quota or authentication limit.`);
+        void this.disableRedisConnection();
+      }
+      return;
+    }
+
+    const now = Date.now();
+    if (source === 'queue') {
+      if (now - this.lastQueueWarnAt >= REDIS_WARN_COOLDOWN_MS) {
+        this.lastQueueWarnAt = now;
+        this.logger.warn('Bulk import queue connection is unavailable.');
+      }
+      return;
+    }
+
+    if (now - this.lastWorkerWarnAt >= REDIS_WARN_COOLDOWN_MS) {
+      this.lastWorkerWarnAt = now;
+      this.logger.warn('Bulk import worker connection is unavailable.');
+    }
+  }
+
+  private async disableRedisConnection() {
+    if (this.disablingRedis) return;
+    this.disablingRedis = true;
+    const worker = this.worker;
+    const queue = this.queue;
+    this.worker = undefined;
+    this.queue = undefined;
+    await Promise.allSettled([worker?.close(), queue?.close()]);
+  }
+
   async onModuleDestroy() {
-    await this.worker?.close();
-    await this.queue?.close();
+    await this.disableRedisConnection();
   }
 
   async submit(companyId: string, submittedById: string, workbook: Buffer, supportModeSessionId?: string) {

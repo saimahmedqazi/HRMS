@@ -59,4 +59,38 @@ describe('BulkImportJobsService submission', () => {
     expect(jobs.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'import-1', status: BulkImportStatus.QUEUED } }));
     expect(jobs.findUniqueOrThrow).toHaveBeenCalledTimes(count === 0 ? 1 : 0);
   });
+
+  it('disables the Redis queue and worker once when Upstash exceeds max requests limit', async () => {
+    const queueClose = jest.fn().mockResolvedValue(undefined);
+    const workerClose = jest.fn().mockResolvedValue(undefined);
+    let workerErrorHandler: ((err: Error) => void) | undefined;
+
+    jest.mocked(Queue).mockImplementation(() => ({
+      on: jest.fn(),
+      close: queueClose,
+    }) as unknown as Queue);
+    jest.mocked(Worker).mockImplementation(() => ({
+      on: jest.fn((event: string, cb: (err: Error) => void) => {
+        if (event === 'error') workerErrorHandler = cb;
+      }),
+      close: workerClose,
+    }) as unknown as Worker);
+
+    const service = new BulkImportJobsService({} as PrismaService, {} as BulkImportService);
+    const originalUrl = process.env.REDIS_URL;
+    try {
+      process.env.REDIS_URL = 'rediss://default:secret@inspired-lynx.upstash.io:6379';
+      service.onModuleInit();
+    } finally {
+      if (originalUrl === undefined) delete process.env.REDIS_URL;
+      else process.env.REDIS_URL = originalUrl;
+    }
+
+    expect(workerErrorHandler).toBeDefined();
+    workerErrorHandler?.(new Error('ERR max requests limit exceeded. Limit: 500000, Usage: 500001.'));
+    workerErrorHandler?.(new Error('ERR max requests limit exceeded. Limit: 500000, Usage: 500002.'));
+
+    expect(workerClose).toHaveBeenCalledTimes(1);
+    expect(queueClose).toHaveBeenCalledTimes(1);
+  });
 });
