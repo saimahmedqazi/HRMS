@@ -58,6 +58,48 @@ html.dark *::-webkit-scrollbar-thumb {
   background: #64748b;
 }
 
+@keyframes zenhr-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.zenhr-page-enter {
+  animation: zenhr-page-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zenhr-page-enter {
+    animation: none;
+  }
+}
+
 html.dark *::-webkit-scrollbar-thumb:hover {
   background: #64748b;
+}
+
+@keyframes zenhr-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.zenhr-page-enter {
+  animation: zenhr-page-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zenhr-page-enter {
+    animation: none;
+  }
 }
