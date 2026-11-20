@@ -265,7 +265,11 @@ export class AttendanceService {
     const local = await getCompanyAttendanceTime(this.prisma, companyId, now);
     const dates = await resolveEmployeeAttendanceDay(this.prisma, scope, now, local);
     const record = await findCurrentPunch(this.prisma, scope, dates);
-    return record ?? { status: null, checkedIn: false, date: dates.date };
+    return {
+      ...(record ?? { status: null, checkedIn: false, date: dates.date }),
+      shift: dates.shift ?? null,
+      timezone: local.timezone,
+    };
   }
 
   async listAttendanceRecords(user: AuthenticatedUser, filter: AttendanceFilter = {}) {

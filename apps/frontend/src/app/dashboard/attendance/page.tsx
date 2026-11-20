@@ -48,6 +48,27 @@ const calendarStatus: Record<string, string> = {
   WEEKEND: 'Off',
 };
 
+const dayNames = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function formatShiftTime(hhmm?: string): string {
+  if (!hhmm) return '—';
+  const [hStr, mStr] = hhmm.split(':');
+  const h = Number(hStr);
+  const m = Number(mStr);
+  if (Number.isNaN(h) || Number.isNaN(m)) return hhmm;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}:${String(m).padStart(2, '0')} ${period}`;
+}
+
+function formatWorkDays(days?: number[]): string {
+  if (!days || days.length === 0) return 'Mon – Fri';
+  const sorted = [...days].sort((a, b) => a - b);
+  if (sorted.length === 5 && sorted[0] === 1 && sorted[4] === 5) return 'Mon – Fri';
+  if (sorted.length === 6 && sorted[0] === 1 && sorted[5] === 6) return 'Mon – Sat';
+  return sorted.map((d) => dayNames[d] || String(d)).join(', ');
+}
+
 function getPunchLocation(userId: string): Promise<{ latitude: number; longitude: number } | undefined> {
   if (!navigator.geolocation) return Promise.resolve(undefined);
 
@@ -514,6 +535,41 @@ export default function AttendanceDashboardPage() {
               </div>
             </div>
           </div>
+
+          {attendance?.shift && (
+            <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3 dark:border-indigo-900/40 dark:bg-indigo-950/30">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-indigo-900 dark:text-indigo-200">
+                  Shift: {attendance.shift.name || 'Standard Shift'}
+                </span>
+                {attendance.timezone && (
+                  <span className="rounded bg-white/80 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">
+                    {attendance.timezone}
+                  </span>
+                )}
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-zinc-600 dark:text-zinc-300">
+                <div>
+                  <span className="block text-[10px] text-zinc-400">Hours</span>
+                  <strong className="font-semibold text-zinc-800 dark:text-zinc-100">
+                    {formatShiftTime(attendance.shift.startTime)} – {formatShiftTime(attendance.shift.endTime)}
+                  </strong>
+                </div>
+                <div>
+                  <span className="block text-[10px] text-zinc-400">Break</span>
+                  <strong className="font-semibold text-zinc-800 dark:text-zinc-100">
+                    {attendance.shift.breakDuration ?? 0} mins
+                  </strong>
+                </div>
+                <div>
+                  <span className="block text-[10px] text-zinc-400">Work Days</span>
+                  <strong className="font-semibold text-zinc-800 dark:text-zinc-100">
+                    {formatWorkDays(attendance.shift.workDays)}
+                  </strong>
+                </div>
+              </div>
+            </div>
+          )}
 
           {attendanceQuery.isError ? (
             <div className="mt-4 text-sm text-rose-700 dark:text-rose-300">

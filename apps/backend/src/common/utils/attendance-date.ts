@@ -4,6 +4,7 @@ export interface AttendanceTime {
   date: Date;
   hour: number;
   minute: number;
+  timezone?: string;
 }
 
 // Attendance dates are stored as PostgreSQL date values, represented at UTC midnight.
@@ -38,5 +39,5 @@ export function previousAttendanceDate(date: Date): Date {
 
 export async function getCompanyAttendanceTime(prisma: Pick<PrismaService, 'company'>, companyId: string, now: Date) {
   const company = await prisma.company.findUnique({ where: { id: companyId }, select: { timezone: true } });
-  return getAttendanceDay(now, company?.timezone);
+  return { ...getAttendanceDay(now, company?.timezone), timezone: company?.timezone ?? 'UTC' };
 }

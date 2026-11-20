@@ -5,7 +5,7 @@ type ShiftSchedule = Pick<Shift, 'startTime' | 'endTime' | 'workDays' | 'breakDu
 type EmployeeScope = { companyId: string; employeeId: string };
 type AttendanceDates = { date: Date; previousDate: Date };
 
-const scheduleFields = { startTime: true, endTime: true, workDays: true, breakDuration: true } as const;
+const scheduleFields = { name: true, startTime: true, endTime: true, workDays: true, breakDuration: true } as const;
 
 function clockMinutes(time: string): number | null {
   const match = /^(\d{2}):(\d{2})$/.exec(time);
