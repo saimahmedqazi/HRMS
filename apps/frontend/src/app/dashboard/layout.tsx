@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { MotionConfig, motion } from 'framer-motion';
 import { useAuth, type UserProfile, type UserRole } from '@/lib/auth-context';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
@@ -109,25 +110,32 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950">
-      <Sidebar isOpen={mobileMenuOpen} onClose={closeMobileMenu} />
-      <div className="flex flex-1 flex-col overflow-hidden min-w-0">
-        <Header onMenuClick={() => setMobileMenuOpen(true)} mobileMenuOpen={mobileMenuOpen} />
-        <SupportModeBanner />
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 min-w-0">
-          <div key={pathname} className="zenhr-page-enter">
-            {canOpenRoute && canOpenModule ? children : (
-              <section className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-                <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Access Denied</h1>
-                <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">You don’t have access to this page.</p>
-                <Link href="/dashboard" className="mt-4 inline-flex text-sm font-semibold text-indigo-600 hover:underline dark:text-indigo-400">
-                  Return to Dashboard
-                </Link>
-              </section>
-            )}
-          </div>
-        </main>
+    <MotionConfig reducedMotion="user">
+      <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950">
+        <Sidebar isOpen={mobileMenuOpen} onClose={closeMobileMenu} />
+        <div className="flex flex-1 flex-col overflow-hidden min-w-0">
+          <Header onMenuClick={() => setMobileMenuOpen(true)} mobileMenuOpen={mobileMenuOpen} />
+          <SupportModeBanner />
+          <main className="flex-1 overflow-y-auto p-4 md:p-6 min-w-0">
+            <motion.div
+              key={pathname}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+            >
+              {canOpenRoute && canOpenModule ? children : (
+                <section className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+                  <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Access Denied</h1>
+                  <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">You don’t have access to this page.</p>
+                  <Link href="/dashboard" className="mt-4 inline-flex text-sm font-semibold text-indigo-600 hover:underline dark:text-indigo-400">
+                    Return to Dashboard
+                  </Link>
+                </section>
+              )}
+            </motion.div>
+          </main>
+        </div>
       </div>
-    </div>
+    </MotionConfig>
   );
 }

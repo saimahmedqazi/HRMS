@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, API_PREFIX } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -25,6 +26,7 @@ type EditableTaxBracket = { min: string; max: string; rate: string };
 export default function PayrollDashboardPage() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const [payslipsBodyRef] = useAutoAnimate<HTMLTableSectionElement>();
   const tenantScope = user?.supportModeCompanyId ?? user?.companyId;
   const currentMonth = new Date().getMonth() + 1;
   const currentYear = new Date().getFullYear();
@@ -585,7 +587,7 @@ export default function PayrollDashboardPage() {
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
+              <tbody ref={payslipsBodyRef} className="divide-y divide-gray-200 dark:divide-gray-800">
                 {payslips.map((p: any) => {
                   const isPaid = p.status === 'PAID';
                   const note = p.breakdown?.adjustment?.adjustmentNote;
