@@ -17,7 +17,6 @@ import { WorkTimerModule } from './modules/work-timer/work-timer.module';
 import { LeaveModule } from './modules/leave/leave.module';
 import { ResourcesModule } from './modules/resources/resources.module';
 import { PayrollModule } from './modules/payroll/payroll.module';
-import { BulkImportModule } from './modules/bulk-import/bulk-import.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 import { AiAssistantModule } from './modules/ai-assistant/ai-assistant.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
@@ -73,7 +72,6 @@ import { RequestThrottlerGuard } from './common/guards/request-throttler.guard';
     LeaveModule,
     ResourcesModule,
     PayrollModule,
-    BulkImportModule,
     SubscriptionsModule,
     AiAssistantModule,
     AnalyticsModule,
