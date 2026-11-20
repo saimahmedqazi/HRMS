@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, API_PREFIX } from '@/lib/api';
@@ -83,6 +83,39 @@ export default function EmployeeDetailPage() {
   const [jobReportingManagerId, setJobReportingManagerId] = useState('');
   const [jobPayrollStructureId, setJobPayrollStructureId] = useState('');
   const [jobBaseSalary, setJobBaseSalary] = useState('');
+  const [exactCoords, setExactCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locatingExact, setLocatingExact] = useState(false);
+
+  useEffect(() => {
+    try {
+      const saved = window.sessionStorage.getItem('zenhr_exact_login_coords');
+      if (saved) setExactCoords(JSON.parse(saved));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const requestExactLocation = () => {
+    if (!navigator.geolocation) return;
+    setLocatingExact(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const coords = {
+          latitude: Number(pos.coords.latitude.toFixed(6)),
+          longitude: Number(pos.coords.longitude.toFixed(6)),
+        };
+        setExactCoords(coords);
+        try {
+          window.sessionStorage.setItem('zenhr_exact_login_coords', JSON.stringify(coords));
+        } catch {
+          // ignore
+        }
+        setLocatingExact(false);
+      },
+      () => setLocatingExact(false),
+      { enableHighAccuracy: true, timeout: 5000 },
+    );
+  };
   const initialJobValues = useRef<Record<string, string>>({});
 
   // Action feedback notification banner
@@ -387,8 +420,9 @@ export default function EmployeeDetailPage() {
     timeStyle: 'short',
   }) : 'Unavailable';
   const loginPlace = emp.user?.lastLoginLocation;
-  const loginLat = emp.user?.lastLoginLatitude;
-  const loginLng = emp.user?.lastLoginLongitude;
+  const isSelfProfile = emp.id === user?.employee?.id;
+  const loginLat = (isSelfProfile && exactCoords?.latitude) ?? emp.user?.lastLoginLatitude;
+  const loginLng = (isSelfProfile && exactCoords?.longitude) ?? emp.user?.lastLoginLongitude;
   const loginCoordinates = loginLat != null && loginLng != null ? `${loginLat}, ${loginLng}` : null;
 
   return (
@@ -684,21 +718,33 @@ export default function EmployeeDetailPage() {
 
               <div className="rounded-xl bg-white dark:bg-zinc-900 p-3.5 border border-zinc-200 dark:border-zinc-800">
                 <span className="text-[10px] uppercase font-semibold text-zinc-400 flex items-center gap-1.5">
-                  <MapPin className="h-3.5 w-3.5 text-emerald-500" /> Approximate Latitude & Longitude
+                  <MapPin className="h-3.5 w-3.5 text-emerald-500" /> {isSelfProfile && exactCoords ? 'Exact Browser Latitude & Longitude' : 'Approximate Latitude & Longitude'}
                 </span>
                 <p className="font-mono text-sm font-bold text-zinc-900 dark:text-zinc-100 mt-1">
                   {loginCoordinates ?? 'Unavailable'}
                 </p>
-                {loginCoordinates && (
-                  <a
-                    href={`https://www.google.com/maps?q=${encodeURIComponent(loginCoordinates)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[11px] font-medium text-indigo-600 hover:underline inline-flex items-center gap-1 mt-0.5"
-                  >
-                    Open Map <ExternalLink className="h-3 w-3" />
-                  </a>
-                )}
+                <div className="mt-0.5 flex items-center gap-3">
+                  {loginCoordinates && (
+                    <a
+                      href={`https://www.google.com/maps?q=${encodeURIComponent(loginCoordinates)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[11px] font-medium text-indigo-600 hover:underline inline-flex items-center gap-1"
+                    >
+                      Open Map <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                  {isSelfProfile && (
+                    <button
+                      type="button"
+                      onClick={requestExactLocation}
+                      disabled={locatingExact}
+                      className="text-[11px] font-medium text-emerald-600 hover:underline disabled:opacity-50"
+                    >
+                      {locatingExact ? 'Locating…' : 'Use Exact GPS'}
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="rounded-xl bg-white dark:bg-zinc-900 p-3.5 border border-zinc-200 dark:border-zinc-800">

@@ -40,10 +40,40 @@ export default function LoginPage() {
     resolver: zodResolver(loginSchema),
   });
 
+  const captureExactBrowserLocation = (): Promise<void> => {
+    if (typeof window === 'undefined' || !navigator.geolocation) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => resolve(), 3000);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          window.clearTimeout(timer);
+          try {
+            window.sessionStorage.setItem(
+              'zenhr_exact_login_coords',
+              JSON.stringify({
+                latitude: Number(pos.coords.latitude.toFixed(6)),
+                longitude: Number(pos.coords.longitude.toFixed(6)),
+              }),
+            );
+          } catch {
+            // ignore storage errors
+          }
+          resolve();
+        },
+        () => {
+          window.clearTimeout(timer);
+          resolve();
+        },
+        { enableHighAccuracy: true, timeout: 3000 },
+      );
+    });
+  };
+
   const onSubmit = async (data: LoginFormData) => {
     setError(null);
     setIsSubmitting(true);
     try {
+      await captureExactBrowserLocation();
       const response = await api.post<
         { user: unknown } | { requires2fa: true; tempToken: string }
       >('/auth/login', data);
