@@ -1074,7 +1074,7 @@ export default function EmployeeDetailPage() {
         </div>
       )}
 
-      {id && user?.companyId && (user.role === 'COMPANY_ADMIN' || user.role === 'HR_MANAGER') && (
+      {id && user?.companyId && (user.role === 'COMPANY_ADMIN' || user.role === 'HR_MANAGER') && emp?.user?.role !== 'COMPANY_ADMIN' && (
         <ShiftPolicies canEdit={false} tenantId={user.companyId} employeeId={id} />
       )}
 

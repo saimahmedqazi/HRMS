@@ -17,7 +17,7 @@ export class SubmitLoginLocationDto {
   @ApiProperty({ example: 25 })
   @IsNumber({ allowNaN: false, allowInfinity: false })
   @Min(0)
-  @Max(100_000)
+  @Max(500_000)
   accuracy!: number;
 
   @ApiProperty({ example: '2026-11-24T15:30:00.000Z' })

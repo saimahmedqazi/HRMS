@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { useQueryClient } from '@tanstack/react-query';
 import * as z from 'zod';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -20,6 +21,7 @@ type LoginFormData = z.infer<typeof loginSchema>;
 
 export default function LoginPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { refetchUser } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [requires2fa, setRequires2fa] = useState(false);
@@ -54,29 +56,47 @@ export default function LoginPage() {
     }
 
     const sessionId = loginUser.loginLocationSessionId;
-    return new Promise((resolve) => {
-      const timer = window.setTimeout(() => resolve(), 3000);
+    const postPosition = (pos: GeolocationPosition) =>
+      api
+        .post('/auth/login-location', {
+          latitude: Number(pos.coords.latitude.toFixed(6)),
+          longitude: Number(pos.coords.longitude.toFixed(6)),
+          accuracy: Number(Math.max(0, Math.min(500_000, pos.coords.accuracy || 0)).toFixed(2)),
+          capturedAt: new Date().toISOString(),
+          loginSessionId: sessionId,
+        })
+        .then(() => {
+          void queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
+          void queryClient.invalidateQueries({ queryKey: ['employee'] });
+        })
+        .catch(() => undefined);
+
+    const capturePromise = new Promise<void>((resolve) => {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          window.clearTimeout(timer);
-          void api
-            .post('/auth/login-location', {
-              latitude: Number(pos.coords.latitude.toFixed(6)),
-              longitude: Number(pos.coords.longitude.toFixed(6)),
-              accuracy: Number(Math.max(0, pos.coords.accuracy).toFixed(2)),
-              capturedAt: new Date(pos.timestamp || Date.now()).toISOString(),
-              loginSessionId: sessionId,
-            })
-            .catch(() => undefined)
-            .finally(() => resolve());
+          void postPosition(pos).finally(resolve);
         },
-        () => {
-          window.clearTimeout(timer);
-          resolve();
+        (err) => {
+          if (err?.code === 1) {
+            resolve();
+            return;
+          }
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              void postPosition(pos).finally(resolve);
+            },
+            () => resolve(),
+            { enableHighAccuracy: false, timeout: 15_000, maximumAge: 0 },
+          );
         },
-        { enableHighAccuracy: true, timeout: 3000 },
+        { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 },
       );
     });
+
+    return Promise.race([
+      capturePromise,
+      new Promise<void>((resolve) => window.setTimeout(resolve, 1500)),
+    ]);
   };
 
   const onSubmit = async (data: LoginFormData) => {
