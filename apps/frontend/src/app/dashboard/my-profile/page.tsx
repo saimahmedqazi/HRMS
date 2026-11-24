@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { Mail, Shield, Building2, MapPin, Globe, Clock, ExternalLink } from 'lucide-react';
@@ -8,39 +8,6 @@ import { Mail, Shield, Building2, MapPin, Globe, Clock, ExternalLink } from 'luc
 export default function MyProfilePage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
-  const [exactCoords, setExactCoords] = useState<{ latitude: number; longitude: number } | null>(null);
-  const [locating, setLocating] = useState(false);
-
-  useEffect(() => {
-    try {
-      const saved = window.sessionStorage.getItem('zenhr_exact_login_coords');
-      if (saved) setExactCoords(JSON.parse(saved));
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  const requestExactLocation = () => {
-    if (!navigator.geolocation) return;
-    setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords = {
-          latitude: Number(pos.coords.latitude.toFixed(6)),
-          longitude: Number(pos.coords.longitude.toFixed(6)),
-        };
-        setExactCoords(coords);
-        try {
-          window.sessionStorage.setItem('zenhr_exact_login_coords', JSON.stringify(coords));
-        } catch {
-          // ignore
-        }
-        setLocating(false);
-      },
-      () => setLocating(false),
-      { enableHighAccuracy: true, timeout: 5000 },
-    );
-  };
 
   useEffect(() => {
     if (!isLoading && user?.employee?.id) {
@@ -60,8 +27,8 @@ export default function MyProfilePage() {
     dateStyle: 'medium',
     timeStyle: 'short',
   }) : null;
-  const latitude = exactCoords?.latitude ?? user?.lastLoginLatitude;
-  const longitude = exactCoords?.longitude ?? user?.lastLoginLongitude;
+  const latitude = user?.lastLoginLatitude ?? null;
+  const longitude = user?.lastLoginLongitude ?? null;
   const loginCoordinates = latitude != null && longitude != null ? `${latitude}, ${longitude}` : null;
 
   return (
@@ -145,7 +112,8 @@ export default function MyProfilePage() {
 
           <div className="rounded-xl bg-white dark:bg-zinc-900 p-3 border border-zinc-200 dark:border-zinc-800">
             <span className="text-[10px] uppercase font-semibold text-zinc-400 flex items-center gap-1">
-              <MapPin className="h-3 w-3 text-emerald-500" /> {exactCoords ? 'Exact Browser Coordinates' : 'Approximate Coordinates (Lat / Long)'}
+              <MapPin className="h-3 w-3 text-emerald-500" />{' '}
+              {user?.lastLoginLocationSource === 'BROWSER' ? 'Browser-Reported Coordinates' : 'Approximate IP Coordinates'}
             </span>
             <p className="font-mono font-bold text-zinc-900 dark:text-zinc-100 mt-1">
               {loginCoordinates ?? 'Unavailable'}
@@ -161,14 +129,6 @@ export default function MyProfilePage() {
                   Open Map <ExternalLink className="h-2.5 w-2.5" />
                 </a>
               )}
-              <button
-                type="button"
-                onClick={requestExactLocation}
-                disabled={locating}
-                className="text-[10px] font-medium text-emerald-600 hover:underline disabled:opacity-50"
-              >
-                {locating ? 'Locating…' : 'Use Exact GPS'}
-              </button>
             </div>
           </div>
 

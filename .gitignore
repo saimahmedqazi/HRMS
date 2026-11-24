@@ -16,7 +16,9 @@ build/
 .next/
 out/
 
-# Logs
+# GeoIP binary databases (downloaded via npm --prefix apps/backend run geoip:update)
+apps/backend/data/geoip/*.mmdb
+apps/backend/data/geoip/*.tgz
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

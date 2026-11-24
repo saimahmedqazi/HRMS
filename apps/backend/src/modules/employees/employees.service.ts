@@ -14,7 +14,7 @@ import { DataScopeService } from '../../common/services/data-scope.service';
 import { MailService } from '../../common/mail/mail.service';
 import { StorageService, DEFAULT_IMAGE_MIMES, DEFAULT_DOCUMENT_MIMES } from '../../common/storage/storage.service';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
-import { getLoginNetworkLocation } from '../../common/utils/login-network-location';
+import { getLoginNetworkLocation, resolveLoginTelemetry } from '../../common/utils/login-network-location';
 import { getProbationEndDate, parseEmployeeDate } from '../../common/utils/employee-dates';
 import { isInactiveEmployeeStatus } from '../auth/account-state';
 import { validateStrongPassword } from '../../common/utils/password-policy';
@@ -201,6 +201,11 @@ export class EmployeesService {
             lastLoginAt: true,
             lastLoginIp: true,
             lastLoginUserAgent: true,
+            lastLoginLatitude: true,
+            lastLoginLongitude: true,
+            lastLoginLocationAccuracy: true,
+            lastLoginLocationSource: true,
+            lastLoginLocationCapturedAt: true,
             twoFaEnabled: true,
           },
         },
@@ -216,7 +221,10 @@ export class EmployeesService {
         : employee.probationEndDate,
       user: employee.user ? {
         ...employee.user,
-        ...getLoginNetworkLocation(employee.user.lastLoginIp),
+        ...resolveLoginTelemetry({
+          ...employee.user,
+          employee: { locationConsent: employee.locationConsent },
+        }),
       } : null,
     };
 

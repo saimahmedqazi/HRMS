@@ -26,8 +26,18 @@ export interface UserProfile {
   lastLoginCountry?: string | null;
   lastLoginLatitude?: number | null;
   lastLoginLongitude?: number | null;
+  lastLoginLocationAccuracy?: number | null;
+  lastLoginLocationSource?: 'BROWSER' | 'IP' | null;
+  lastLoginLocationCapturedAt?: string | null;
   lastLoginUserAgent?: string | null;
   lastLoginLocation?: string | null;
+  approximateIpLocation?: {
+    city?: string | null;
+    country?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    label?: string | null;
+  } | null;
   twoFaEnabled?: boolean;
   mustChangePassword?: boolean;
   dataScope?: string;

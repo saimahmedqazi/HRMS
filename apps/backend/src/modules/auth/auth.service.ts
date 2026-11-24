@@ -17,12 +17,13 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { MailService } from '../../common/mail/mail.service';
 import { DataScopeService } from '../../common/services/data-scope.service';
-import { getLoginNetworkLocation } from '../../common/utils/login-network-location';
+import { getLoginNetworkLocation, resolveLoginTelemetry } from '../../common/utils/login-network-location';
 import { isRevokedImportPassword, PASSWORD_SETUP_REQUIRED, validateStrongPassword } from '../../common/utils/password-policy';
 import { RegisterCompanyDto } from './dto/register-company.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { SubmitLoginLocationDto } from './dto/submit-login-location.dto';
 import { isInactiveAccount } from './account-state';
 import { decryptTotpSecret, encryptTotpSecret, isLegacyTotpSecret, parseTotpEncryptionKey } from './totp-secret';
 import { CompanyStatus, UserRole, DataScope, LeaveType, EmployeeStatus, Prisma } from '@prisma/client';
@@ -39,6 +40,8 @@ export interface TokenResponse {
     companyId: string | null;
     companyName?: string;
     mustChangePassword?: boolean;
+    locationConsent?: boolean;
+    loginLocationSessionId?: string;
   };
 }
 
@@ -230,7 +233,8 @@ export class AuthService {
       }
     }
 
-    const { lastLoginIp, lastLoginCity, lastLoginCountry } = getLoginNetworkLocation(ip);
+    const { lastLoginIp, lastLoginCity, lastLoginCountry, lastLoginLocation } = getLoginNetworkLocation(ip);
+    const loginLocationSessionId = crypto.randomUUID();
 
     const authenticated = await this.prisma.user.updateMany({
       where: { id: user.id, sessionVersion: user.sessionVersion, deletedAt: null, OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] },
@@ -242,6 +246,12 @@ export class AuthService {
         lastLoginUserAgent: userAgent.slice(0, 255),
         lastLoginCity,
         lastLoginCountry,
+        lastLoginLatitude: null,
+        lastLoginLongitude: null,
+        lastLoginLocationAccuracy: null,
+        lastLoginLocationSource: lastLoginLocation ? 'IP' : null,
+        lastLoginLocationCapturedAt: null,
+        lastLoginLocationSessionId: loginLocationSessionId,
       },
     });
     if (authenticated.count === 0) {
@@ -263,6 +273,8 @@ export class AuthService {
         companyId: user.companyId,
         companyName: user.company?.name,
         mustChangePassword: user.mustChangePassword,
+        locationConsent: Boolean(user.employee?.locationConsent),
+        loginLocationSessionId,
       },
     };
   }
@@ -309,7 +321,8 @@ export class AuthService {
       }
     }
 
-    const { lastLoginIp, lastLoginCity, lastLoginCountry } = getLoginNetworkLocation(ip);
+    const { lastLoginIp, lastLoginCity, lastLoginCountry, lastLoginLocation } = getLoginNetworkLocation(ip);
+    const loginLocationSessionId = crypto.randomUUID();
 
     const authenticated = await this.prisma.user.updateMany({
       where: { id: user.id, sessionVersion: user.sessionVersion, deletedAt: null, OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] },
@@ -321,6 +334,12 @@ export class AuthService {
         lastLoginUserAgent: userAgent.slice(0, 255),
         lastLoginCity,
         lastLoginCountry,
+        lastLoginLatitude: null,
+        lastLoginLongitude: null,
+        lastLoginLocationAccuracy: null,
+        lastLoginLocationSource: lastLoginLocation ? 'IP' : null,
+        lastLoginLocationCapturedAt: null,
+        lastLoginLocationSessionId: loginLocationSessionId,
       },
     });
     if (authenticated.count === 0) {
@@ -342,6 +361,8 @@ export class AuthService {
         companyId: user.companyId,
         companyName: user.company?.name,
         mustChangePassword: user.mustChangePassword,
+        locationConsent: Boolean(user.employee?.locationConsent),
+        loginLocationSessionId,
       },
     };
   }
@@ -643,7 +664,72 @@ export class AuthService {
       data: { locationConsent },
     });
     if (result.count === 0) throw new NotFoundException('Employee profile not found');
+
+    if (!locationConsent) {
+      const existing = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { lastLoginIp: true },
+      });
+      await this.prisma.user.updateMany({
+        where: { id: userId, deletedAt: null },
+        data: {
+          lastLoginLatitude: null,
+          lastLoginLongitude: null,
+          lastLoginLocationAccuracy: null,
+          lastLoginLocationCapturedAt: null,
+          lastLoginLocationSource: existing?.lastLoginIp ? 'IP' : null,
+        },
+      });
+    }
+
     return { locationConsent };
+  }
+
+  async submitLoginLocation(userId: string, dto: SubmitLoginLocationDto) {
+    const capturedMs = new Date(dto.capturedAt).getTime();
+    const now = Date.now();
+    if (!Number.isFinite(capturedMs) || capturedMs > now + 60_000 || now - capturedMs > 5 * 60_000) {
+      throw new BadRequestException('Login location timestamp is stale or invalid.');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        deletedAt: true,
+        lastLoginLocationSessionId: true,
+        employee: { select: { locationConsent: true, deletedAt: true } },
+      },
+    });
+    if (!user || user.deletedAt) {
+      throw new UnauthorizedException('User account not found.');
+    }
+    if (!user.employee || user.employee.deletedAt || user.employee.locationConsent !== true) {
+      throw new ForbiddenException('Location consent has not been granted.');
+    }
+    if (!user.lastLoginLocationSessionId || user.lastLoginLocationSessionId !== dto.loginSessionId) {
+      throw new ConflictException('Login session is no longer the latest login.');
+    }
+
+    const updated = await this.prisma.user.updateMany({
+      where: {
+        id: userId,
+        deletedAt: null,
+        lastLoginLocationSessionId: dto.loginSessionId,
+      },
+      data: {
+        lastLoginLatitude: dto.latitude,
+        lastLoginLongitude: dto.longitude,
+        lastLoginLocationAccuracy: dto.accuracy,
+        lastLoginLocationSource: 'BROWSER',
+        lastLoginLocationCapturedAt: new Date(capturedMs),
+      },
+    });
+    if (updated.count !== 1) {
+      throw new ConflictException('Login session is no longer the latest login.');
+    }
+
+    return { saved: true, source: 'BROWSER' as const };
   }
 
   async getMe(userId: string, supportModeCompanyId?: string | null) {
@@ -659,6 +745,11 @@ export class AuthService {
         lastLoginAt: true,
         lastLoginIp: true,
         lastLoginUserAgent: true,
+        lastLoginLatitude: true,
+        lastLoginLongitude: true,
+        lastLoginLocationAccuracy: true,
+        lastLoginLocationSource: true,
+        lastLoginLocationCapturedAt: true,
         companyId: true,
         company: {
           select: {
@@ -722,7 +813,7 @@ export class AuthService {
       firstName,
       lastName,
       avatarUrl: user.employee?.profilePictureUrl || null,
-      ...getLoginNetworkLocation(user.lastLoginIp),
+      ...resolveLoginTelemetry(user),
       employee: user.employee
         ? {
             ...user.employee,

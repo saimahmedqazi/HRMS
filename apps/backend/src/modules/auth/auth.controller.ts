@@ -29,6 +29,7 @@ import { LocationConsentDto } from './dto/location-consent.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { SubmitLoginLocationDto } from './dto/submit-login-location.dto';
 import { DisableTotpDto, VerifyTotpDto, VerifyTwoFactorLoginDto } from './dto/totp.dto';
 import { UserRole } from '@prisma/client';
 
@@ -214,6 +215,15 @@ export class AuthController {
   @ApiOperation({ summary: 'Set device location consent for your attendance punches' })
   async updateLocationConsent(@CurrentUser() user: AuthenticatedUser, @Body() dto: LocationConsentDto) {
     return this.authService.updateLocationConsent((user.id || user.sub)!, user.companyId, dto.locationConsent);
+  }
+
+  @Post('login-location')
+  @ApiCookieAuth()
+  @Throttle({ short: { limit: 15, ttl: 60000 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Submit consented browser-derived login location for the current login session' })
+  async submitLoginLocation(@CurrentUser() user: AuthenticatedUser, @Body() dto: SubmitLoginLocationDto) {
+    return this.authService.submitLoginLocation((user.id || user.sub)!, dto);
   }
 
   @Get('me/modules')

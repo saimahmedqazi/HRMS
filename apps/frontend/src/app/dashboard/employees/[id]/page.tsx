@@ -93,8 +93,6 @@ export default function EmployeeDetailPage() {
   const [jobReportingManagerId, setJobReportingManagerId] = useState('');
   const [jobPayrollStructureId, setJobPayrollStructureId] = useState('');
   const [jobBaseSalary, setJobBaseSalary] = useState('');
-  const [exactCoords, setExactCoords] = useState<{ latitude: number; longitude: number } | null>(null);
-  const [locatingExact, setLocatingExact] = useState(false);
 
   // Admin password reset modal
   const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
@@ -103,37 +101,6 @@ export default function EmployeeDetailPage() {
   const [tempPasswordCopied, setTempPasswordCopied] = useState(false);
   const [resetPasswordAttempted, setResetPasswordAttempted] = useState(false);
   const [resetPasswordSuccess, setResetPasswordSuccess] = useState('');
-
-  useEffect(() => {
-    try {
-      const saved = window.sessionStorage.getItem('zenhr_exact_login_coords');
-      if (saved) setExactCoords(JSON.parse(saved));
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  const requestExactLocation = () => {
-    if (!navigator.geolocation) return;
-    setLocatingExact(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords = {
-          latitude: Number(pos.coords.latitude.toFixed(6)),
-          longitude: Number(pos.coords.longitude.toFixed(6)),
-        };
-        setExactCoords(coords);
-        try {
-          window.sessionStorage.setItem('zenhr_exact_login_coords', JSON.stringify(coords));
-        } catch {
-          // ignore
-        }
-        setLocatingExact(false);
-      },
-      () => setLocatingExact(false),
-      { enableHighAccuracy: true, timeout: 5000 },
-    );
-  };
   const initialJobValues = useRef<Record<string, string>>({});
 
   // Action feedback notification banner
@@ -498,9 +465,12 @@ export default function EmployeeDetailPage() {
     timeStyle: 'short',
   }) : 'Unavailable';
   const loginPlace = emp.user?.lastLoginLocation;
-  const isSelfProfile = emp.id === user?.employee?.id;
-  const loginLat = (isSelfProfile && exactCoords?.latitude) ?? emp.user?.lastLoginLatitude;
-  const loginLng = (isSelfProfile && exactCoords?.longitude) ?? emp.user?.lastLoginLongitude;
+  const loginSource: 'BROWSER' | 'IP' | null = emp.user?.lastLoginLocationSource ?? null;
+  const loginAccuracy: number | null = emp.user?.lastLoginLocationAccuracy ?? null;
+  const loginCapturedAt: string | null = emp.user?.lastLoginLocationCapturedAt ?? null;
+  const approxIpLabel: string | null = emp.user?.approximateIpLocation?.label ?? null;
+  const loginLat = emp.user?.lastLoginLatitude ?? null;
+  const loginLng = emp.user?.lastLoginLongitude ?? null;
   const loginCoordinates = loginLat != null && loginLng != null ? `${loginLat}, ${loginLng}` : null;
 
   return (
@@ -799,11 +769,18 @@ export default function EmployeeDetailPage() {
 
           {/* Last Login IP & Geolocation Telemetry Card ("Aapne yahan se, itne baje login kiya") */}
           <div className="md:col-span-2 rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5 shadow-sm dark:border-indigo-900/60 dark:bg-indigo-950/20 space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
                 <MapPin className="h-4 w-4 text-indigo-600" />
                 Last Login IP & Geolocation Telemetry
               </h3>
+              <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                {loginSource === 'BROWSER'
+                  ? `Source: Browser-Reported${loginAccuracy != null ? ` (±${Math.round(loginAccuracy)}m)` : ''}`
+                  : loginSource === 'IP'
+                    ? 'Source: Approximate IP Geolocation'
+                    : 'Source: Unavailable'}
+              </span>
             </div>
 
             <div className="rounded-xl bg-white dark:bg-zinc-900 p-3.5 border border-indigo-100 dark:border-indigo-900/50 text-xs text-zinc-700 dark:text-zinc-300">
@@ -811,8 +788,17 @@ export default function EmployeeDetailPage() {
               <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
                 {loginIp}
               </span>{' '}
-              {loginPlace && <>near <span className="font-semibold">{loginPlace}</span>{' '}</>}
+              {loginSource === 'BROWSER'
+                ? 'with consented browser-reported coordinates'
+                : loginPlace
+                  ? <>near <span className="font-semibold">{loginPlace}</span>{' '}</>
+                  : null}
               {loginAt && <>on <span className="font-semibold">{loginTime}</span></>}
+              {loginSource === 'BROWSER' && approxIpLabel && (
+                <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Approximate IP fallback: {approxIpLabel}
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
@@ -824,17 +810,25 @@ export default function EmployeeDetailPage() {
                   {loginIp}
                 </p>
                 <span className="text-[11px] text-zinc-400">
-                  {loginPlace ?? 'Approximate location unavailable'}
+                  {approxIpLabel ?? loginPlace ?? 'Approximate IP location unavailable'}
                 </span>
               </div>
 
               <div className="rounded-xl bg-white dark:bg-zinc-900 p-3.5 border border-zinc-200 dark:border-zinc-800">
                 <span className="text-[10px] uppercase font-semibold text-zinc-400 flex items-center gap-1.5">
-                  <MapPin className="h-3.5 w-3.5 text-emerald-500" /> {isSelfProfile && exactCoords ? 'Exact Browser Latitude & Longitude' : 'Approximate Latitude & Longitude'}
+                  <MapPin className="h-3.5 w-3.5 text-emerald-500" />{' '}
+                  {loginSource === 'BROWSER' ? 'Browser-Reported Coordinates' : 'Approximate IP Coordinates'}
                 </span>
                 <p className="font-mono text-sm font-bold text-zinc-900 dark:text-zinc-100 mt-1">
                   {loginCoordinates ?? 'Unavailable'}
                 </p>
+                {loginSource === 'BROWSER' && (loginAccuracy != null || loginCapturedAt) && (
+                  <p className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                    {loginAccuracy != null ? `Accuracy: ±${Math.round(loginAccuracy)}m` : ''}
+                    {loginAccuracy != null && loginCapturedAt ? ' · ' : ''}
+                    {loginCapturedAt ? `Captured ${new Date(loginCapturedAt).toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' })}` : ''}
+                  </p>
+                )}
                 <div className="mt-0.5 flex items-center gap-3">
                   {loginCoordinates && (
                     <a
@@ -845,16 +839,6 @@ export default function EmployeeDetailPage() {
                     >
                       Open Map <ExternalLink className="h-3 w-3" />
                     </a>
-                  )}
-                  {isSelfProfile && (
-                    <button
-                      type="button"
-                      onClick={requestExactLocation}
-                      disabled={locatingExact}
-                      className="text-[11px] font-medium text-emerald-600 hover:underline disabled:opacity-50"
-                    >
-                      {locatingExact ? 'Locating…' : 'Use Exact GPS'}
-                    </button>
                   )}
                 </div>
               </div>

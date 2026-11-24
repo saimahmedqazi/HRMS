@@ -224,11 +224,17 @@ model User {
   sessionVersion        Int       @default(0)
   failedLoginAttempts   Int       @default(0)
   lockedUntil           DateTime?
-  lastLoginAt           DateTime?
-  lastLoginIp           String?
-  lastLoginUserAgent    String?
-  lastLoginCity         String?
-  lastLoginCountry      String?
+  lastLoginAt                  DateTime?
+  lastLoginIp                  String?
+  lastLoginUserAgent           String?
+  lastLoginCity                String?
+  lastLoginCountry             String?
+  lastLoginLatitude            Float?
+  lastLoginLongitude           Float?
+  lastLoginLocationAccuracy    Float?
+  lastLoginLocationSource      String?
+  lastLoginLocationCapturedAt  DateTime?
+  lastLoginLocationSessionId   String?
   twoFaEnabled          Boolean   @default(false)
   twoFaSecret           String?
   twoFaBackupCodes      String[]  @default([])

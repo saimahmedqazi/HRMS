@@ -143,8 +143,13 @@ export default function SettingsPage() {
     onMutate: () => queryClient.cancelQueries({ queryKey: ['auth', 'me'] }),
     onSuccess: ({ locationConsent }) => {
       queryClient.setQueryData<UserProfile>(['auth', 'me'], (current) => current?.employee
-        ? { ...current, employee: { ...current.employee, locationConsent } }
+        ? {
+            ...current,
+            employee: { ...current.employee, locationConsent },
+            ...(!locationConsent ? { lastLoginLatitude: null, lastLoginLongitude: null, lastLoginLocationAccuracy: null, lastLoginLocationCapturedAt: null } : {}),
+          }
         : current);
+      void queryClient.invalidateQueries({ queryKey: ['employee'] });
       setStatusMessage('Attendance location preference saved.');
       setErrorMessage(null);
     },
@@ -641,7 +646,7 @@ export default function SettingsPage() {
             <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
               <span id="attendance-location-label">Allow device location at check-in</span>
               <span id="attendance-location-help" className="mt-1 block text-xs font-normal text-zinc-500">
-                Share your device location when you punch in. You can turn this off anytime.
+                Share your device location when you sign in or punch in for security telemetry and attendance. Turning this off clears saved browser login coordinates.
               </span>
             </span>
           </label>

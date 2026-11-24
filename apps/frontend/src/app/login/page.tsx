@@ -40,25 +40,35 @@ export default function LoginPage() {
     resolver: zodResolver(loginSchema),
   });
 
-  const captureExactBrowserLocation = (): Promise<void> => {
-    if (typeof window === 'undefined' || !navigator.geolocation) return Promise.resolve();
+  const submitConsentedLoginLocation = (loginUser?: {
+    locationConsent?: boolean;
+    loginLocationSessionId?: string;
+  }): Promise<void> => {
+    if (
+      typeof window === 'undefined' ||
+      !navigator.geolocation ||
+      loginUser?.locationConsent !== true ||
+      !loginUser?.loginLocationSessionId
+    ) {
+      return Promise.resolve();
+    }
+
+    const sessionId = loginUser.loginLocationSessionId;
     return new Promise((resolve) => {
       const timer = window.setTimeout(() => resolve(), 3000);
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           window.clearTimeout(timer);
-          try {
-            window.sessionStorage.setItem(
-              'zenhr_exact_login_coords',
-              JSON.stringify({
-                latitude: Number(pos.coords.latitude.toFixed(6)),
-                longitude: Number(pos.coords.longitude.toFixed(6)),
-              }),
-            );
-          } catch {
-            // ignore storage errors
-          }
-          resolve();
+          void api
+            .post('/auth/login-location', {
+              latitude: Number(pos.coords.latitude.toFixed(6)),
+              longitude: Number(pos.coords.longitude.toFixed(6)),
+              accuracy: Number(Math.max(0, pos.coords.accuracy).toFixed(2)),
+              capturedAt: new Date(pos.timestamp || Date.now()).toISOString(),
+              loginSessionId: sessionId,
+            })
+            .catch(() => undefined)
+            .finally(() => resolve());
         },
         () => {
           window.clearTimeout(timer);
@@ -73,9 +83,8 @@ export default function LoginPage() {
     setError(null);
     setIsSubmitting(true);
     try {
-      await captureExactBrowserLocation();
       const response = await api.post<
-        { user: unknown } | { requires2fa: true; tempToken: string }
+        { user: { locationConsent?: boolean; loginLocationSessionId?: string } } | { requires2fa: true; tempToken: string }
       >('/auth/login', data);
 
       if ('requires2fa' in response && response.requires2fa) {
@@ -84,6 +93,9 @@ export default function LoginPage() {
         return;
       }
 
+      if ('user' in response) {
+        await submitConsentedLoginLocation(response.user);
+      }
       await refetchUser();
       router.push('/dashboard');
     } catch (err: unknown) {
@@ -102,11 +114,14 @@ export default function LoginPage() {
     setError(null);
     setIsSubmitting(true);
     try {
-      await api.post('/auth/login/2fa', {
+      const response = await api.post<{ user?: { locationConsent?: boolean; loginLocationSessionId?: string } }>('/auth/login/2fa', {
         tempToken,
         code,
       });
 
+      if ('user' in response) {
+        await submitConsentedLoginLocation(response.user);
+      }
       await refetchUser();
       router.push('/dashboard');
     } catch (err: unknown) {

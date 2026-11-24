@@ -20,6 +20,7 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "prisma:seed": "ts-node prisma/seed.ts",
+    "geoip:update": "node scripts/update-geoip-db.mjs",
     "auth:encrypt-totp": "node dist/src/scripts/encrypt-totp.js",
     "auth:bootstrap-admin": "node dist/src/scripts/bootstrap-admin.js",
     "auth:revoke-legacy-import-sessions": "node dist/src/scripts/revoke-legacy-import-sessions.js"
@@ -50,6 +51,7 @@
     "geoip-lite": "2.0.3",
     "helmet": "^7.1.0",
     "libphonenumber-js": "^1.13.17",
+    "maxmind": "^5.1.0",
     "multer": "2.5.0",
     "nodemailer": "10.5.0",
     "otplib": "^12.0.1",
