@@ -98,6 +98,8 @@ export default function ResourcesDashboardPage() {
     user?.role === 'TEAM_LEAD' ||
     isOpsOrAdmin;
 
+  const canRequestResource = Boolean(user?.companyId) && user?.role !== 'OPERATION_MANAGER' && user?.role !== 'SUPER_ADMIN';
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -111,7 +113,7 @@ export default function ResourcesDashboardPage() {
           </p>
         </div>
 
-        <div>
+        {canRequestResource && <div>
           <button
             onClick={() => setModalOpen(true)}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-primary-600 hover:bg-primary-700 text-white shadow-sm"
@@ -119,7 +121,7 @@ export default function ResourcesDashboardPage() {
             <Plus className="w-4 h-4" />
             Request Resource
           </button>
-        </div>
+        </div>}
       </div>
 
       {/* Requests Table */}

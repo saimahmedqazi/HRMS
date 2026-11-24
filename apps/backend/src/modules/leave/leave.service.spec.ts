@@ -45,7 +45,7 @@ describe('LeaveService', () => {
         findUnique: jest.fn(),
       },
       user: {
-        findFirst: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue({ id: 'reviewer', email: 'reviewer@example.test', role: UserRole.HR_MANAGER, employee: null }),
         findMany: jest.fn().mockResolvedValue([]),
       },
       notification: {
@@ -53,6 +53,7 @@ describe('LeaveService', () => {
       },
       $transaction: jest.fn((callback) => callback(prisma)),
       $executeRaw: jest.fn().mockResolvedValue(1),
+      $queryRaw: jest.fn().mockResolvedValue([]),
     };
 
     approvalEngine = {
@@ -96,6 +97,17 @@ describe('LeaveService', () => {
         .rejects.toThrow(ForbiddenException);
       expect(prisma.leaveTypeSetting.findMany).not.toHaveBeenCalled();
       expect(prisma.leaveTypeSetting.createMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('yearly balance viewing', () => {
+    it('reports an uninitialized year without creating a balance', async () => {
+      prisma.employee.findFirst.mockResolvedValue({ id: mockEmployeeId });
+      prisma.leaveTypeSetting.findMany.mockResolvedValue([{ id: 'type-1', leaveType: LeaveType.CASUAL }]);
+      prisma.leaveBalance.findMany.mockResolvedValue([]);
+      const result = await service.getLeaveBalances(mockCompanyId, mockEmployeeId, 2027, { id: mockUserId, role: UserRole.EMPLOYEE });
+      expect(result).toEqual([expect.objectContaining({ year: 2027, initialized: false, leaveType: LeaveType.CASUAL })]);
+      expect(prisma.leaveBalance.createMany).not.toHaveBeenCalled();
     });
   });
 
@@ -192,6 +204,23 @@ describe('LeaveService', () => {
         leaveTypeSettingId: 'annual', startDate: '2026-11-10', endDate: '2026-11-12',
       })).rejects.toThrow('No eligible leave approver');
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects an inclusive overlap before reserving any balance', async () => {
+      prisma.employee.findFirst.mockResolvedValue({ id: mockEmployeeId, userId: mockUserId, user: { role: UserRole.EMPLOYEE } });
+      prisma.leaveTypeSetting.findFirst.mockResolvedValue({ id: 'annual', isActive: true, leaveType: LeaveType.ANNUAL });
+      prisma.leaveRequest.findFirst.mockResolvedValue({ startDate: new Date('2026-12-30'), endDate: new Date('2027-01-06'), status: LeaveStatus.APPROVED });
+      await expect(service.createLeaveRequest(mockCompanyId, mockUserId, {
+        leaveTypeSettingId: 'annual', startDate: '2027-01-06', endDate: '2027-01-07',
+      })).rejects.toThrow('overlaps an existing approved request');
+      expect(prisma.$queryRaw).toHaveBeenCalled();
+      expect(prisma.leaveRequest.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ companyId: mockCompanyId, employeeId: mockEmployeeId,
+          status: { in: [LeaveStatus.PENDING, LeaveStatus.APPROVED] },
+          startDate: { lte: new Date('2027-01-07') }, endDate: { gte: new Date('2027-01-06') } }),
+      }));
+      expect(prisma.leaveBalance.createMany).not.toHaveBeenCalled();
+      expect(prisma.$executeRaw).not.toHaveBeenCalled();
     });
 
     it('should successfully submit request with prescription, incrementing pending balance and notifying approver', async () => {
@@ -316,7 +345,9 @@ describe('LeaveService', () => {
         { decision: 'APPROVE', notes: 'Looks good' },
       );
 
-      expect(prisma.leaveRequest.update).toHaveBeenCalled();
+      expect(prisma.leaveRequest.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ step1ActorId: 'reviewer', step1ActorName: 'reviewer@example.test', step1ActorRole: UserRole.HR_MANAGER }),
+      }));
       expect(prisma.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({ userId: 'fallback-hr' }) });
       expect(result.step1Status).toBe(ApprovalStatus.APPROVED);
     });

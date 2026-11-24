@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('HR can submit a currency-neutral salary structure with custom components and tax', async ({ page }) => {
+test('CEO can submit a currency-neutral salary structure with custom components and tax', async ({ page }) => {
   let submittedPayload: Record<string, any> | undefined;
 
   await page.route('**/api/v1/**', async (route) => {
@@ -10,7 +10,7 @@ test('HR can submit a currency-neutral salary structure with custom components a
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ role: 'HR_MANAGER', allowedModules: ['dashboard', 'payroll'] }),
+        body: JSON.stringify({ role: 'COMPANY_ADMIN', allowedModules: ['dashboard', 'payroll'] }),
       });
       return;
     }
@@ -19,7 +19,7 @@ test('HR can submit a currency-neutral salary structure with custom components a
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          id: 'hr-manager', email: 'hr@example.test', role: 'HR_MANAGER',
+          id: 'hr-manager', email: 'hr@example.test', role: 'COMPANY_ADMIN',
           firstName: 'HR', lastName: 'Manager', companyId: 'company-1',
         }),
       });
@@ -71,7 +71,7 @@ test('HR can submit a currency-neutral salary structure with custom components a
   });
 });
 
-test('HR can archive unused structures, adjust unpaid payslips, and mark payslips as paid', async ({ page }) => {
+test('CEO can archive unused structures, adjust unpaid payslips, and mark payslips as paid', async ({ page }) => {
   let archivedId: string | undefined;
   let adjustmentPayload: Record<string, any> | undefined;
   let paidPayslipId: string | undefined;
@@ -99,10 +99,10 @@ test('HR can archive unused structures, adjust unpaid payslips, and mark payslip
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (path.endsWith('/auth/me/modules')) {
-      return route.fulfill({ json: { data: { role: 'HR_MANAGER', allowedModules: ['dashboard', 'payroll'] } } });
+      return route.fulfill({ json: { data: { role: 'COMPANY_ADMIN', allowedModules: ['dashboard', 'payroll'] } } });
     }
     if (path.endsWith('/auth/me')) {
-      return route.fulfill({ json: { data: { id: 'hr-1', email: 'hr@example.test', role: 'HR_MANAGER', companyId: 'comp-1' } } });
+      return route.fulfill({ json: { data: { id: 'hr-1', email: 'hr@example.test', role: 'COMPANY_ADMIN', companyId: 'comp-1' } } });
     }
     if (path.endsWith('/payroll/structures') && request.method() === 'GET') {
       return route.fulfill({ json: { data: structuresState } });
@@ -248,5 +248,5 @@ test('Department payroll summary displays currency from API and renders errors c
 
   await page.goto('/dashboard/payroll-view');
   await expect(page.getByText('Engineering Department')).toBeVisible();
-  await expect(page.getByText(/€|EUR/)).toBeVisible();
+  await expect(page.getByText('€11,000.00', { exact: true })).toBeVisible();
 });

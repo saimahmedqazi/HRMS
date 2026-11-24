@@ -401,11 +401,11 @@ describe('EmployeesService', () => {
       mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-1', userId: profileOwner.id });
       mockPrisma.employee.update.mockResolvedValueOnce({ id: 'emp-1', phone: '+1 555 0102', dateOfBirth: null });
 
-      await service.updateEmployee('emp-1', { phone: ' +1 555 0102 ', dateOfBirth: null, address: '' }, profileOwner);
+      await service.updateEmployee('emp-1', { phone: ' +1 202 555 0102 ', dateOfBirth: null, address: '' }, profileOwner);
 
       expect(mockPrisma.employee.update).toHaveBeenCalledWith(expect.objectContaining({
         where: { id: 'emp-1', userId: profileOwner.id, companyId: 'comp-1', deletedAt: null },
-        data: expect.objectContaining({ phone: '+1 555 0102', address: null, dateOfBirth: null }),
+        data: expect.objectContaining({ phone: '+1 202 555 0102', address: null, dateOfBirth: null }),
       }));
     });
 

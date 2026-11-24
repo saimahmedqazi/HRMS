@@ -39,6 +39,10 @@ describe('PayrollController', () => {
     expect(controller).toBeDefined();
   });
 
+  it.each([UserRole.HR_MANAGER, UserRole.EMPLOYEE])('rejects payroll policy writes by %s', async (role) => {
+    await expect(controller.deleteStructure({ ...mockUser, role }, 'struct-2')).rejects.toThrow('Only the company CEO');
+  });
+
   describe('createStructure', () => {
     it('should create salary structure for company', async () => {
       const mockResult = { id: 'struct-1', name: 'Standard Engineering' } as any;
@@ -50,7 +54,7 @@ describe('PayrollController', () => {
         components: [],
       };
 
-      const result = await controller.createStructure(mockUser, dto);
+      const result = await controller.createStructure({ ...mockUser, role: UserRole.COMPANY_ADMIN }, dto);
       expect(result).toEqual(mockResult);
       expect(mockPayrollService.createStructure).toHaveBeenCalledWith('company-1', dto);
     });
@@ -62,7 +66,7 @@ describe('PayrollController', () => {
       const dto = { name: 'Updated package', baseSalary: 7000, components: [], taxRules: { brackets: [] } } as any;
       (mockPayrollService.updateStructure as jest.Mock).mockResolvedValue(result);
 
-      await expect(controller.updateStructure(mockUser, 'struct-1', dto)).resolves.toEqual(result);
+      await expect(controller.updateStructure({ ...mockUser, role: UserRole.COMPANY_ADMIN }, 'struct-1', dto)).resolves.toEqual(result);
       expect(mockPayrollService.updateStructure).toHaveBeenCalledWith('company-1', 'struct-1', dto);
     });
   });
@@ -103,7 +107,7 @@ describe('PayrollController', () => {
   describe('deleteStructure, updatePayslip, markPaid & query validation', () => {
     it('archives a salary structure in the signed-in company scope', async () => {
       (mockPayrollService.deleteStructure as jest.Mock).mockResolvedValue({ id: 'struct-2' });
-      await expect(controller.deleteStructure(mockUser, 'struct-2')).resolves.toEqual({ id: 'struct-2' });
+      await expect(controller.deleteStructure({ ...mockUser, role: UserRole.COMPANY_ADMIN }, 'struct-2')).resolves.toEqual({ id: 'struct-2' });
       expect(mockPayrollService.deleteStructure).toHaveBeenCalledWith('company-1', 'struct-2', 'user-1');
     });
 

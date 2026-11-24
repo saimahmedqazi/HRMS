@@ -40,6 +40,9 @@ import {
 
 const calendarStatus: Record<string, string> = {
   PRESENT: 'Present',
+  IN_PROGRESS: 'Checked in',
+  HALF_DAY: 'Half day',
+  MISSING_CHECKOUT: 'Missing checkout',
   PRESENT_REMOTE: 'Remote',
   ABSENT: 'Absent',
   ABSENT_PENDING_REVIEW: 'Review',
@@ -344,46 +347,11 @@ export default function AttendanceDashboardPage() {
   const { present: presentCount, remote: remoteCount, absent: absentCount, exceptions: exceptionCount } =
     overviewData?.todaySummary ?? { present: 0, remote: 0, absent: 0, exceptions: 0 };
 
-  const statusBreakdownChart = [
-    {
-      category: 'Present (Onsite)',
-      Present: presentCount,
-      Remote: 0,
-      Absent: 0,
-      Exceptions: 0,
-    },
-    {
-      category: 'Present (Remote)',
-      Present: 0,
-      Remote: remoteCount,
-      Absent: 0,
-      Exceptions: 0,
-    },
-    {
-      category: 'Absent',
-      Present: 0,
-      Remote: 0,
-      Absent: absentCount,
-      Exceptions: 0,
-    },
-    {
-      category: 'Exceptions / Late',
-      Present: 0,
-      Remote: 0,
-      Absent: 0,
-      Exceptions: exceptionCount,
-    },
-  ];
-
-  const trendChartData =
-    overviewData?.attendanceTrend && overviewData.attendanceTrend.length > 0
-      ? overviewData.attendanceTrend
-      : statusBreakdownChart.map((item) => ({
-          day: item.category,
-          present: item.Present,
-          remote: item.Remote,
-          absent: item.Absent + item.Exceptions,
-        }));
+  const hasTrend = Boolean(overviewData?.attendanceTrend?.length);
+  const trendChartData = hasTrend ? overviewData.attendanceTrend : [{
+    day: 'Today', present: presentCount, remote: remoteCount, absent: absentCount, exceptions: exceptionCount,
+    halfDay: overviewData?.todaySummary?.halfDay ?? 0,
+  }];
 
   // Monthly Calendar computation
   const year = calendarMonth.getFullYear();
@@ -668,7 +636,9 @@ export default function AttendanceDashboardPage() {
                 {checkInMutation.isPending ? 'Punching In...' : 'Punch In Now'}
               </button>
             </div>
-          ) : !attendance?.checkOutTime ? (
+          ) : attendance?.status === 'MISSING_CHECKOUT' ? (
+            <p className="mt-4 text-sm text-amber-700 dark:text-amber-300">Missing checkout. Your attendance is awaiting review.</p>
+          ) : !attendance?.checkOutTime && !attendance?.finalizedAt ? (
             <div className="mt-6 space-y-4">
               <p className="text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 p-2.5 rounded-lg border border-emerald-200 dark:border-emerald-900 flex items-center gap-1.5">
                 <CheckCircle className="h-4 w-4" />
@@ -800,7 +770,7 @@ export default function AttendanceDashboardPage() {
                 Attendance Analytics Graph (Present vs. Absent)
               </h2>
               <p className="text-xs text-zinc-500">
-                Daily breakdown of Onsite Present, Remote Present, and Absent counts.
+                {hasTrend ? 'Daily attendance counts.' : 'Current attendance status counts.'}
               </p>
             </div>
           </div>
@@ -811,11 +781,21 @@ export default function AttendanceDashboardPage() {
                 <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
                 <XAxis dataKey="day" tick={{ fontSize: 11 }} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                <Tooltip />
+                <Tooltip
+                  cursor={{ fill: 'rgba(148, 163, 184, 0.15)' }}
+                  content={({ active, payload, label }) => active && payload?.length ? (
+                    <div role="status" className="max-w-[min(14rem,65vw)] rounded-md border border-zinc-300 bg-white p-2 text-xs text-zinc-900 shadow-lg dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100">
+                      <p className="mb-1 font-semibold">{label}</p>
+                      {payload.map((entry) => <p key={entry.dataKey} className="flex justify-between gap-3"><span>{entry.name}</span><strong>{entry.value}</strong></p>)}
+                    </div>
+                  ) : null}
+                />
                 <Legend wrapperStyle={{ fontSize: '12px' }} />
                 <Bar dataKey="present" fill="#10B981" radius={[4, 4, 0, 0]} name="Present (Onsite)" />
                 <Bar dataKey="remote" fill="#3B82F6" radius={[4, 4, 0, 0]} name="Present (Remote)" />
-                <Bar dataKey="absent" fill="#F43F5E" radius={[4, 4, 0, 0]} name="Absent / Exceptions" />
+                <Bar dataKey="absent" fill="#F43F5E" radius={[4, 4, 0, 0]} name="Absent" />
+                <Bar dataKey="halfDay" fill="#8B5CF6" radius={[4, 4, 0, 0]} name="Half day" />
+                {!hasTrend && <Bar dataKey="exceptions" fill="#F59E0B" radius={[4, 4, 0, 0]} name="Exceptions" />}
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -887,7 +867,8 @@ export default function AttendanceDashboardPage() {
               const dayAbsent = dayRecords.filter(
                 (r) => r.status === 'ABSENT',
               ).length;
-              const dayReview = dayRecords.filter((r) => r.status === 'ABSENT_PENDING_REVIEW').length;
+              const dayReview = dayRecords.filter((r) => ['ABSENT_PENDING_REVIEW', 'MISSING_CHECKOUT'].includes(r.status)).length;
+              const dayHalf = dayRecords.filter((r) => r.status === 'HALF_DAY').length;
               const dayOnLeave = dayRecords.filter((r) => r.status === 'ON_LEAVE').length;
               const singleStatus = dayRecords[0]?.status ?? (isToday ? attendance?.status : null);
 
@@ -898,6 +879,7 @@ export default function AttendanceDashboardPage() {
                     <span title="Present" className="rounded bg-emerald-100 px-1 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
                       {dayPresent} P
                     </span>
+                    {dayHalf > 0 && <span title="Half day" className="rounded bg-violet-100 px-1 text-violet-700 dark:bg-violet-950 dark:text-violet-300">{dayHalf} H</span>}
                     {dayAbsent > 0 && <span title="Absent" className="rounded bg-rose-100 px-1 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">{dayAbsent} A</span>}
                     {dayReview > 0 && <span title="Pending review" className="rounded bg-amber-100 px-1 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">{dayReview} R</span>}
                     {dayOnLeave > 0 && <span title="On Leave" className="rounded bg-indigo-100 px-1 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">{dayOnLeave} L</span>}

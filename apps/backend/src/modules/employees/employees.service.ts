@@ -17,6 +17,8 @@ import { AuthenticatedUser } from '../../common/decorators/current-user.decorato
 import { getLoginNetworkLocation } from '../../common/utils/login-network-location';
 import { getProbationEndDate, parseEmployeeDate } from '../../common/utils/employee-dates';
 import { isInactiveEmployeeStatus } from '../auth/account-state';
+import { validateStrongPassword } from '../../common/utils/password-policy';
+import { AdminResetPasswordDto } from './dto/admin-reset-password.dto';
 import {
   UserRole,
   Employee,
@@ -31,6 +33,7 @@ import { CreateEmployeeDto, EMPLOYEE_ONBOARDING_ROLES } from './dto/create-emplo
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
 import { CreateEmergencyContactDto } from './dto/create-emergency-contact.dto';
+import { hasLetter, validPhone } from './contact-validation';
 
 const SELF_SERVICE_FIELDS = new Set([
   'phone', 'address', 'city', 'country', 'dateOfBirth', 'gender', 'nationality', 'profilePictureUrl',
@@ -402,6 +405,14 @@ export class EmployeesService {
       }
     }
 
+    for (const field of ['nationality', 'city'] as const) {
+      const value = dto[field]?.trim();
+      if (value && !hasLetter(value)) throw new BadRequestException(`${field} must contain a letter`);
+    }
+    if (dto.phone?.trim() && !validPhone(dto.phone, dto.country ?? employee.country)) {
+      throw new BadRequestException('Enter a valid phone number with its country code');
+    }
+
     const dateOfBirth = dto.dateOfBirth === undefined ? undefined : dto.dateOfBirth ? new Date(dto.dateOfBirth) : null;
     if (dateOfBirth && (!Number.isFinite(dateOfBirth.getTime()) || dateOfBirth.getTime() > Date.now())) {
       throw new BadRequestException('Enter a valid date of birth in the past or today.');
@@ -483,13 +494,13 @@ export class EmployeesService {
       data: {
         ...(dto.firstName ? { firstName: dto.firstName } : {}),
         ...(dto.lastName ? { lastName: dto.lastName } : {}),
-        ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+        ...(dto.phone !== undefined ? { phone: normalizeOptionalText(dto.phone) } : {}),
         ...(dto.address !== undefined ? { address: dto.address } : {}),
-        ...(dto.city !== undefined ? { city: dto.city } : {}),
+        ...(dto.city !== undefined ? { city: normalizeOptionalText(dto.city) } : {}),
         ...(dto.country !== undefined ? { country: dto.country } : {}),
         ...(dateOfBirth !== undefined ? { dateOfBirth } : {}),
         ...(dto.gender !== undefined ? { gender: dto.gender } : {}),
-        ...(dto.nationality !== undefined ? { nationality: dto.nationality } : {}),
+        ...(dto.nationality !== undefined ? { nationality: normalizeOptionalText(dto.nationality) } : {}),
         ...(dto.departmentId !== undefined ? { departmentId: dto.departmentId } : {}),
         ...(dto.designationId !== undefined ? { designationId: dto.designationId } : {}),
         ...(teamIdToSave !== undefined ? { teamId: teamIdToSave } : {}),
@@ -613,6 +624,121 @@ export class EmployeesService {
     return updated;
   }
 
+  async resetEmployeePassword(
+    id: string,
+    dto: AdminResetPasswordDto,
+    actor: AuthenticatedUser,
+    ipAddress?: string,
+    userAgent?: string,
+  ) {
+    if (actor.role !== UserRole.COMPANY_ADMIN && actor.role !== UserRole.HR_MANAGER) {
+      throw new ForbiddenException('Only company administrators and HR managers can reset employee passwords.');
+    }
+
+    const companyId = this.getEffectiveCompanyId(actor);
+    const callerId = (actor.id || actor.sub)!;
+
+    validateStrongPassword(dto.temporaryPassword);
+
+    const employee = await this.prisma.employee.findFirst({
+      where: { id, companyId, deletedAt: null },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            role: true,
+            companyId: true,
+            deletedAt: true,
+            sessionVersion: true,
+            mustChangePassword: true,
+          },
+        },
+      },
+    });
+
+    if (!employee || !employee.user || employee.user.deletedAt || employee.user.companyId !== companyId) {
+      throw new NotFoundException('Employee not found');
+    }
+
+    const targetUser = employee.user;
+    if (targetUser.id === callerId) {
+      throw new ForbiddenException('Use your account settings to change your own password.');
+    }
+    if (
+      targetUser.role === UserRole.SUPER_ADMIN ||
+      targetUser.role === UserRole.OPERATION_MANAGER ||
+      targetUser.role === UserRole.COMPANY_ADMIN
+    ) {
+      throw new ForbiddenException('You cannot reset the password for this account role.');
+    }
+    if (
+      actor.role === UserRole.HR_MANAGER &&
+      targetUser.role !== UserRole.EMPLOYEE &&
+      targetUser.role !== UserRole.TEAM_LEAD &&
+      targetUser.role !== UserRole.DEPARTMENT_MANAGER
+    ) {
+      throw new ForbiddenException('HR managers cannot reset passwords for CEO or HR manager accounts.');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.temporaryPassword, 12);
+    const inactiveEmployee = isInactiveEmployeeStatus(employee.status);
+
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.updateMany({
+        where: {
+          id: targetUser.id,
+          companyId,
+          deletedAt: null,
+          sessionVersion: targetUser.sessionVersion,
+        },
+        data: {
+          passwordHash,
+          mustChangePassword: true,
+          refreshTokenHash: null,
+          sessionVersion: { increment: 1 },
+          passwordResetToken: null,
+          passwordResetExpiry: null,
+          ...(inactiveEmployee ? {} : { failedLoginAttempts: 0, lockedUntil: null }),
+        },
+      });
+
+      if (updated.count !== 1) {
+        throw new ConflictException('Employee account changed during password reset. Please try again.');
+      }
+
+      await tx.auditLog.create({
+        data: {
+          companyId,
+          userId: callerId,
+          action: AuditAction.PASSWORD_RESET,
+          entity: 'User',
+          entityId: targetUser.id,
+          oldValues: {
+            email: targetUser.email,
+            role: targetUser.role,
+            mustChangePassword: targetUser.mustChangePassword,
+            sessionVersion: targetUser.sessionVersion,
+          },
+          newValues: {
+            email: targetUser.email,
+            role: targetUser.role,
+            method: 'ADMIN_EMPLOYEE_RESET',
+            resetBy: actor.email,
+            mustChangePassword: true,
+            sessionVersion: targetUser.sessionVersion + 1,
+          },
+          ipAddress,
+          userAgent,
+        },
+      });
+    });
+
+    return {
+      message: 'Temporary password set. The employee must change it on next login.',
+    };
+  }
+
   async getOrgChart(id: string, user: AuthenticatedUser) {
     const companyId = this.getEffectiveCompanyId(user);
     const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
@@ -691,14 +817,21 @@ export class EmployeesService {
       );
     }
 
+    const name = dto.name.trim();
+    const relationship = dto.relationship.trim();
+    const phone = dto.phone.trim();
+    if (!name || !hasLetter(name)) throw new BadRequestException('Contact name must contain a letter');
+    if (!relationship || !hasLetter(relationship)) throw new BadRequestException('Relationship must contain a letter');
+    if (!phone || !validPhone(phone, employee.country)) throw new BadRequestException('Enter a valid contact phone number with its country code');
+
     return this.prisma.emergencyContact.create({
       data: {
         employeeId,
-        name: dto.name,
-        relationship: dto.relationship,
-        phone: dto.phone,
-        email: dto.email,
-        address: dto.address,
+        name,
+        relationship,
+        phone,
+        email: normalizeOptionalText(dto.email),
+        address: normalizeOptionalText(dto.address),
       },
     });
   }

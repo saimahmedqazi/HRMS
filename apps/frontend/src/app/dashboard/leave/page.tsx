@@ -28,6 +28,7 @@ interface LeaveTypeSetting {
 
 export default function LeaveDashboardPage() {
   const queryClient = useQueryClient();
+  const [balanceYear, setBalanceYear] = useState(new Date().getFullYear());
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedSettingId, setSelectedSettingId] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -51,9 +52,9 @@ export default function LeaveDashboardPage() {
   });
 
   // 3. Fetch balances
-  const { data: balances = [], isLoading: loadingBalances } = useQuery({
-    queryKey: ['leave-balances'],
-    queryFn: () => api.get<any[]>('/leave/balances'),
+  const { data: balances = [], isLoading: loadingBalances, isError: balancesFailed } = useQuery({
+    queryKey: ['leave-balances', balanceYear],
+    queryFn: () => api.get<any[]>(`/leave/balances?year=${balanceYear}`),
   });
 
   // 4. Fetch leave requests
@@ -201,6 +202,14 @@ export default function LeaveDashboardPage() {
         </div>
       )}
 
+      <div className="flex items-center gap-3">
+        <label htmlFor="leave-balance-year" className="text-sm font-semibold">Balance year</label>
+        <input id="leave-balance-year" type="number" min="1900" max="9999" value={balanceYear}
+          onChange={(event) => setBalanceYear(Number(event.target.value))}
+          className="w-28 rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-700 dark:bg-gray-800" />
+      </div>
+      {balancesFailed && <p role="alert" className="text-sm text-rose-600">Unable to load leave balances.</p>}
+      {!loadingBalances && !balancesFailed && balances.length === 0 && <p className="text-sm text-gray-500">No leave balances are configured.</p>}
       {/* Balances Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {balances.map((balance: any) => {
@@ -228,7 +237,9 @@ export default function LeaveDashboardPage() {
                 </span>
               </div>
 
-              <div className="flex items-baseline gap-2 mb-4">
+              {!balance.initialized ? (
+                <p className="text-sm text-gray-500">Balance not initialized for this year.</p>
+              ) : <><div className="flex items-baseline gap-2 mb-4">
                 <span className="text-3xl font-extrabold text-gray-900 dark:text-white">
                   {balance.available}
                 </span>
@@ -254,7 +265,7 @@ export default function LeaveDashboardPage() {
                     {balance.pending} d
                   </p>
                 </div>
-              </div>
+              </div></>}
             </div>
           );
         })}
@@ -324,6 +335,33 @@ export default function LeaveDashboardPage() {
                       </td>
                       <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white">
                         {req.totalDays}
+                        <details className="mt-2 text-xs font-normal">
+                          <summary className="cursor-pointer text-primary-600">Request details</summary>
+                          <div className="mt-2 min-w-48 max-w-xs space-y-3 whitespace-normal text-gray-700 dark:text-gray-300">
+                            <div>
+                              <p className="font-semibold">Yearly allocation</p>
+                              {Array.isArray(req.balanceDaysByYear) ? req.balanceDaysByYear.map((item: { year: number; days: number }) => (
+                                <p key={item.year}>{item.year}: {item.days} days {req.status === 'PENDING' ? 'reserved' : req.status === 'APPROVED' ? 'used' : 'released'}</p>
+                              )) : <p>Historical breakdown unavailable.</p>}
+                            </div>
+                            {[1, 2].map((step) => {
+                              const status = req[`step${step}Status`];
+                              const pending = status === 'PENDING' && req.status === 'PENDING';
+                              const notReached = status === 'PENDING' && req.status !== 'PENDING';
+                              const actor = req[`step${step}ActorName`];
+                              const role = req[`step${step}ActorRole`];
+                              const assigned = req[`step${step}AssignedReviewer`];
+                              const at = req[`step${step}ApprovedAt`];
+                              return <div key={step}>
+                                <p className="font-semibold">Step {step}: {notReached ? 'Not reached' : status === 'SKIPPED' ? 'Skipped' : status}</p>
+                                {pending && <p>Assigned reviewer: {assigned ? `${assigned.name} (${assigned.role.replace(/_/g, ' ')})` : 'Not assigned'}</p>}
+                                {(status === 'APPROVED' || status === 'REJECTED') && <p>Reviewer: {actor ? `${actor} (${(role || '').replace(/_/g, ' ')})` : 'Reviewer not recorded'}</p>}
+                                {at && <p>{new Date(at).toLocaleString()}</p>}
+                                {status === 'REJECTED' && req[`step${step}Notes`] && <p>Reason: {req[`step${step}Notes`]}</p>}
+                              </div>;
+                            })}
+                          </div>
+                        </details>
                       </td>
                       <td className="px-4 py-3 text-gray-600 dark:text-gray-400 max-w-xs truncate">
                         {req.reason || '—'}
@@ -344,10 +382,10 @@ export default function LeaveDashboardPage() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge status={req.step1Status} />
+                        <StatusBadge status={req.step1Status === 'PENDING' && req.status !== 'PENDING' ? 'Not reached' : req.step1Status} />
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge status={req.step2Status} />
+                        <StatusBadge status={req.step2Status === 'PENDING' && req.status !== 'PENDING' ? 'Not reached' : req.step2Status} />
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={req.status} />

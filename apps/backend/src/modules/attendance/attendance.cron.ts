@@ -1,9 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { getAttendanceDay, previousAttendanceDate } from '../../common/utils/attendance-date';
-import { activeShiftWhere, overnightShiftEnd } from '../../common/utils/attendance-shift';
-import { AttendanceStatus, LeaveStatus } from '@prisma/client';
+import { attendanceDayStart, getAttendanceDay, previousAttendanceDate } from '../../common/utils/attendance-date';
+import { activeShiftWhere, overnightShiftEnd, scheduleOn, shiftRevisionSelection } from '../../common/utils/attendance-shift';
+import { missingCheckoutDue, savedPunchPolicy } from '../../common/utils/attendance-policy';
+import { AttendanceStatus, LeaveStatus, Prisma } from '@prisma/client';
 
 @Injectable()
 export class AttendanceCronService {
@@ -16,6 +17,21 @@ export class AttendanceCronService {
   async handleNightlyAbsenceJob() {
     const now = new Date();
 
+    const openPunches = await this.prisma.attendanceRecord.findMany({
+      where: { checkOutTime: null, finalizedAt: null, checkInTime: { not: null }, punchPolicy: { not: Prisma.DbNull },
+        status: { in: [AttendanceStatus.IN_PROGRESS, AttendanceStatus.ABSENT_PENDING_REVIEW] } },
+      select: { id: true, companyId: true, date: true, status: true, punchPolicy: true },
+    });
+    for (const record of openPunches) {
+      const policy = savedPunchPolicy(record.punchPolicy);
+      if (policy && missingCheckoutDue(record.date, policy, now)) {
+        await this.prisma.attendanceRecord.updateMany({
+          where: { id: record.id, companyId: record.companyId, status: record.status, checkOutTime: null, finalizedAt: null },
+          data: { status: AttendanceStatus.MISSING_CHECKOUT },
+        });
+      }
+    }
+
     const companies = await this.prisma.company.findMany({
       where: { status: 'ACTIVE' },
       select: {
@@ -23,7 +39,7 @@ export class AttendanceCronService {
         timezone: true,
         shifts: {
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-          select: { startTime: true, endTime: true, workDays: true, breakDuration: true, isDefault: true },
+          select: { startTime: true, endTime: true, workDays: true, breakDuration: true, isDefault: true, revisions: { where: { effectiveDate: { lte: now } }, orderBy: { effectiveDate: 'desc' }, take: 3 } },
         },
       },
     });
@@ -39,12 +55,12 @@ export class AttendanceCronService {
         ? previousTick.hour * 60 + previousTick.minute
         : -1;
       const isDue = (cutoff: number) => previousMinutes < cutoff && cutoff <= minutes;
+      const date = previousAttendanceDate(local.date);
       if (!isDue(0) && !company.shifts.some((shift) => {
-        const end = overnightShiftEnd(shift);
+        const end = overnightShiftEnd(scheduleOn(shift, date));
         return end !== null && isDue(end);
       })) continue;
 
-      const date = previousAttendanceDate(local.date);
       const shiftDay = date.getUTCDay() || 7;
       const defaultShift = company.shifts.find((shift) => shift.isDefault);
 
@@ -58,16 +74,16 @@ export class AttendanceCronService {
         },
         include: {
           shifts: {
-            where: activeShiftWhere(now, company.id),
+            where: activeShiftWhere(new Date(attendanceDayStart(local.date, company.timezone).getTime() - 1), company.id),
             orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
             take: 1,
-            include: { shift: true },
+            include: { shift: { select: shiftRevisionSelection(date) } },
           },
         },
       });
 
       for (const emp of employees) {
-        const activeShift = emp.shifts[0]?.shift ?? defaultShift;
+        const activeShift = scheduleOn(emp.shifts[0]?.shift ?? defaultShift, date);
         const scheduled = activeShift ? activeShift.workDays.includes(shiftDay) : shiftDay <= 5;
         if (!scheduled || !isDue(overnightShiftEnd(activeShift) ?? 0)) continue;
 

@@ -1,6 +1,7 @@
 import 'multer';
 import {
   Controller,
+  ForbiddenException,
   Get,
   Post,
   Patch,
@@ -52,13 +53,16 @@ export class LeaveController {
   }
 
   @Patch('types/:id')
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
-  @ApiOperation({ summary: 'Update a leave type setting (HR / Admin only)' })
+  @Roles(UserRole.COMPANY_ADMIN)
+  @ApiOperation({ summary: 'Update a leave type setting (CEO only)' })
   async updateLeaveType(
     @CurrentUser() user: any,
     @Param('id') id: string,
     @Body() dto: UpdateLeaveTypeDto,
   ) {
+    if (user.role !== UserRole.COMPANY_ADMIN || !user.companyId || user.supportModeCompanyId) {
+      throw new ForbiddenException('Only the company CEO may change leave policies');
+    }
     return this.leaveService.updateLeaveType(user.companyId, id, dto);
   }
 

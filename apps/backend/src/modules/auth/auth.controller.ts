@@ -28,6 +28,7 @@ import { LoginDto } from './dto/login.dto';
 import { LocationConsentDto } from './dto/location-consent.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { DisableTotpDto, VerifyTotpDto, VerifyTwoFactorLoginDto } from './dto/totp.dto';
 import { UserRole } from '@prisma/client';
 
@@ -143,6 +144,21 @@ export class AuthController {
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto);
     return { message: 'Password has been successfully reset. Please log in with your new password.' };
+  }
+
+  @Post('change-password')
+  @ApiCookieAuth()
+  @Throttle({ short: { limit: 15, ttl: 60000 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Change authenticated user password (clears mandatory reset flag)' })
+  async changePassword(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ChangePasswordDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.changePassword((user.id || user.sub)!, dto);
+    this.setAuthCookies(res, result.accessToken, result.refreshToken);
+    return { user: result.user, message: 'Password updated successfully.' };
   }
 
   @Public()

@@ -42,8 +42,8 @@ test.describe('Role 7: Employee Comprehensive Test Suite (10 Tests)', () => {
   });
 
   test('EM-03: Work Timer Mode: Start, Pause (Break), and Sync Controls', async ({ page }) => {
-    await page.click('a[href="/dashboard/work-timer"]');
-    await page.waitForURL('**/dashboard/work-timer', { timeout: 10000 });
+    await page.click('a[href="/dashboard/my-attendance"]');
+    await page.waitForURL('**/dashboard/my-attendance', { timeout: 10000 });
     await expect(page.locator('h1')).toContainText('Attendance & Work Timer');
 
     // Work Timer Card

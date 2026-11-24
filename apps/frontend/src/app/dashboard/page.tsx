@@ -360,6 +360,7 @@ export default function DashboardHubPage() {
                   <Tooltip />
                   <Area type="monotone" dataKey="present" stroke="#10B981" fill="#10B981" fillOpacity={0.2} name="Onsite" />
                   <Area type="monotone" dataKey="remote" stroke="#3B82F6" fill="#3B82F6" fillOpacity={0.2} name="Remote" />
+                  <Area type="monotone" dataKey="halfDay" name="Half day" stroke="#8B5CF6" fill="#8B5CF6" fillOpacity={0.12} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -525,7 +526,7 @@ export default function DashboardHubPage() {
               {stats.teamSize || 0} members
             </p>
             <span className="text-xs text-emerald-600 font-medium">
-              {stats.presentToday || 0} checked in today
+              {stats.presentToday || 0} full-day present today
             </span>
           </div>
 
@@ -570,10 +571,10 @@ export default function DashboardHubPage() {
             <span className="text-xs uppercase font-semibold">Today&apos;s Attendance</span>
             <Clock className="w-4 h-4" />
           </div>
-          <p className="text-lg font-bold text-gray-900 dark:text-white mt-1">
-            {empStats.todayAttendance?.status || 'NOT_CHECKED_IN'}
+          <p className="mt-1 text-sm font-semibold text-gray-900 dark:text-white">
+            {empStats.todayAttendance?.status ? <StatusBadge status={empStats.todayAttendance.status} /> : 'Not checked in'}
           </p>
-          <Link href="/dashboard/attendance" className="text-xs text-primary-600 hover:underline mt-2 inline-block">
+          <Link href="/dashboard/my-attendance" className="text-xs text-primary-600 hover:underline mt-2 inline-block">
             Punch Widget &rarr;
           </Link>
         </div>

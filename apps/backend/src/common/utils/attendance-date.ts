@@ -41,3 +41,16 @@ export async function getCompanyAttendanceTime(prisma: Pick<PrismaService, 'comp
   const company = await prisma.company.findUnique({ where: { id: companyId }, select: { timezone: true } });
   return { ...getAttendanceDay(now, company?.timezone), timezone: company?.timezone ?? 'UTC' };
 }
+
+
+// Convert a tenant calendar day to its first instant, including fractional UTC offsets.
+export function attendanceDayStart(date: Date, timezone?: string): Date {
+  let low = date.getTime() - 86400000;
+  let high = date.getTime() + 86400000;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (getAttendanceDay(new Date(middle), timezone).date < date) low = middle;
+    else high = middle;
+  }
+  return new Date(high);
+}

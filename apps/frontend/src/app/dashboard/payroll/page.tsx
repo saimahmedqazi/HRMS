@@ -27,6 +27,7 @@ export default function PayrollDashboardPage() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const [payslipsBodyRef] = useAutoAnimate<HTMLTableSectionElement>();
+  const canEditPolicies = user?.role === 'COMPANY_ADMIN' && !user.supportModeCompanyId;
   const tenantScope = user?.supportModeCompanyId ?? user?.companyId;
   const currentMonth = new Date().getMonth() + 1;
   const currentYear = new Date().getFullYear();
@@ -304,12 +305,12 @@ export default function PayrollDashboardPage() {
       <section className="space-y-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-base font-bold text-gray-900 dark:text-white">Salary Structures</h2>
+            <h2 id="salary-structures" className="text-base font-bold text-gray-900 dark:text-white">Salary Structures</h2>
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Set recurring earnings, deductions, and company-configured progressive tax brackets. Assign a package to each employee in their Job Details.</p>
           </div>
-          <button type="button" onClick={() => { structureMutation.reset(); setEditingStructureId(null); setShowStructureForm((open) => !open); if (!showStructureForm) { setStructureName(''); setStructureCurrency('USD'); setStructureBaseSalary(''); setStructureIsDefault(false); setStructureComponents([]); setStructureTaxBrackets([]); } }} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-primary-700">
+          {canEditPolicies && (          <button type="button" onClick={() => { structureMutation.reset(); setEditingStructureId(null); setShowStructureForm((open) => !open); if (!showStructureForm) { setStructureName(''); setStructureCurrency('USD'); setStructureBaseSalary(''); setStructureIsDefault(false); setStructureComponents([]); setStructureTaxBrackets([]); } }} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-primary-700">
             <Plus className="h-4 w-4" /> {showStructureForm ? 'Close' : 'Add Structure'}
-          </button>
+          </button>)}
         </div>
 
         {structuresLoading ? <p role="status" className="text-xs text-gray-500">Loading salary structures…</p> : structuresError ? (
@@ -331,7 +332,7 @@ export default function PayrollDashboardPage() {
                   <span className="text-sm font-bold text-gray-900 dark:text-white">{formatMoney(Number(structure.baseSalary), structure.currencyCode)}</span>
                 </div>
                 <p className="mt-2 text-xs text-gray-500">{Array.isArray(structure.components) ? structure.components.length : 0} recurring component(s) · {structure.taxRules?.brackets?.length || 0} tax bracket(s)</p>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
+                {canEditPolicies && (                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button type="button" onClick={() => openStructureEditor(structure)} className="rounded-md border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800">Edit Structure</button>
                   {archivingStructureId === structure.id ? (
                     <>
@@ -363,13 +364,13 @@ export default function PayrollDashboardPage() {
                       Archive
                     </button>
                   )}
-                </div>
+                </div>)}
               </article>
             ))}
           </div>
         )}
 
-        {showStructureForm && (
+        {canEditPolicies && showStructureForm && (
           <form className="space-y-5 border-t border-gray-200 pt-5 dark:border-gray-800" onSubmit={(event) => { event.preventDefault(); structureMutation.mutate(); }}>
             <h3 className="text-sm font-semibold text-gray-900 dark:text-white">{editingStructureId ? 'Edit Salary Structure' : 'New Salary Structure'}</h3>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

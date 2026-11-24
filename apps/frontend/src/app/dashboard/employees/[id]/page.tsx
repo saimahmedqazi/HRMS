@@ -5,7 +5,9 @@ import { useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, API_PREFIX } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { ShiftPolicies } from '@/components/settings/shift-policies';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { countries, countryCode, hasLetter, validPhone } from '@/lib/contact-validation';
 import {
   User,
   Building,
@@ -25,6 +27,12 @@ import {
   Clock,
   ExternalLink,
   Edit3,
+  KeyRound,
+  Eye,
+  EyeOff,
+  RefreshCw,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 export default function EmployeeDetailPage() {
@@ -53,6 +61,8 @@ export default function EmployeeDetailPage() {
   const [contactName, setContactName] = useState('');
   const [contactRel, setContactRel] = useState('');
   const [contactPhone, setContactPhone] = useState('');
+  const [contactAttempted, setContactAttempted] = useState(false);
+  const [demoAttempted, setDemoAttempted] = useState(false);
 
   // Document upload state
   const [showDocModal, setShowDocModal] = useState(false);
@@ -85,6 +95,14 @@ export default function EmployeeDetailPage() {
   const [jobBaseSalary, setJobBaseSalary] = useState('');
   const [exactCoords, setExactCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locatingExact, setLocatingExact] = useState(false);
+
+  // Admin password reset modal
+  const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
+  const [tempPassword, setTempPassword] = useState('');
+  const [showTempPassword, setShowTempPassword] = useState(false);
+  const [tempPasswordCopied, setTempPasswordCopied] = useState(false);
+  const [resetPasswordAttempted, setResetPasswordAttempted] = useState(false);
+  const [resetPasswordSuccess, setResetPasswordSuccess] = useState('');
 
   useEffect(() => {
     try {
@@ -161,6 +179,7 @@ export default function EmployeeDetailPage() {
   const openDemoModal = () => {
     if (!emp) return;
     updateDemoMutation.reset();
+    setDemoAttempted(false);
     setDemoSaved(false);
     const dobCandidate = emp.dateOfBirth ? new Date(emp.dateOfBirth) : null;
     const formattedDob = dobCandidate && Number.isFinite(dobCandidate.getTime())
@@ -198,6 +217,17 @@ export default function EmployeeDetailPage() {
     .filter(([field, value]) => value !== (initialDemoValues.current[field] ?? '').trim())
     .map(([field, value]) => [field, value || null]));
   const hasDemoChanges = Object.keys(demoChanges).length > 0;
+  const selectedCountry = countries.find((country) => country.code === countryCode(demoCountry));
+  const demoErrors = {
+    nationality: demoChanges.nationality && !hasLetter(demoNationality) ? 'Enter a nationality containing a letter.' : '',
+    city: demoChanges.city && !hasLetter(demoCity) ? 'Enter a city containing a letter.' : '',
+    phone: demoChanges.phone && !validPhone(demoPhone, demoCountry) ? 'Enter a valid phone number including the country code.' : '',
+  };
+  const contactErrors = {
+    name: !contactName.trim() || !hasLetter(contactName) ? 'Enter a name containing a letter.' : '',
+    relationship: !contactRel.trim() || !hasLetter(contactRel) ? 'Enter a relationship containing a letter.' : '',
+    phone: !validPhone(contactPhone, emp?.country) ? 'Enter a valid phone number including the country code.' : '',
+  };
 
   const updateDemoMutation = useMutation({
     mutationFn: () => api.patch(`/employees/${id}`, demoChanges),
@@ -207,6 +237,53 @@ export default function EmployeeDetailPage() {
       setDemoSaved(true);
     },
   });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: (temporaryPassword: string) =>
+      api.post<{ message: string }>(`/employees/${id}/reset-password`, { temporaryPassword }),
+    onSuccess: (res) => {
+      setShowResetPasswordModal(false);
+      setTempPassword('');
+      setResetPasswordAttempted(false);
+      setResetPasswordSuccess(res?.message || 'Temporary password set. The employee must change it on next login.');
+    },
+  });
+
+  const generateTempPassword = () => {
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghijkmnopqrstuvwxyz';
+    const digits = '23456789';
+    const symbols = '!@#$%&*';
+    const all = upper + lower + digits + symbols;
+    const bytes = new Uint8Array(14);
+    window.crypto.getRandomValues(bytes);
+    const chars = [
+      upper[bytes[0] % upper.length],
+      lower[bytes[1] % lower.length],
+      digits[bytes[2] % digits.length],
+      symbols[bytes[3] % symbols.length],
+    ];
+    for (let i = 4; i < 14; i++) {
+      chars.push(all[bytes[i] % all.length]);
+    }
+    for (let i = chars.length - 1; i > 0; i--) {
+      const j = bytes[i] % (i + 1);
+      [chars[i], chars[j]] = [chars[j], chars[i]];
+    }
+    setTempPassword(chars.join(''));
+    setShowTempPassword(true);
+    setTempPasswordCopied(false);
+  };
+
+  const tempPasswordBytes = new TextEncoder().encode(tempPassword).length;
+  const tempPasswordError =
+    tempPassword.length < 8
+      ? 'Password must be at least 8 characters long.'
+      : tempPasswordBytes > 72
+        ? 'Password must be at most 72 bytes in UTF-8.'
+        : !/[A-Z]/.test(tempPassword) || !/[a-z]/.test(tempPassword) || !/\d/.test(tempPassword)
+          ? 'Password must include uppercase, lowercase, and numeric characters.'
+          : '';
 
   const effectiveStructure =
     payrollStructures.find((item: any) => item.id === (emp?.payrollStructureId || '')) ||
@@ -309,9 +386,9 @@ export default function EmployeeDetailPage() {
   const addContactMutation = useMutation({
     mutationFn: () =>
       api.post(`/employees/${id}/emergency-contacts`, {
-        name: contactName,
-        relationship: contactRel,
-        phone: contactPhone,
+        name: contactName.trim(),
+        relationship: contactRel.trim(),
+        phone: contactPhone.trim(),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['employee', id] });
@@ -319,6 +396,7 @@ export default function EmployeeDetailPage() {
       setContactName('');
       setContactRel('');
       setContactPhone('');
+      setContactAttempted(false);
       setFeedback({ type: 'success', message: 'Emergency contact added successfully.' });
     },
     onError: (err: any) => {
@@ -532,9 +610,43 @@ export default function EmployeeDetailPage() {
                 Update Status
               </button>
             )}
+            {(() => {
+              const targetRole = emp?.user?.role;
+              const notSelf = Boolean(emp?.user?.id && user?.id && emp.user.id !== user.id);
+              const canReset =
+                notSelf &&
+                Boolean(targetRole) &&
+                ((user?.role === 'COMPANY_ADMIN' &&
+                  !['SUPER_ADMIN', 'OPERATION_MANAGER', 'COMPANY_ADMIN'].includes(targetRole)) ||
+                  (user?.role === 'HR_MANAGER' &&
+                    ['EMPLOYEE', 'TEAM_LEAD', 'DEPARTMENT_MANAGER'].includes(targetRole)));
+              return canReset ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetPasswordMutation.reset();
+                    setTempPassword('');
+                    setShowTempPassword(false);
+                    setTempPasswordCopied(false);
+                    setResetPasswordAttempted(false);
+                    setResetPasswordSuccess('');
+                    setShowResetPasswordModal(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2 text-xs font-semibold text-amber-800 shadow-sm hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-300 dark:hover:bg-amber-950"
+                >
+                  <KeyRound className="h-3.5 w-3.5" /> Reset Password
+                </button>
+              ) : null;
+            })()}
           </div>
         </div>
       </div>
+
+      {resetPasswordSuccess && (
+        <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+          {resetPasswordSuccess}
+        </p>
+      )}
 
       {demoSaved && (
         <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
@@ -978,6 +1090,10 @@ export default function EmployeeDetailPage() {
         </div>
       )}
 
+      {id && user?.companyId && (user.role === 'COMPANY_ADMIN' || user.role === 'HR_MANAGER') && (
+        <ShiftPolicies canEdit={false} tenantId={user.companyId} employeeId={id} />
+      )}
+
       {/* Emergency Contact Modal */}
       {showContactModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -993,6 +1109,7 @@ export default function EmployeeDetailPage() {
                   placeholder="e.g. Maria Gonzalez"
                   className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
                 />
+                {contactAttempted && contactErrors.name && <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-300">{contactErrors.name}</p>}
               </div>
               <div>
                 <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Relationship *</label>
@@ -1003,6 +1120,7 @@ export default function EmployeeDetailPage() {
                   placeholder="e.g. Spouse, Parent, Sibling"
                   className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
                 />
+                {contactAttempted && contactErrors.relationship && <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-300">{contactErrors.relationship}</p>}
               </div>
               <div>
                 <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Phone Number *</label>
@@ -1013,6 +1131,7 @@ export default function EmployeeDetailPage() {
                   placeholder="+1-555-0123"
                   className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
                 />
+                {contactAttempted && contactErrors.phone && <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-300">{contactErrors.phone}</p>}
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-2">
@@ -1023,8 +1142,8 @@ export default function EmployeeDetailPage() {
                 Cancel
               </button>
               <button
-                disabled={!contactName.trim() || !contactRel.trim() || !contactPhone.trim() || addContactMutation.isPending}
-                onClick={() => addContactMutation.mutate()}
+                disabled={addContactMutation.isPending}
+                onClick={() => { setContactAttempted(true); if (!Object.values(contactErrors).some(Boolean)) addContactMutation.mutate(); }}
                 className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
               >
                 {addContactMutation.isPending ? 'Saving...' : 'Add Contact'}
@@ -1129,7 +1248,8 @@ export default function EmployeeDetailPage() {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                if (hasDemoChanges && !updateDemoMutation.isPending) updateDemoMutation.mutate();
+                setDemoAttempted(true);
+                if (hasDemoChanges && !Object.values(demoErrors).some(Boolean) && !updateDemoMutation.isPending) updateDemoMutation.mutate();
               }}
               className="mt-4 space-y-4"
             >
@@ -1179,12 +1299,14 @@ export default function EmployeeDetailPage() {
                   </label>
                   <input
                     id="personal-nationality"
+                    aria-invalid={demoAttempted && Boolean(demoErrors.nationality)}
                     type="text"
                     value={demoNationality}
                     onChange={(e) => setDemoNationality(e.target.value)}
                     placeholder="e.g. American, Pakistani, Canadian"
                     className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
                   />
+                  {demoAttempted && demoErrors.nationality && <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-300">{demoErrors.nationality}</p>}
                 </div>
                 <div>
                   <label htmlFor="personal-phone" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
@@ -1195,9 +1317,11 @@ export default function EmployeeDetailPage() {
                     type="tel"
                     value={demoPhone}
                     onChange={(e) => setDemoPhone(e.target.value)}
-                    placeholder="+1-555-0123"
+                    placeholder={selectedCountry ? `+${selectedCountry.dial}` : "+ country code"}
+                    aria-invalid={demoAttempted && Boolean(demoErrors.phone)}
                     className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
                   />
+                  {demoAttempted && demoErrors.phone && <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-300">{demoErrors.phone}</p>}
                 </div>
               </div>
 
@@ -1222,25 +1346,25 @@ export default function EmployeeDetailPage() {
                   </label>
                   <input
                     id="personal-city"
+                    aria-invalid={demoAttempted && Boolean(demoErrors.city)}
                     type="text"
                     value={demoCity}
                     onChange={(e) => setDemoCity(e.target.value)}
                     placeholder="e.g. San Francisco or Karachi"
                     className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
                   />
+                  {demoAttempted && demoErrors.city && <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-300">{demoErrors.city}</p>}
                 </div>
                 <div>
                   <label htmlFor="personal-country" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
                     Country
                   </label>
-                  <input
-                    id="personal-country"
-                    type="text"
-                    value={demoCountry}
-                    onChange={(e) => setDemoCountry(e.target.value)}
-                    placeholder="e.g. United States or Pakistan"
-                    className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800"
-                  />
+                  <select id="personal-country" value={selectedCountry?.code || ''} onChange={(e) => setDemoCountry(countries.find((country) => country.code === e.target.value)?.name || '')} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+                    <option value="">Select country</option>
+                    {countries.map((country) => <option key={country.code} value={country.code}>{country.name} (+{country.dial})</option>)}
+                  </select>
+                  {demoCountry && !selectedCountry && <p className="mt-1 text-xs text-zinc-500">Current country: {demoCountry}. Select a country to update it.</p>}
+                  {selectedCountry && <p className="mt-1 text-xs text-zinc-500">Dialing code: +{selectedCountry.dial}</p>}
                 </div>
               </div>
 
@@ -1345,6 +1469,113 @@ export default function EmployeeDetailPage() {
               <div className="flex justify-end gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
                 <button type="button" onClick={() => setShowJobModal(false)} disabled={jobMutation.isPending} className="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-300">Cancel</button>
                 <button type="submit" disabled={jobSalaryInvalid || !Object.keys(jobChanges).length || jobMutation.isPending} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{jobMutation.isPending ? 'Saving...' : 'Save Job Details'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showResetPasswordModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="reset-password-dialog-title">
+          <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="flex items-center gap-2">
+              <KeyRound className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+              <h2 id="reset-password-dialog-title" className="text-base font-bold text-zinc-900 dark:text-zinc-100">
+                Reset Employee Password
+              </h2>
+            </div>
+            <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
+              Set a temporary password for <span className="font-semibold text-zinc-900 dark:text-zinc-100">{emp.firstName} {emp.lastName}</span> ({emp.user?.email}). Existing sessions will be signed out and the employee must change this password on next login.
+            </p>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setResetPasswordAttempted(true);
+                if (tempPasswordError || resetPasswordMutation.isPending) return;
+                resetPasswordMutation.mutate(tempPassword);
+              }}
+              className="mt-4 space-y-3"
+            >
+              <div>
+                <div className="flex items-center justify-between">
+                  <label htmlFor="admin-temp-password" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    Temporary Password
+                  </label>
+                  <button
+                    type="button"
+                    onClick={generateTempPassword}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                  >
+                    <RefreshCw className="h-3 w-3" /> Generate Secure
+                  </button>
+                </div>
+                <div className="relative mt-1 flex items-center gap-1.5">
+                  <div className="relative flex-1">
+                    <input
+                      id="admin-temp-password"
+                      type={showTempPassword ? 'text' : 'password'}
+                      value={tempPassword}
+                      onChange={(e) => {
+                        setTempPassword(e.target.value);
+                        setTempPasswordCopied(false);
+                      }}
+                      placeholder="Enter or generate temporary password"
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 pr-9 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowTempPassword((v) => !v)}
+                      aria-label={showTempPassword ? 'Hide temporary password' : 'Show temporary password'}
+                      className="absolute right-2.5 top-2.5 text-zinc-500 hover:text-zinc-700 dark:text-zinc-400"
+                    >
+                      {showTempPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  {tempPassword && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(tempPassword);
+                        setTempPasswordCopied(true);
+                      }}
+                      aria-label="Copy temporary password"
+                      className="inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-2.5 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      {tempPasswordCopied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+                    </button>
+                  )}
+                </div>
+                {(resetPasswordAttempted || tempPassword.length > 0) && tempPasswordError ? (
+                  <p role="alert" className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">
+                    {tempPasswordError}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                    Minimum 8 characters with uppercase, lowercase, and a number.
+                  </p>
+                )}
+              </div>
+              {resetPasswordMutation.error && (
+                <p role="alert" className="rounded-lg bg-rose-50 p-3 text-xs text-rose-700 dark:bg-rose-950 dark:text-rose-300">
+                  {resetPasswordMutation.error.message}
+                </p>
+              )}
+              <div className="flex justify-end gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setShowResetPasswordModal(false)}
+                  disabled={resetPasswordMutation.isPending}
+                  className="rounded-lg border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:text-zinc-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={Boolean(tempPasswordError) || resetPasswordMutation.isPending}
+                  className="rounded-lg bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
+                >
+                  {resetPasswordMutation.isPending ? 'Resetting...' : 'Confirm Reset'}
+                </button>
               </div>
             </form>
           </div>

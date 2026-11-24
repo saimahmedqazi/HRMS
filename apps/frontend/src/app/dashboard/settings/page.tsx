@@ -3,6 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import Link from 'next/link';
+import { ShiftPolicies } from '@/components/settings/shift-policies';
 import { useAuth, type UserProfile } from '@/lib/auth-context';
 import {
   Building2,
@@ -34,8 +36,8 @@ export default function SettingsPage() {
   const isPlatformRole =
     (user?.role === 'SUPER_ADMIN' || user?.role === 'OPERATION_MANAGER') &&
     !user?.supportModeCompanyId;
-  const canManageLeave = hasCompany && (user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER');
-  const canManageCompany = canManageLeave || (hasCompany && user?.role === 'SUPER_ADMIN');
+  const canManageLeave = hasCompany && user?.role === 'COMPANY_ADMIN' && !user.supportModeCompanyId;
+  const canManageCompany = canManageLeave || (hasCompany && (user?.role === 'SUPER_ADMIN' || user?.role === 'HR_MANAGER'));
 
   const tabs = { platform: isPlatformRole, company: canManageCompany, leave: canManageLeave, security: true };
   const [selectedTab, setActiveTab] = useState<keyof typeof tabs | null>(null);
@@ -286,7 +288,7 @@ export default function SettingsPage() {
                 }`}
               >
                 <CalendarDays className="h-4 w-4" />
-                Leave Policies
+                Company Policies
               </button>
           )}
           <button
@@ -560,6 +562,14 @@ export default function SettingsPage() {
 
       {/* Tab 2: Leave Policies */}
       {activeTab === 'leave' && canManageLeave && (
+        <div className="space-y-4">
+          <ShiftPolicies canEdit tenantId={user.companyId!} />
+          <Link href="/dashboard/payroll#salary-structures" className="inline-block text-sm font-semibold text-indigo-700 underline dark:text-indigo-300">
+            Manage payroll policies and salary structures
+          </Link>
+        </div>
+      )}
+      {activeTab === 'leave' && canManageLeave && (
         <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
           <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
             Company Leave Quotas & Compliance Rules
@@ -716,8 +726,11 @@ export default function SettingsPage() {
                   )}
                   <div className="max-w-xs space-y-2">
                     <label htmlFor="totp-setup-code" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                      2. Enter 6-digit verification code
+                      2. Enter the current 6-digit code from your authenticator app
                     </label>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      The code changes about every 30 seconds. Do not enter the QR secret or the example digits.
+                    </p>
                     <div className="flex gap-2">
                       <input
                         id="totp-setup-code"
@@ -727,7 +740,7 @@ export default function SettingsPage() {
                         maxLength={6}
                         value={totpCode}
                         onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
-                        placeholder="123456"
+                        placeholder="6-digit code"
                         className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800"
                       />
                       <button

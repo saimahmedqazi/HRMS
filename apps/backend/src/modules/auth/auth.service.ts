@@ -18,10 +18,11 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { MailService } from '../../common/mail/mail.service';
 import { DataScopeService } from '../../common/services/data-scope.service';
 import { getLoginNetworkLocation } from '../../common/utils/login-network-location';
-import { isRevokedImportPassword, PASSWORD_SETUP_REQUIRED } from '../../common/utils/password-policy';
+import { isRevokedImportPassword, PASSWORD_SETUP_REQUIRED, validateStrongPassword } from '../../common/utils/password-policy';
 import { RegisterCompanyDto } from './dto/register-company.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { isInactiveAccount } from './account-state';
 import { decryptTotpSecret, encryptTotpSecret, isLegacyTotpSecret, parseTotpEncryptionKey } from './totp-secret';
 import { CompanyStatus, UserRole, DataScope, LeaveType, EmployeeStatus, Prisma } from '@prisma/client';
@@ -37,6 +38,7 @@ export interface TokenResponse {
     lastName?: string;
     companyId: string | null;
     companyName?: string;
+    mustChangePassword?: boolean;
   };
 }
 
@@ -260,6 +262,7 @@ export class AuthService {
         lastName: user.employee?.lastName,
         companyId: user.companyId,
         companyName: user.company?.name,
+        mustChangePassword: user.mustChangePassword,
       },
     };
   }
@@ -338,6 +341,7 @@ export class AuthService {
         lastName: user.employee?.lastName,
         companyId: user.companyId,
         companyName: user.company?.name,
+        mustChangePassword: user.mustChangePassword,
       },
     };
   }
@@ -432,6 +436,7 @@ export class AuthService {
       },
       data: {
         passwordHash,
+        mustChangePassword: false,
         passwordResetToken: null,
         passwordResetExpiry: null,
         refreshTokenHash: null,
@@ -443,6 +448,71 @@ export class AuthService {
     if (reset.count !== 1) {
       throw new BadRequestException('Password reset token is invalid or has expired');
     }
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto): Promise<TokenResponse> {
+    validateStrongPassword(dto.newPassword);
+    if (dto.newPassword === dto.currentPassword) {
+      throw new BadRequestException('New password must be different from your current password.');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        company: { select: { id: true, name: true, status: true } },
+        employee: { select: { firstName: true, lastName: true, status: true, deletedAt: true } },
+      },
+    });
+
+    if (!user || isInactiveAccount(user)) {
+      throw new UnauthorizedException('User account or company is inactive or suspended');
+    }
+
+    const matches = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+    if (!matches) {
+      throw new BadRequestException('Current password is incorrect.');
+    }
+
+    const saltRounds = this.configService.get<number>('app.security.bcryptRounds', 12);
+    const passwordHash = await bcrypt.hash(dto.newPassword, saltRounds);
+    const nextSessionVersion = user.sessionVersion + 1;
+
+    const tokens = await this.generateTokens({
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      companyId: user.companyId,
+      sessionVersion: nextSessionVersion,
+    });
+    const refreshTokenHash = await bcrypt.hash(tokens.refreshToken, 10);
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        mustChangePassword: false,
+        sessionVersion: nextSessionVersion,
+        refreshTokenHash,
+        passwordResetToken: null,
+        passwordResetExpiry: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      },
+    });
+
+    return {
+      ...tokens,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        firstName: user.employee?.firstName,
+        lastName: user.employee?.lastName,
+        companyId: user.companyId,
+        companyName: user.company?.name,
+        mustChangePassword: false,
+      },
+    };
   }
 
   async verifyEmail(token: string): Promise<void> {
@@ -584,6 +654,7 @@ export class AuthService {
         email: true,
         role: true,
         twoFaEnabled: true,
+        mustChangePassword: true,
         isEmailVerified: true,
         lastLoginAt: true,
         lastLoginIp: true,

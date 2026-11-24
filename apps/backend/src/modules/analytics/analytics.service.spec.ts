@@ -161,6 +161,11 @@ describe('AnalyticsService', () => {
             status: AttendanceStatus.PRESENT_REMOTE,
             _count: { _all: 1 },
           },
+          {
+            date: new Date('2026-11-15T00:00:00Z'),
+            status: AttendanceStatus.HALF_DAY,
+            _count: { _all: 2 },
+          },
         ]);
 
         const overview = await service.getDashboardOverview(mockCompanyId, {
@@ -170,7 +175,7 @@ describe('AnalyticsService', () => {
 
         expect(overview.attendanceTrend).toHaveLength(7);
         expect(overview.attendanceTrend[0]).toMatchObject({ day: 'Mon', present: 1, remote: 0 });
-        expect(overview.attendanceTrend[6]).toMatchObject({ day: 'Sun', present: 0, remote: 1 });
+        expect(overview.attendanceTrend[6]).toMatchObject({ day: 'Sun', present: 0, remote: 1, halfDay: 2 });
         expect(prisma.attendanceRecord.findMany).toHaveBeenCalledTimes(1);
         expect(prisma.attendanceRecord.findMany).toHaveBeenCalledWith({
           where: { companyId: mockCompanyId, date: new Date('2026-11-15T00:00:00Z'), employee: { companyId: mockCompanyId, deletedAt: null } },

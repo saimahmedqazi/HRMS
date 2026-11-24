@@ -29,6 +29,7 @@ export interface UserProfile {
   lastLoginUserAgent?: string | null;
   lastLoginLocation?: string | null;
   twoFaEnabled?: boolean;
+  mustChangePassword?: boolean;
   dataScope?: string;
   companyId?: string | null;
   supportModeCompanyId?: string | null;

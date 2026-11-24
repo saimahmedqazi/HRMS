@@ -1,13 +1,13 @@
 import { TimerStatus, type Prisma, type Shift } from '@prisma/client';
 import { previousAttendanceDate, type AttendanceTime } from './attendance-date';
 
-type ShiftSchedule = Pick<Shift, 'startTime' | 'endTime' | 'workDays' | 'breakDuration'>;
+export type ShiftSchedule = Pick<Shift, 'startTime' | 'endTime' | 'workDays' | 'breakDuration'>;
 type EmployeeScope = { companyId: string; employeeId: string };
 type AttendanceDates = { date: Date; previousDate: Date };
 
 const scheduleFields = { name: true, startTime: true, endTime: true, workDays: true, breakDuration: true } as const;
 
-function clockMinutes(time: string): number | null {
+export function clockMinutes(time: string): number | null {
   const match = /^(\d{2}):(\d{2})$/.exec(time);
   if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) return null;
   return Number(match[1]) * 60 + Number(match[2]);
@@ -27,6 +27,21 @@ export function shiftStandardMinutes(shift?: ShiftSchedule | null): number {
   return start === null || end === null || start === end ? 480 : (end - start + 1440) % 1440;
 }
 
+export function shiftRevisionSelection(date: Date) {
+  return { ...scheduleFields, revisions: {
+    where: { effectiveDate: { lte: date } },
+    orderBy: { effectiveDate: 'desc' as const },
+    take: 2,
+  } };
+}
+
+export function scheduleOn<T extends ShiftSchedule>(shift: (T & { revisions?: import('@prisma/client').ShiftRevision[] }) | null | undefined, date: Date) {
+  if (!shift) return null;
+  const { revisions, ...base } = shift;
+  const revision = revisions?.find((item) => item.effectiveDate <= date);
+  return { ...base, ...revision, revision };
+}
+
 export function activeShiftWhere(now: Date, companyId: string): Prisma.EmployeeShiftWhereInput {
   return {
     companyId,
@@ -41,23 +56,25 @@ export async function resolveEmployeeAttendanceDay(
   now: Date,
   local: AttendanceTime,
 ) {
+  const selection = shiftRevisionSelection(local.date);
   const assignment = await prisma.employeeShift.findFirst({
     where: { employeeId: scope.employeeId, ...activeShiftWhere(now, scope.companyId) },
     orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
-    select: { shift: { select: scheduleFields } },
+    select: { shift: { select: selection } },
   });
-  const shift = assignment?.shift ?? await prisma.shift.findFirst({
+  const base = assignment?.shift ?? await prisma.shift.findFirst({
     where: { companyId: scope.companyId, isDefault: true },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    select: scheduleFields,
+    select: selection,
   });
   const previousDate = previousAttendanceDate(local.date);
-  const end = overnightShiftEnd(shift);
+  const priorShift = scheduleOn(base, previousDate);
+  const end = overnightShiftEnd(priorShift);
   const previousWorkDay = previousDate.getUTCDay() || 7;
   const isOvernightTail = end !== null &&
     local.hour * 60 + local.minute < end &&
-    shift?.workDays.includes(previousWorkDay);
-  return { date: isOvernightTail ? previousDate : local.date, previousDate, shift };
+    priorShift?.workDays.includes(previousWorkDay);
+  return { date: isOvernightTail ? previousDate : local.date, previousDate, shift: isOvernightTail ? priorShift : scheduleOn(base, local.date) };
 }
 
 export function findCurrentPunch(
@@ -70,7 +87,7 @@ export function findCurrentPunch(
       ...scope,
       OR: [
         { date: dates.date },
-        { date: dates.previousDate, checkInTime: { not: null }, checkOutTime: null },
+        { date: dates.previousDate, checkInTime: { not: null }, checkOutTime: null, finalizedAt: null, status: { not: 'MISSING_CHECKOUT' } },
       ],
     },
     orderBy: [

@@ -9,7 +9,7 @@ import {
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { getAttendanceDay, getCompanyAttendanceTime, previousAttendanceDate } from '../../common/utils/attendance-date';
-import { findCurrentPunch, findCurrentTimer, resolveEmployeeAttendanceDay, shiftStandardMinutes } from '../../common/utils/attendance-shift';
+import { findCurrentPunch, findCurrentTimer, resolveEmployeeAttendanceDay } from '../../common/utils/attendance-shift';
 import { MailService } from '../../common/mail/mail.service';
 import { AttendanceGateway } from '../attendance/attendance.gateway';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
@@ -351,9 +351,6 @@ export class WorkTimerService {
       Math.floor(Math.max(0, sessionEnd - sessionStart - breakMilliseconds) / 1000);
     const workMinutes = Math.round(workedSeconds / 60);
 
-    // Synchronize with AttendanceRecord
-    const overtimeMinutes = Math.max(0, workMinutes - shiftStandardMinutes(dates.shift));
-
     const { updatedTimer, alert } = await this.prisma.$transaction(async (tx) => {
       const updatedTimer = await tx.workTimerEntry.update({
         where: { id: timer.id, companyId, status: timer.status, updatedAt: timer.updatedAt },
@@ -371,16 +368,6 @@ export class WorkTimerService {
           data: { endedAt: now, durationMin: closedBreakDuration },
         });
       }
-      await tx.attendanceRecord.upsert({
-        where: { companyId_employeeId_date: { ...scope, date: timer.date } },
-        update: { workMinutes, overtimeMinutes },
-        create: {
-          ...scope,
-          date: timer.date,
-          workMinutes,
-          overtimeMinutes,
-        },
-      });
       const alert = openBreak && !timer.breakAlertedAt
         ? await this.recordBreakAlert(tx, employee, timer.breaks, closedBreakDuration, dates.shift?.breakDuration ?? 60, updatedTimer)
         : null;

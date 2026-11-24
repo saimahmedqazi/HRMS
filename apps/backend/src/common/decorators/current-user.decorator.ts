@@ -10,6 +10,7 @@ export interface AuthenticatedUser {
   supportModeCompanyId?: string | null;
   supportModeSessionId?: string;
   sessionVersion?: number;
+  mustChangePassword?: boolean;
   iat?: number;
   exp?: number;
 }

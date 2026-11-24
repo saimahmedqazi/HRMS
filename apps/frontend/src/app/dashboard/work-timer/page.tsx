@@ -1,1 +1,5 @@
-export { default } from '../attendance/page';
+import { redirect } from 'next/navigation';
+
+export default function WorkTimerRedirect() {
+  redirect('/dashboard/my-attendance');
+}

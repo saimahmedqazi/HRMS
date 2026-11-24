@@ -71,6 +71,9 @@ enum AttendanceStatus {
   PRESENT_REMOTE
   ABSENT
   ABSENT_PENDING_REVIEW
+  IN_PROGRESS
+  HALF_DAY
+  MISSING_CHECKOUT
   ON_LEAVE
   HOLIDAY
   WEEKEND
@@ -216,6 +219,7 @@ model User {
   emailVerifyExpiry     DateTime?
   passwordResetToken    String?
   passwordResetExpiry   DateTime?
+  mustChangePassword    Boolean   @default(false)
   refreshTokenHash      String?
   sessionVersion        Int       @default(0)
   failedLoginAttempts   Int       @default(0)
@@ -513,10 +517,31 @@ model Shift {
 
   company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employeeShifts EmployeeShift[]
+  revisions      ShiftRevision[]
 
   @@unique([companyId, id])
   @@index([companyId])
   @@map("shifts")
+}
+
+model ShiftRevision {
+  companyId String
+  shiftId String
+  effectiveDate DateTime @db.Date
+  startTime String
+  endTime String
+  breakDuration Int
+  workDays Int[]
+  requiredMinutes Int
+  halfDayMinutes Int
+  fullDayMinutes Int
+  overtimeEnabled Boolean
+  overtimeCapMinutes Int?
+
+  shift Shift @relation(fields: [companyId, shiftId], references: [companyId, id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@id([companyId, shiftId, effectiveDate])
+  @@map("shift_revisions")
 }
 
 model EmployeeShift {
@@ -549,6 +574,10 @@ model AttendanceRecord {
   isRemote        Boolean          @default(false)
   overtimeMinutes Int              @default(0)
   workMinutes     Int              @default(0)
+  punchPolicy     Json?
+  finalizedAt     DateTime?
+  remoteReviewPending Boolean      @default(false)
+  remoteRejected Boolean           @default(false)
   notes           String?
   markedBySystem  Boolean          @default(false)
   createdAt       DateTime         @default(now())
@@ -681,10 +710,16 @@ model LeaveRequest {
   medicalCertUrl     String?
   status             LeaveStatus @default(PENDING)
   step1ApproverId    String?
+  step1ActorId       String?
+  step1ActorName     String?
+  step1ActorRole     String?
   step1Status        ApprovalStatus @default(PENDING)
   step1ApprovedAt    DateTime?
   step1Notes         String?
   step2ApproverId    String?
+  step2ActorId       String?
+  step2ActorName     String?
+  step2ActorRole     String?
   step2Status        ApprovalStatus @default(PENDING)
   step2ApprovedAt    DateTime?
   step2Notes         String?

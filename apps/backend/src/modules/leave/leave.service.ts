@@ -270,33 +270,16 @@ export class LeaveService {
 
     const resolvedEmployeeId = emp.id;
     const targetYear = year || new Date().getFullYear();
-    const settings = (await this.ensureDefaultLeaveTypes(companyId)).filter((setting) => setting.isActive);
-
-    if (settings.length > 0) {
-      await this.prisma.leaveBalance.createMany({
-        data: settings.map((setting) => ({
-          companyId,
-          employeeId: resolvedEmployeeId,
-          leaveType: setting.leaveType,
-          year: targetYear,
-          allocated: setting.annualAllocation,
-        })),
-        skipDuplicates: true,
-      });
-    }
-
-    const balances = await this.prisma.leaveBalance.findMany({
-      where: {
-        companyId,
-        employeeId: resolvedEmployeeId,
-        year: targetYear,
-      },
+    const [settings, balances] = await Promise.all([
+      this.prisma.leaveTypeSetting.findMany({ where: { companyId, isActive: true } }),
+      this.prisma.leaveBalance.findMany({ where: { companyId, employeeId: resolvedEmployeeId, year: targetYear } }),
+    ]);
+    return settings.map((setting) => {
+      const balance = balances.find((item) => item.leaveType === setting.leaveType);
+      return balance
+        ? { ...balance, initialized: true, available: balance.allocated + balance.carried - balance.used - balance.pending }
+        : { id: `uninitialized-${setting.id}-${targetYear}`, leaveType: setting.leaveType, year: targetYear, initialized: false };
     });
-
-    return balances.map((b) => ({
-      ...b,
-      available: b.allocated + b.carried - b.used - b.pending,
-    }));
   }
 
   /**
@@ -409,6 +392,15 @@ export class LeaveService {
       : undefined;
 
     const leaveRequest = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${'leave:' + companyId + ':' + employee.id}, 0))`;
+      const overlap = await tx.leaveRequest.findFirst({
+        where: { companyId, employeeId: employee.id, status: { in: [LeaveStatus.PENDING, LeaveStatus.APPROVED] },
+          startDate: { lte: endDate }, endDate: { gte: startDate } },
+        select: { startDate: true, endDate: true, status: true },
+      });
+      if (overlap) {
+        throw new ConflictException(`Leave overlaps an existing ${overlap.status.toLowerCase()} request (${overlap.startDate.toISOString().slice(0, 10)} to ${overlap.endDate.toISOString().slice(0, 10)}).`);
+      }
       for (const { year, days } of balanceDaysByYear) {
         const yearlyKey = { ...balanceKey, year };
         await tx.leaveBalance.createMany({
@@ -534,9 +526,28 @@ export class LeaveService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    return requests.map((request) => this.canReadPrescription(user, request.employee.userId)
-      ? request
-      : { ...request, medicalCertUrl: null });
+    const reviewerIds = [...new Set(requests.flatMap((request) => [request.step1ApproverId, request.step2ApproverId]).filter((id): id is string => Boolean(id)))];
+    const reviewers = reviewerIds.length ? await this.prisma.user.findMany({
+      where: { companyId, id: { in: reviewerIds } },
+      select: { id: true, role: true, email: true, employee: { select: { firstName: true, lastName: true } } },
+    }) : [];
+    return requests.map((request) => {
+      const assigned = (id: string | null) => {
+        const reviewer = reviewers.find((item) => item.id === id);
+        return reviewer ? { name: [reviewer.employee?.firstName, reviewer.employee?.lastName].filter(Boolean).join(' ') || reviewer.email, role: reviewer.role } : null;
+      };
+      return {
+        ...request,
+        step1AssignedReviewer: assigned(request.step1ApproverId),
+        step2AssignedReviewer: assigned(request.step2ApproverId),
+        ...(!this.canReadPrescription(user, request.employee.userId) ? { medicalCertUrl: null } : {}),
+        ...(request.employee.userId === user.id ? {
+          step1Notes: request.step1Status === ApprovalStatus.REJECTED ? request.step1Notes : null,
+          step2Notes: request.step2Status === ApprovalStatus.REJECTED ? request.step2Notes : null,
+          finalNotes: null,
+        } : {}),
+      };
+    });
   }
 
   /**
@@ -561,14 +572,29 @@ export class LeaveService {
       throw new NotFoundException('Leave request not found.');
     }
 
-    return this.canReadPrescription(user, request.employee.userId)
-      ? request
-      : { ...request, medicalCertUrl: null };
+    return {
+      ...request,
+      ...(!this.canReadPrescription(user, request.employee.userId) ? { medicalCertUrl: null } : {}),
+      ...(request.employee.userId === user.id ? {
+        step1Notes: request.step1Status === ApprovalStatus.REJECTED ? request.step1Notes : null,
+        step2Notes: request.step2Status === ApprovalStatus.REJECTED ? request.step2Notes : null,
+        finalNotes: null,
+      } : {}),
+    };
   }
 
   /**
    * Step 1 Approver Decision (Team Lead / Dept Manager).
    */
+  private async decisionActor(tx: Prisma.TransactionClient, companyId: string, userId: string) {
+    const actor = await tx.user.findFirst({
+      where: { id: userId, OR: [{ companyId }, { role: UserRole.SUPER_ADMIN }] },
+      select: { id: true, email: true, role: true, employee: { select: { firstName: true, lastName: true } } },
+    });
+    if (!actor) throw new ForbiddenException('Reviewer not found in this company.');
+    return { id: actor.id, name: [actor.employee?.firstName, actor.employee?.lastName].filter(Boolean).join(' ') || actor.email, role: actor.role };
+  }
+
   async approveStep1(
     companyId: string,
     id: string,
@@ -600,7 +626,9 @@ export class LeaveService {
 
     if (dto.decision === 'REJECT') {
       return this.prisma.$transaction(async (tx) => {
+        const actor = await this.decisionActor(tx, companyId, userId);
         const updated = await this.updatePendingLeaveRequest(tx, request, {
+          step1ActorId: actor.id, step1ActorName: actor.name, step1ActorRole: actor.role,
           step1Status: ApprovalStatus.REJECTED,
           step1ApprovedAt: new Date(),
           step1Notes: dto.notes,
@@ -627,8 +655,10 @@ export class LeaveService {
     // Decision === APPROVE
     return this.prisma.$transaction(async (tx) => {
       const isFinal = request.step2Status === ApprovalStatus.SKIPPED;
+      const actor = await this.decisionActor(tx, companyId, userId);
 
       const updated = await this.updatePendingLeaveRequest(tx, request, {
+        step1ActorId: actor.id, step1ActorName: actor.name, step1ActorRole: actor.role,
         step1Status: ApprovalStatus.APPROVED,
         step1ApprovedAt: new Date(),
         step1Notes: dto.notes,
@@ -718,7 +748,9 @@ export class LeaveService {
 
     if (dto.decision === 'REJECT') {
       return this.prisma.$transaction(async (tx) => {
+        const actor = await this.decisionActor(tx, companyId, userId);
         const updated = await this.updatePendingLeaveRequest(tx, request, {
+          step2ActorId: actor.id, step2ActorName: actor.name, step2ActorRole: actor.role,
           step2Status: ApprovalStatus.REJECTED,
           step2ApprovedAt: new Date(),
           step2Notes: dto.notes,
@@ -744,7 +776,9 @@ export class LeaveService {
 
     // Step 2 APPROVE -> Final Approval
     return this.prisma.$transaction(async (tx) => {
+      const actor = await this.decisionActor(tx, companyId, userId);
       const updated = await this.updatePendingLeaveRequest(tx, request, {
+        step2ActorId: actor.id, step2ActorName: actor.name, step2ActorRole: actor.role,
         step2Status: ApprovalStatus.APPROVED,
         step2ApprovedAt: new Date(),
         step2Notes: dto.notes,

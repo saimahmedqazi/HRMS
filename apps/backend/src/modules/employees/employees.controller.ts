@@ -8,6 +8,7 @@ import {
   Body,
   Param,
   Query,
+  Req,
   Res,
   UseGuards,
   UseInterceptors,
@@ -16,19 +17,22 @@ import {
   HttpStatus,
   BadRequestException,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiCookieAuth, ApiQuery, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { getRequestIp } from '../../common/utils/request-ip';
 import { UserRole, EmployeeStatus } from '@prisma/client';
 import { EmployeesService } from './employees.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
 import { CreateEmergencyContactDto } from './dto/create-emergency-contact.dto';
+import { AdminResetPasswordDto } from './dto/admin-reset-password.dto';
 
 @ApiTags('Employees')
 @ApiCookieAuth()
@@ -128,6 +132,26 @@ export class EmployeesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.employeesService.updateStatus(id, dto, user);
+  }
+
+  @Post(':id/reset-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ short: { limit: 10, ttl: 60000 } })
+  @ApiOperation({ summary: 'Administratively reset an employee account password with temporary password' })
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  async resetEmployeePassword(
+    @Param('id') id: string,
+    @Body() dto: AdminResetPasswordDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() req: Request,
+  ) {
+    return this.employeesService.resetEmployeePassword(
+      id,
+      dto,
+      user,
+      getRequestIp(req) ?? undefined,
+      req.headers['user-agent'] || 'Unknown',
+    );
   }
 
   @Get(':id/org-chart')

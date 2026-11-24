@@ -24,6 +24,7 @@ import { AttendanceService } from './attendance.service';
 import { CheckInDto } from './dto/check-in.dto';
 import { CheckOutDto } from './dto/check-out.dto';
 import { CreateRemotePermissionDto } from './dto/create-remote-permission.dto';
+import { ShiftPolicyDto } from './dto/shift-policy.dto';
 import { ResolveExceptionDto } from './dto/resolve-exception.dto';
 
 @ApiTags('Attendance')
@@ -32,6 +33,30 @@ import { ResolveExceptionDto } from './dto/resolve-exception.dto';
 @Controller('attendance')
 export class AttendanceController {
   constructor(private readonly attendanceService: AttendanceService) {}
+
+  @Get('shifts')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  listShifts(@CurrentUser() user: AuthenticatedUser) {
+    return this.attendanceService.listShifts(user);
+  }
+
+  @Post('shifts')
+  @Roles(UserRole.COMPANY_ADMIN)
+  createShift(@Body() dto: ShiftPolicyDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.attendanceService.scheduleShiftPolicy(dto, user);
+  }
+
+  @Post('shifts/:id/revisions')
+  @Roles(UserRole.COMPANY_ADMIN)
+  reviseShift(@Param('id') id: string, @Body() dto: ShiftPolicyDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.attendanceService.scheduleShiftPolicy(dto, user, id);
+  }
+
+  @Post('shifts/:id/assign/:employeeId')
+  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  assignShift(@Param('id') id: string, @Param('employeeId') employeeId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.attendanceService.assignShift(id, employeeId, user);
+  }
 
   @Post('check-in')
   @ApiOperation({ summary: 'Employee check-in (onsite or remote with permission check)' })

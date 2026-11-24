@@ -54,6 +54,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         role: true,
         deletedAt: true,
         sessionVersion: true,
+        mustChangePassword: true,
         passwordHash: true,
         company: { select: { status: true } },
         employee: { select: { status: true, deletedAt: true } },
@@ -101,6 +102,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       supportModeCompanyId: payload.supportModeCompanyId,
       ...(payload.supportModeCompanyId && { supportModeSessionId: payload.sessionId }),
       sessionVersion: user.sessionVersion,
+      mustChangePassword: user.mustChangePassword,
       iat: payload.iat,
       exp: payload.exp,
     };

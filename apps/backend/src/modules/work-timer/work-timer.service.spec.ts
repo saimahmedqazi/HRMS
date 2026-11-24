@@ -178,8 +178,8 @@ describe('WorkTimerService', () => {
     });
   });
 
-  describe('stopTimer & overtime synchronization', () => {
-    it('should calculate active work minutes and sync overtime to attendance record', async () => {
+  describe('stopTimer', () => {
+    it('calculates timer minutes without changing attendance', async () => {
       const startedAt = new Date(Date.now() - 10 * 3600000); // 10h ago = 600m
       mockPrisma.company.findUnique.mockResolvedValueOnce({
         subscriptionTier: SubscriptionTier.PREMIUM,
@@ -208,14 +208,7 @@ describe('WorkTimerService', () => {
 
       const result = await service.stopTimer(mockUser);
       expect(result.status).toBe(TimerStatus.STOPPED);
-      expect(mockPrisma.attendanceRecord.upsert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          update: expect.objectContaining({
-            workMinutes: 540,
-            overtimeMinutes: 60,
-          }),
-        }),
-      );
+      expect(mockPrisma.attendanceRecord.upsert).not.toHaveBeenCalled();
     });
 
     it('should deduct open break duration when stopping a PAUSED timer', async () => {
@@ -267,9 +260,7 @@ describe('WorkTimerService', () => {
       const result = await service.stopTimer(mockUser);
 
       expect(result).toMatchObject({ totalMinutes: 28, workedSeconds: 1697, activeSessionStartedAt: null });
-      expect(mockPrisma.attendanceRecord.upsert).toHaveBeenCalledWith(expect.objectContaining({
-        update: { workMinutes: 28, overtimeMinutes: 0 },
-      }));
+      expect(mockPrisma.attendanceRecord.upsert).not.toHaveBeenCalled();
     });
   });
 });

@@ -13,6 +13,18 @@ interface StatusBadgeProps {
   size?: 'sm' | 'md';
 }
 
+const attendanceLabels: Record<string, string> = {
+  PRESENT: 'Present',
+  PRESENT_REMOTE: 'Present (remote)',
+  IN_PROGRESS: 'Checked in',
+  HALF_DAY: 'Half day',
+  ABSENT: 'Absent',
+  ABSENT_PENDING_REVIEW: 'Remote review',
+  MISSING_CHECKOUT: 'Missing checkout',
+  HOLIDAY: 'Holiday',
+  WEEKEND: 'Non-working day',
+};
+
 const statusConfig: Record<
   string,
   { label: string; bg: string; text: string; border: string; dot: string }
@@ -64,7 +76,7 @@ const statusConfig: Record<
 export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'sm' }) => {
   const normalized = (status || 'ACTIVE').toUpperCase().replace(/\s+/g, '_');
   const config = statusConfig[normalized] || {
-    label: status,
+    label: attendanceLabels[normalized] ?? status,
     bg: 'bg-zinc-100 dark:bg-zinc-800',
     text: 'text-zinc-700 dark:text-zinc-300',
     border: 'border-zinc-300 dark:border-zinc-700',

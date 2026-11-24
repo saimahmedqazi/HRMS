@@ -122,7 +122,7 @@ test.describe('Role 6: Team Lead Comprehensive Test Suite (10 Tests)', () => {
     await page.goto('/dashboard/settings');
     await expect(page.getByRole('checkbox', { name: 'Allow device location at check-in' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Organization Profile' })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Leave Policies' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Company Policies' })).toHaveCount(0);
 
     await page.screenshot({ path: path.join(screenshotsDir, 'tl-10-rbac-isolation.png') });
   });

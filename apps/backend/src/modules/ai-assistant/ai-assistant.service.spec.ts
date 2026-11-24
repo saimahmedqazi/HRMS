@@ -443,6 +443,33 @@ describe('AiAssistantService', () => {
       expect(result.reply).toContain('cannot disclose personal or compensation details of other staff');
     });
 
+    it('answers a pay-scale policy question with a possessive pronoun without treating it as individual salary data', async () => {
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How does their pay scale work for different roles?' },
+      );
+
+      expect(result.model).toBe('zenhr-policy-engine');
+      expect(result.reply).toContain('At Acme Corp');
+      expect(result.reply).toContain('base pay');
+      expect(result.reply).not.toContain('cannot disclose');
+    });
+
+    it('does not mistake the word another in a general pay-policy question for a request about another employee', async () => {
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How does another pay scale work for a different role?' },
+      );
+
+      expect(result.reply).toContain('At Acme Corp');
+      expect(result.reply).toContain('base pay');
+      expect(result.reply).not.toContain('cannot disclose');
+    });
+
     it('answers a general pay question without asking Gemini to infer a privacy violation', async () => {
       const generateContent = jest.fn();
       jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({

@@ -34,6 +34,7 @@ describe('AttendanceService', () => {
       findFirst: jest.fn(),
     },
     shift: { findFirst: jest.fn().mockResolvedValue(null) },
+    shiftRevision: { createMany: jest.fn() },
     notification: {
       create: jest.fn(),
       createMany: jest.fn(),
@@ -98,6 +99,33 @@ describe('AttendanceService', () => {
     });
   });
 
+  describe('shift policy access', () => {
+    const dto = { effectiveDate: '2099-01-01', startTime: '09:00', endTime: '17:00', workDays: [1, 2, 3, 4, 5],
+      breakDuration: 60, requiredMinutes: 420, halfDayMinutes: 240, fullDayMinutes: 420, overtimeEnabled: true };
+    it.each([UserRole.HR_MANAGER, UserRole.EMPLOYEE, UserRole.SUPER_ADMIN])('denies policy writes by %s', async (role) => {
+      await expect(service.scheduleShiftPolicy(dto, { ...mockEmployeeUser, role })).rejects.toThrow('Only the company CEO');
+    });
+    it('creates a prospective revision without updating attendance or replacing an assignment', async () => {
+      const ceo = { ...mockEmployeeUser, role: UserRole.COMPANY_ADMIN };
+      mockPrisma.shift.findFirst.mockResolvedValueOnce({ id: 'shift-1' });
+      mockPrisma.shiftRevision.createMany.mockResolvedValueOnce({ count: 1 });
+      await expect(service.scheduleShiftPolicy(dto, ceo, 'shift-1')).resolves.toEqual({
+        shiftId: 'shift-1', effectiveDate: new Date('2099-01-01'),
+      });
+      expect(mockPrisma.shiftRevision.createMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ companyId: ceo.companyId, shiftId: 'shift-1', halfDayMinutes: 240 }),
+      }));
+      expect(mockPrisma.attendanceRecord.update).not.toHaveBeenCalled();
+      expect(mockPrisma.employeeShift.findFirst).not.toHaveBeenCalled();
+    });
+    it('scopes revisions to the CEO tenant and does not mutate the existing shift', async () => {
+      const ceo = { ...mockEmployeeUser, role: UserRole.COMPANY_ADMIN };
+      mockPrisma.shift.findFirst.mockResolvedValueOnce(null);
+      await expect(service.scheduleShiftPolicy(dto, ceo, 'foreign')).rejects.toThrow('Shift not found');
+      expect(mockPrisma.shift.findFirst).toHaveBeenCalledWith({ where: { id: 'foreign', companyId: ceo.companyId } });
+    });
+  });
+
   describe('checkIn', () => {
     it('should throw ConflictException if already checked in today', async () => {
       mockPrisma.employee.findFirst.mockResolvedValueOnce({
@@ -113,22 +141,22 @@ describe('AttendanceService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
-    it('should mark PRESENT for onsite check-in', async () => {
+    it('should mark IN_PROGRESS for onsite check-in', async () => {
       mockPrisma.employee.findFirst.mockResolvedValueOnce({
         id: 'emp-1',
         companyId: 'comp-1',
       });
       mockPrisma.attendanceRecord.update.mockResolvedValueOnce({
         id: 'att-1',
-        status: AttendanceStatus.PRESENT,
+        status: AttendanceStatus.IN_PROGRESS,
       });
 
       const result = await service.checkIn({ isRemote: false }, '192.168.1.5', mockEmployeeUser);
-      expect(result.status).toBe(AttendanceStatus.PRESENT);
+      expect(result.status).toBe(AttendanceStatus.IN_PROGRESS);
       expect(mockPrisma.attendanceRecord.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            status: AttendanceStatus.PRESENT,
+            status: AttendanceStatus.IN_PROGRESS,
             isRemote: false,
           }),
         }),
@@ -154,7 +182,7 @@ describe('AttendanceService', () => {
       }));
     });
 
-    it('should mark PRESENT_REMOTE when employee has standing remote work permission', async () => {
+    it('should mark IN_PROGRESS remotely when employee has standing remote work permission', async () => {
       mockPrisma.employee.findFirst.mockResolvedValueOnce({
         id: 'emp-1',
         companyId: 'comp-1',
@@ -165,15 +193,15 @@ describe('AttendanceService', () => {
       });
       mockPrisma.attendanceRecord.update.mockResolvedValueOnce({
         id: 'att-remote',
-        status: AttendanceStatus.PRESENT_REMOTE,
+        status: AttendanceStatus.IN_PROGRESS,
       });
 
       const result = await service.checkIn({ isRemote: true }, '10.0.0.1', mockEmployeeUser);
-      expect(result.status).toBe(AttendanceStatus.PRESENT_REMOTE);
+      expect(result.status).toBe(AttendanceStatus.IN_PROGRESS);
       expect(mockPrisma.attendanceRecord.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            status: AttendanceStatus.PRESENT_REMOTE,
+            status: AttendanceStatus.IN_PROGRESS,
             isRemote: true,
           }),
         }),
@@ -263,7 +291,7 @@ describe('AttendanceService', () => {
       }));
       expect(mockPrisma.attendanceRecord.update).toHaveBeenCalledWith(expect.objectContaining({
         where: expect.objectContaining({ id: 'night-punch' }),
-        data: expect.objectContaining({ workMinutes: 390, overtimeMinutes: 30 }),
+        data: expect.objectContaining({ workMinutes: 390, overtimeMinutes: 60 }),
       }));
     });
   });

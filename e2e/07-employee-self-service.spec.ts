@@ -70,8 +70,9 @@ test.describe('Employee Self-Service & Tier Gating Suite', () => {
     await expect(page.locator('h1')).toContainText('My Payslips');
 
     // 5. Work Timer
-    await page.click('a[href="/dashboard/work-timer"]');
-    await page.waitForURL('**/dashboard/work-timer');
+    await expect(page.locator('a[href="/dashboard/work-timer"]')).toHaveCount(0);
+    await page.goto('/dashboard/work-timer');
+    await page.waitForURL('**/dashboard/my-attendance');
     await expect(page.locator('h1')).toContainText('Attendance & Work Timer');
     await expect(page.locator('text=Work Timer (Premium)')).toBeVisible();
 

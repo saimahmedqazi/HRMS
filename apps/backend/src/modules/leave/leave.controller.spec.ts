@@ -37,6 +37,18 @@ describe('LeaveController', () => {
     expect(controller).toBeDefined();
   });
 
+  it.each([UserRole.HR_MANAGER, UserRole.EMPLOYEE])('rejects leave policy changes from %s', async (role) => {
+    await expect(controller.updateLeaveType({ ...mockUser, role }, 'type-1', { annualAllocation: 12 }))
+      .rejects.toThrow('Only the company CEO');
+    expect(mockLeaveService.updateLeaveType).not.toHaveBeenCalled();
+  });
+
+  it('passes the CEO tenant to leave policy updates', async () => {
+    const dto = { annualAllocation: 12 };
+    await controller.updateLeaveType({ ...mockUser, role: UserRole.COMPANY_ADMIN }, 'type-1', dto);
+    expect(mockLeaveService.updateLeaveType).toHaveBeenCalledWith('company-1', 'type-1', dto);
+  });
+
   describe('getLeaveTypes', () => {
     it('should return leave types for tenant', async () => {
       const mockTypes = [{ id: 'type-1', name: 'Annual Leave' }] as any;

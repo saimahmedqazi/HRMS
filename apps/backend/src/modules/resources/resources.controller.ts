@@ -26,6 +26,13 @@ export class ResourcesController {
   constructor(private readonly resourcesService: ResourcesService) {}
 
   @Post('requests')
+  @Roles(
+    UserRole.EMPLOYEE,
+    UserRole.TEAM_LEAD,
+    UserRole.DEPARTMENT_MANAGER,
+    UserRole.HR_MANAGER,
+    UserRole.COMPANY_ADMIN,
+  )
   @ApiOperation({ summary: 'Submit an equipment/software resource request' })
   async createResourceRequest(
     @CurrentUser() user: any,

@@ -9,7 +9,8 @@ function summarizeAttendance(records: { status: AttendanceStatus }[]) {
     present: records.filter(({ status }) => status === AttendanceStatus.PRESENT).length,
     remote: records.filter(({ status }) => status === AttendanceStatus.PRESENT_REMOTE).length,
     absent: records.filter(({ status }) => status === AttendanceStatus.ABSENT).length,
-    exceptions: records.filter(({ status }) => status === AttendanceStatus.ABSENT_PENDING_REVIEW).length,
+    halfDay: records.filter(({ status }) => status === AttendanceStatus.HALF_DAY).length,
+    exceptions: records.filter(({ status }) => status === AttendanceStatus.ABSENT_PENDING_REVIEW || status === AttendanceStatus.MISSING_CHECKOUT).length,
   };
 }
 
@@ -281,7 +282,7 @@ export class AnalyticsService {
         select: { status: true },
       }),
       this.prisma.attendanceRecord.count({
-        where: { companyId, status: AttendanceStatus.ABSENT_PENDING_REVIEW },
+        where: { companyId, status: { in: [AttendanceStatus.ABSENT_PENDING_REVIEW, AttendanceStatus.MISSING_CHECKOUT] } },
       }),
       this.prisma.leaveRequest.count({ where: { companyId, status: 'PENDING' } }),
       this.prisma.department.findMany({
@@ -322,6 +323,7 @@ export class AnalyticsService {
         day: d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
         present: dayCounts?.[AttendanceStatus.PRESENT] ?? 0,
         remote: dayCounts?.[AttendanceStatus.PRESENT_REMOTE] ?? 0,
+        halfDay: dayCounts?.[AttendanceStatus.HALF_DAY] ?? 0,
         absent: dayCounts?.[AttendanceStatus.ABSENT] ?? 0,
       });
     }

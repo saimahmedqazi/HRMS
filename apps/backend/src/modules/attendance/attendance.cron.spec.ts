@@ -17,6 +17,7 @@ describe('AttendanceCronService', () => {
       ]),
     },
     attendanceRecord: {
+      findMany: jest.fn().mockResolvedValue([]),
       findUnique: jest.fn().mockImplementation(async ({ where }) =>
         where.companyId_employeeId_date.employeeId === 'punched' ? { checkInTime: new Date() } : null),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -33,6 +34,21 @@ describe('AttendanceCronService', () => {
   });
 
   afterEach(() => jest.useRealTimers());
+
+  it('flags a missing checkout once using the saved overnight policy', async () => {
+    jest.setSystemTime(new Date('2026-11-11T01:00:00Z'));
+    db.attendanceRecord.findMany.mockResolvedValueOnce([{
+      id: 'open', companyId, date, status: AttendanceStatus.IN_PROGRESS,
+      punchPolicy: { timezone: 'Asia/Kathmandu', overnightEnd: 360 },
+    }]);
+    await service.handleNightlyAbsenceJob();
+    await service.handleNightlyAbsenceJob();
+    expect(db.attendanceRecord.updateMany).toHaveBeenCalledTimes(1);
+    expect(db.attendanceRecord.updateMany).toHaveBeenCalledWith({
+      where: { id: 'open', companyId, status: AttendanceStatus.IN_PROGRESS, checkOutTime: null, finalizedAt: null },
+      data: { status: AttendanceStatus.MISSING_CHECKOUT },
+    });
+  });
 
   it('marks daytime absences at midnight and defers overnight absences until the shift ends', async () => {
     jest.setSystemTime(new Date('2026-11-10T19:00:00Z')); // 00:45 in Kathmandu

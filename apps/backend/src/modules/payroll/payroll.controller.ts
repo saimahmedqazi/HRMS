@@ -34,13 +34,13 @@ export class PayrollController {
   constructor(private readonly payrollService: PayrollService) {}
 
   @Post('structures')
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  @Roles(UserRole.COMPANY_ADMIN)
   @ApiOperation({ summary: 'Create custom salary structure' })
   async createStructure(
     @CurrentUser() user: any,
     @Body() dto: CreatePayrollStructureDto,
   ) {
-    const companyId = this.requireTenantPayrollWriteCompanyId(user);
+    const companyId = this.requirePolicyCompanyId(user);
     return this.payrollService.createStructure(companyId, dto);
   }
 
@@ -53,25 +53,25 @@ export class PayrollController {
   }
 
   @Patch('structures/:id')
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  @Roles(UserRole.COMPANY_ADMIN)
   @ApiOperation({ summary: 'Update a company salary structure' })
   async updateStructure(
     @CurrentUser() user: any,
     @Param('id') id: string,
     @Body() dto: CreatePayrollStructureDto,
   ) {
-    const companyId = this.requireTenantPayrollWriteCompanyId(user);
+    const companyId = this.requirePolicyCompanyId(user);
     return this.payrollService.updateStructure(companyId, id, dto);
   }
 
   @Delete('structures/:id')
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
+  @Roles(UserRole.COMPANY_ADMIN)
   @ApiOperation({ summary: 'Archive (soft-delete) an unused non-default salary structure' })
   async deleteStructure(
     @CurrentUser() user: any,
     @Param('id') id: string,
   ) {
-    const companyId = this.requireTenantPayrollWriteCompanyId(user);
+    const companyId = this.requirePolicyCompanyId(user);
     return this.payrollService.deleteStructure(companyId, id, user.id);
   }
 
@@ -226,6 +226,13 @@ export class PayrollController {
       throw new ForbiddenException('Company context required');
     }
     return companyId;
+  }
+
+  private requirePolicyCompanyId(user: { role?: UserRole | string; companyId?: string | null; supportModeCompanyId?: string | null }): string {
+    if (user.role !== UserRole.COMPANY_ADMIN || !user.companyId || user.supportModeCompanyId) {
+      throw new ForbiddenException('Only the company CEO may change payroll policies');
+    }
+    return user.companyId;
   }
 
   private requireTenantPayrollWriteCompanyId(user: {

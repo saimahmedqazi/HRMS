@@ -165,7 +165,7 @@ test.describe('Role 3: Company Admin (CEO) Comprehensive Test Suite (10 Tests)',
     await expect(page.locator('text=Organization profile settings saved.')).toBeVisible();
 
     // Leave Policies Tab
-    await page.click('button:has-text("Leave Policies")');
+    await page.click('button:has-text("Company Policies")');
     await expect(page.locator('text=Company Leave Quotas & Compliance Rules')).toBeVisible();
     await expect(page.locator('text=CASUAL LEAVE')).toBeVisible();
 

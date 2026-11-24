@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsIn, IsInt, Min, Max, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class ResolveExceptionDto {
   @ApiProperty({ enum: ['APPROVE', 'REJECT'], example: 'APPROVE' })
@@ -12,4 +12,10 @@ export class ResolveExceptionDto {
   @IsOptional()
   @MaxLength(500)
   notes?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(1440)
+  workMinutes?: number;
 }

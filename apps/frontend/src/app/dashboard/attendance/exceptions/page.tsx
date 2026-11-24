@@ -1,12 +1,13 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '@/lib/api';
 import { AlertTriangle, Check, X, ArrowLeft, ShieldAlert } from 'lucide-react';
 
 export default function AttendanceExceptionsPage() {
+  const [verifiedMinutes, setVerifiedMinutes] = useState<Record<string, string>>({});
   const queryClient = useQueryClient();
 
   const { data: exceptionsData, error: loadError, isLoading } = useQuery({
@@ -22,8 +23,8 @@ export default function AttendanceExceptionsPage() {
     void queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] });
   };
   const resolveMutation = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: 'APPROVE' | 'REJECT' }) =>
-      api.post(`/attendance/exceptions/${id}/resolve`, { action }),
+    mutationFn: ({ id, action, workMinutes }: { id: string; action: 'APPROVE' | 'REJECT'; workMinutes?: number }) =>
+      api.post(`/attendance/exceptions/${id}/resolve`, { action, workMinutes }),
     onSuccess: refreshAttendance,
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409) refreshAttendance();
@@ -45,7 +46,7 @@ export default function AttendanceExceptionsPage() {
             <AlertTriangle className="h-6 w-6 text-amber-500" /> HR Exceptions Queue
           </h1>
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Review and resolve unauthorized remote check-in requests pending HR verification.
+            Review unauthorized remote check-ins and missing checkouts.
           </p>
         </div>
       </div>
@@ -116,13 +117,23 @@ export default function AttendanceExceptionsPage() {
                     {ex.checkInTime ? new Date(ex.checkInTime).toLocaleString() : '—'}
                   </td>
                   <td className="px-3 py-4 text-xs font-mono text-zinc-500">
-                    {ex.checkInIp || 'Unknown'}
+                    {ex.status === 'MISSING_CHECKOUT' ? 'Missing checkout' : ex.checkInIp || 'Unknown'}
                   </td>
                   <td className="px-3 py-4 text-right">
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {ex.status === 'MISSING_CHECKOUT' && (
+                        <label className="text-xs">Verified net minutes
+                          <input type="number" min={0} max={1440} step={1} className="ml-2 w-20 rounded border p-1 dark:bg-zinc-800"
+                            value={verifiedMinutes[ex.id] ?? ''} onChange={(event) =>
+                              setVerifiedMinutes((values) => ({ ...values, [ex.id]: event.target.value }))} />
+                        </label>
+                      )}
                       <button
-                        disabled={resolveMutation.isPending}
-                        onClick={() => resolveMutation.mutate({ id: ex.id, action: 'APPROVE' })}
+                        disabled={resolveMutation.isPending || (ex.status === 'MISSING_CHECKOUT' &&
+                          (!verifiedMinutes[ex.id] || !Number.isInteger(Number(verifiedMinutes[ex.id])) ||
+                            Number(verifiedMinutes[ex.id]) < 0 || Number(verifiedMinutes[ex.id]) > 1440))}
+                        onClick={() => resolveMutation.mutate({ id: ex.id, action: 'APPROVE',
+                          workMinutes: ex.status === 'MISSING_CHECKOUT' ? Number(verifiedMinutes[ex.id]) : undefined })}
                         className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950 dark:text-emerald-300"
                         title="Approve as Remote Check-in"
                       >

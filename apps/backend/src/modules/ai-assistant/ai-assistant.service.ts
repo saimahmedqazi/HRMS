@@ -17,7 +17,14 @@ function isThirdPartyCompensationQuery(query: string): boolean {
   // Refuse requests about another person's compensation, including a pay
   // band or structure. A generic policy question may mention employees as a
   // group, so broad role nouns alone are not enough to trigger the refusal.
-  return /\b(other|another|someone else|somebody else|colleague|coworker|co-worker|their|his|her|them)\b/.test(query) ||
+  const explicitOtherPerson = /\b(?:someone else|somebody else|colleague|coworker|co-worker)\b/.test(query) ||
+    /\b(?:other|another|a different)\s+(?:person|people|employee|employees|staff member|team member|worker)\b/.test(query);
+  const asksAboutPayPolicy = /\b(?:pay scale|pay band|salary band|salary structure|compensation policy|wage policy)\b/.test(query);
+  const possessiveCompensation = !asksAboutPayPolicy &&
+    /\b(?:their|his|her)\s+(?:individual\s+|personal\s+)?(?:salary|pay|compensation|earnings?|wages?|remuneration|payslips?)\b/.test(query);
+  const directThirdPartyPayQuestion = /\b(?:how much|what (?:is|was)|what's)\s+(?:does\s+)?(?:he|she|they)\s+(?:get\s+)?(?:paid|earn)\b/.test(query);
+
+  return explicitOtherPerson || possessiveCompensation || directThirdPartyPayQuestion ||
     /\b(?:employee|staff member|team member)'s\b/.test(query) ||
     /\b(?:salary|pay|compensation|earnings?|wages?)\s+(?:of|for)\s+(?:an?\s+)?(?:employee|staff member|team member)\b/.test(query);
 }
