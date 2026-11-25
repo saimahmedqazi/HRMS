@@ -36,6 +36,22 @@ describe('ApprovalEngineService', () => {
       ).not.toThrow();
     });
 
+    it('should block leave when persisted probationEndDate is extended into the future', () => {
+      const pastHire = new Date();
+      pastHire.setDate(pastHire.getDate() - 200);
+      const extendedEnd = new Date();
+      extendedEnd.setDate(extendedEnd.getDate() + 30);
+
+      expect(() =>
+        service.assertCanRequestLeave({
+          status: 'ON_PROBATION',
+          hireDate: pastHire,
+          probationEndDate: extendedEnd,
+          role: UserRole.EMPLOYEE,
+        }),
+      ).toThrow(ForbiddenException);
+    });
+
     it('should allow regular ACTIVE employee without throwing', () => {
       const recentHire = new Date();
       recentHire.setDate(recentHire.getDate() - 10);

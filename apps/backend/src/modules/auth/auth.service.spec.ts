@@ -371,5 +371,84 @@ describe('AuthService', () => {
         expect.objectContaining({ secret: 'test-refresh-secret' }),
       );
     });
+
+    it('rejects replayed refresh tokens when rotated hash no longer matches', async () => {
+      const token = 'already-rotated-token';
+      const oldFingerprint = `sha256:${createHash('sha256').update(token).digest('hex')}`;
+      const newerFingerprint = `sha256:${createHash('sha256').update('newer-token').digest('hex')}`;
+      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1', sessionVersion: 0 });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'fixture@example.test',
+        companyId: 'tenant-1',
+        role: UserRole.EMPLOYEE,
+        sessionVersion: 0,
+        refreshTokenHash: newerFingerprint,
+      });
+
+      await expect(service.refreshToken(token)).rejects.toThrow('Session expired');
+      expect(oldFingerprint).not.toBe(newerFingerprint);
+      expect(mockPrisma.user.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects concurrent rotation when atomic CAS updateMany returns count 0', async () => {
+      const token = 'concurrent-token';
+      const fingerprint = `sha256:${createHash('sha256').update(token).digest('hex')}`;
+      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1', sessionVersion: 0 });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'fixture@example.test',
+        companyId: 'tenant-1',
+        role: UserRole.EMPLOYEE,
+        sessionVersion: 0,
+        refreshTokenHash: fingerprint,
+      });
+      mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.refreshToken(token)).rejects.toThrow('Session expired');
+    });
+
+    it('stores sha256 refreshTokenHash on changePassword so subsequent refresh succeeds', async () => {
+      const currentHash = await bcrypt.hash('OldPass123!', 10);
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'fixture@example.test',
+        role: UserRole.EMPLOYEE,
+        companyId: 'tenant-1',
+        sessionVersion: 2,
+        passwordHash: currentHash,
+        company: { id: 'tenant-1', name: 'Acme', status: 'ACTIVE' },
+        employee: { firstName: 'Jane', lastName: 'Doe', status: 'ACTIVE', deletedAt: null },
+      });
+      mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      const changed = await service.changePassword('user-1', {
+        currentPassword: 'OldPass123!',
+        newPassword: 'NewStrongPass99!',
+      });
+
+      const expectedHash = `sha256:${createHash('sha256').update(changed.refreshToken).digest('hex')}`;
+      expect(mockPrisma.user.updateMany).toHaveBeenCalledWith({
+        where: { id: 'user-1', sessionVersion: 2, passwordHash: currentHash, deletedAt: null },
+        data: expect.objectContaining({
+          mustChangePassword: false,
+          sessionVersion: 3,
+          refreshTokenHash: expectedHash,
+        }),
+      });
+
+      mockJwtService.verify.mockReturnValueOnce({ sub: 'user-1', sessionVersion: 3 });
+      mockPrisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'fixture@example.test',
+        companyId: 'tenant-1',
+        role: UserRole.EMPLOYEE,
+        sessionVersion: 3,
+        refreshTokenHash: expectedHash,
+      });
+      mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await expect(service.refreshToken(changed.refreshToken)).resolves.toHaveProperty('accessToken');
+    });
   });
 });

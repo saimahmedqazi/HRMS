@@ -11,6 +11,7 @@ describe('WorkTimerService', () => {
   let service: WorkTimerService;
 
   const mockPrisma: any = {
+    $queryRaw: jest.fn(),
     $transaction: jest.fn((callback) => callback(mockPrisma)),
     company: {
       findUnique: jest.fn(),

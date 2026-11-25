@@ -21,6 +21,7 @@ describe('LeaveService', () => {
 
   beforeEach(async () => {
     prisma = {
+      company: { findUnique: jest.fn().mockResolvedValue({ timezone: 'UTC' }) },
       leaveTypeSetting: {
         findMany: jest.fn(),
         createMany: jest.fn(),
@@ -31,7 +32,7 @@ describe('LeaveService', () => {
         findMany: jest.fn(),
         findUnique: jest.fn(),
         createMany: jest.fn(),
-        updateMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       leaveRequest: {
         findFirst: jest.fn(),
@@ -90,6 +91,12 @@ describe('LeaveService', () => {
 
     service = module.get<LeaveService>(LeaveService);
   });
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-01-01T12:00:00Z'));
+  });
+  afterEach(() => jest.useRealTimers());
 
   describe('ensureDefaultLeaveTypes', () => {
     it('requires a tenant context before querying leave policies', async () => {
@@ -216,8 +223,7 @@ describe('LeaveService', () => {
       expect(prisma.$queryRaw).toHaveBeenCalled();
       expect(prisma.leaveRequest.findFirst).toHaveBeenCalledWith(expect.objectContaining({
         where: expect.objectContaining({ companyId: mockCompanyId, employeeId: mockEmployeeId,
-          status: { in: [LeaveStatus.PENDING, LeaveStatus.APPROVED] },
-          startDate: { lte: new Date('2027-01-07') }, endDate: { gte: new Date('2027-01-06') } }),
+          OR: expect.arrayContaining([expect.objectContaining({ status: LeaveStatus.APPROVED })]) }),
       }));
       expect(prisma.leaveBalance.createMany).not.toHaveBeenCalled();
       expect(prisma.$executeRaw).not.toHaveBeenCalled();
@@ -327,6 +333,7 @@ describe('LeaveService', () => {
         step2Status: ApprovalStatus.PENDING,
         step2ApproverId: 'hr-user-id',
         startDate: new Date('2026-11-10'),
+        endDate: new Date('2026-11-12'),
         leaveTypeSetting: { leaveType: LeaveType.CASUAL },
         employee: { userId: mockUserId, firstName: 'Alice', lastName: 'Smith', user: { role: UserRole.EMPLOYEE } },
       };
@@ -386,6 +393,91 @@ describe('LeaveService', () => {
       });
       expect(result.status).toBe(LeaveStatus.REJECTED);
     });
+  });
+
+  describe('partial approval', () => {
+    const request = {
+      id: 'partial', companyId: mockCompanyId, employeeId: mockEmployeeId,
+      startDate: new Date('2026-12-28'), endDate: new Date('2027-01-06'), totalDays: 10,
+      balanceDaysByYear: [{ year: 2026, days: 4 }, { year: 2027, days: 6 }],
+      employee: { userId: mockUserId }, leaveTypeSetting: { leaveType: LeaveType.ANNUAL },
+      status: LeaveStatus.PENDING, step1Status: ApprovalStatus.APPROVED, step2Status: ApprovalStatus.PENDING,
+      step1ApprovedStart: new Date('2026-12-30'), step1ApprovedEnd: new Date('2027-01-05'),
+    };
+    beforeEach(() => {
+      prisma.leaveRequest.findFirst.mockResolvedValue(request);
+      prisma.leaveRequest.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ ...request, ...data }));
+      approvalEngine.calculateTotalDays.mockImplementation((start: Date, end: Date) => (+end - +start) / 86400000 + 1);
+    });
+
+    it('uses only final cross-year dates and releases the original reservation once', async () => {
+      await expect(service.approveStep2(mockCompanyId, request.id, 'reviewer', UserRole.HR_MANAGER, {
+        decision: 'PARTIAL', approvedStart: '2026-12-30', approvedEnd: '2027-01-03', partialReason: 'Coverage needed',
+      })).resolves.toMatchObject({ approvedDays: 5, approvedDaysByYear: [{ year: 2026, days: 2 }, { year: 2027, days: 3 }] });
+      for (const [year, pending, used] of [[2026, 4, 2], [2027, 6, 3]]) {
+        expect(prisma.leaveBalance.updateMany).toHaveBeenCalledWith({
+          where: expect.objectContaining({ year, pending: { gte: pending } }),
+          data: { pending: { decrement: pending }, used: { increment: used } },
+        });
+      }
+      const attendance = prisma.attendanceRecord.createMany.mock.calls[0][0].data;
+      expect(attendance.map(({ date }: { date: Date }) => date.toISOString().slice(0, 10)))
+        .toEqual(['2026-12-30', '2026-12-31', '2027-01-01', '2027-01-02', '2027-01-03']);
+      expect(prisma.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+        title: 'Leave Request Partially Approved', data: { leaveRequestId: 'partial' },
+        body: expect.stringContaining('Coverage needed'),
+      }) });
+    });
+
+    it('retains the original reservation while Step 1 narrows the scope', async () => {
+      prisma.leaveRequest.findFirst.mockResolvedValue({ ...request, step1Status: ApprovalStatus.PENDING });
+      await expect(service.approveStep1(mockCompanyId, request.id, 'reviewer', UserRole.HR_MANAGER, {
+        decision: 'PARTIAL', approvedStart: '2026-12-30', approvedEnd: '2027-01-03', partialReason: 'Coverage needed',
+      })).resolves.toMatchObject({ status: LeaveStatus.PENDING, step1ApprovedStart: new Date('2026-12-30') });
+      expect(prisma.leaveBalance.updateMany).not.toHaveBeenCalled();
+      expect(prisma.attendanceRecord.createMany).not.toHaveBeenCalled();
+    });
+
+    it('keeps a partial outcome when Step 2 approves the whole narrowed scope', async () => {
+      await expect(service.approveStep2(mockCompanyId, request.id, 'reviewer', UserRole.HR_MANAGER, {
+        decision: 'APPROVE',
+      })).resolves.toMatchObject({ approvedDays: 7, approvedStart: new Date('2026-12-30') });
+    });
+
+    it('releases both original reservations on rejection after narrowing', async () => {
+      await expect(service.approveStep2(mockCompanyId, request.id, 'reviewer', UserRole.HR_MANAGER, {
+        decision: 'REJECT',
+      })).resolves.toMatchObject({ status: LeaveStatus.REJECTED });
+      expect(prisma.leaveBalance.updateMany.mock.calls.map(([args]: [{ data: unknown }]) => args.data))
+        .toEqual([{ pending: { decrement: 4 } }, { pending: { decrement: 6 } }]);
+      expect(prisma.attendanceRecord.createMany).not.toHaveBeenCalled();
+    });
+
+    it('releases an entire year when only dates in the other year are approved', async () => {
+      await expect(service.approveStep2(mockCompanyId, request.id, 'reviewer', UserRole.HR_MANAGER, {
+        decision: 'PARTIAL', approvedStart: '2027-01-01', approvedEnd: '2027-01-03', partialReason: 'Coverage needed',
+      })).resolves.toMatchObject({ approvedDaysByYear: [{ year: 2027, days: 3 }] });
+      expect(prisma.leaveBalance.updateMany).toHaveBeenCalledWith({
+        where: expect.objectContaining({ year: 2026 }), data: { pending: { decrement: 4 } },
+      });
+    });
+
+    it('cancels a narrowed request without consuming either reservation', async () => {
+      prisma.employee.findFirst.mockResolvedValue({ id: mockEmployeeId });
+      await expect(service.cancelLeaveRequest(mockCompanyId, request.id, mockUserId))
+        .resolves.toMatchObject({ status: LeaveStatus.CANCELLED });
+      expect(prisma.leaveBalance.updateMany.mock.calls.map(([args]: [{ data: unknown }]) => args.data))
+        .toEqual([{ pending: { decrement: 4 } }, { pending: { decrement: 6 } }]);
+    });
+
+    it.each([['2026-12-29', '2027-01-04'], ['2027-02-30', '2027-01-03'], ['2027-01-03', '2027-01-01']])(
+      'rejects invalid or expanded range %s to %s', async (approvedStart, approvedEnd) => {
+        await expect(service.approveStep2(mockCompanyId, request.id, 'reviewer', UserRole.HR_MANAGER, {
+          decision: 'PARTIAL', approvedStart, approvedEnd, partialReason: 'Coverage needed',
+        })).rejects.toThrow(BadRequestException);
+        expect(prisma.leaveBalance.updateMany).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('approveStep2 (Final Approval)', () => {

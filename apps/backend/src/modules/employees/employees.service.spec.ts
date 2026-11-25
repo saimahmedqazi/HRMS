@@ -194,7 +194,7 @@ describe('EmployeesService', () => {
         employeeCode: nextCode,
         firstName: 'Sarah',
         lastName: 'Connor',
-        status: EmployeeStatus.ON_PROBATION,
+        status: EmployeeStatus.ACTIVE,
       });
       mockPrisma.shift.findFirst.mockResolvedValueOnce({ id: 'default-shift' });
       mockPrisma.employeeShift.create.mockResolvedValueOnce({});
@@ -220,7 +220,7 @@ describe('EmployeesService', () => {
       expect(mockPrisma.employee.findMany).toHaveBeenCalledWith({
         where: { companyId: mockAdminUser.companyId }, select: { employeeCode: true },
       });
-      expect(result.status).toBe(EmployeeStatus.ON_PROBATION);
+      expect(result.status).toBe(EmployeeStatus.ACTIVE);
       expect(mockPrisma.employeeShift.create).toHaveBeenCalledWith({
         data: { companyId: mockAdminUser.companyId, employeeId: 'new-emp-id', shiftId: 'default-shift', effectiveFrom: expect.any(Date) },
       });
@@ -232,11 +232,118 @@ describe('EmployeesService', () => {
             hireDate: new Date('2025-01-15'),
             probationEndDate: new Date('2025-04-15'),
             baseSalary: 0,
-            status: EmployeeStatus.ON_PROBATION,
+            status: EmployeeStatus.ACTIVE,
           }),
         }),
       );
       expect(mockMailService.sendMail).toHaveBeenCalled();
+    });
+
+    it('defaults recent hires to ON_PROBATION and exact 90-day boundary to ACTIVE', async () => {
+      const today = new Date();
+      const todayStr = today.toISOString().slice(0, 10);
+      const twoMonthsAgo = new Date(today.getTime() - 60 * 86_400_000).toISOString().slice(0, 10);
+      const exact90DaysAgo = new Date(today.getTime() - 90 * 86_400_000).toISOString().slice(0, 10);
+
+      for (const [hireDateStr, expectedStatus] of [
+        [todayStr, EmployeeStatus.ON_PROBATION],
+        [twoMonthsAgo, EmployeeStatus.ON_PROBATION],
+        [exact90DaysAgo, EmployeeStatus.ACTIVE],
+      ] as const) {
+        mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+        mockPrisma.employee.findMany.mockResolvedValueOnce([]);
+        mockPrisma.user.create.mockResolvedValueOnce({ id: 'u-1', email: 'test@acme.com', role: UserRole.EMPLOYEE });
+        mockPrisma.employee.create.mockResolvedValueOnce({ id: 'e-1', employeeCode: 'EMP-001', status: expectedStatus });
+        mockPrisma.shift.findFirst.mockResolvedValueOnce(null);
+        mockPrisma.leaveTypeSetting.findMany.mockResolvedValueOnce([]);
+
+        await service.onboardEmployee(
+          { firstName: 'Test', lastName: 'User', email: 'test@acme.com', hireDate: hireDateStr },
+          mockAdminUser,
+        );
+
+        expect(mockPrisma.employee.create).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ status: expectedStatus }),
+          }),
+        );
+      }
+    });
+
+    it('validates explicit initialStatus and probationEndDate overrides', async () => {
+      const sevenMonthsAgo = new Date(Date.now() - 210 * 86_400_000).toISOString().slice(0, 10);
+      const futureDate = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+
+      // Elapsed original probation + explicit ON_PROBATION without future date -> rejected
+      await expect(
+        service.onboardEmployee(
+          {
+            firstName: 'Test',
+            lastName: 'User',
+            email: 'test@acme.com',
+            hireDate: sevenMonthsAgo,
+            initialStatus: 'ON_PROBATION',
+          },
+          mockAdminUser,
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      // ACTIVE with future probationEndDate -> rejected
+      await expect(
+        service.onboardEmployee(
+          {
+            firstName: 'Test',
+            lastName: 'User',
+            email: 'test@acme.com',
+            hireDate: sevenMonthsAgo,
+            initialStatus: 'ACTIVE',
+            probationEndDate: futureDate,
+          },
+          mockAdminUser,
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      // Non-CEO/HR override -> ForbiddenException
+      await expect(
+        service.onboardEmployee(
+          {
+            firstName: 'Test',
+            lastName: 'User',
+            email: 'test@acme.com',
+            initialStatus: 'ACTIVE',
+          },
+          { ...mockAdminUser, role: UserRole.DEPARTMENT_MANAGER },
+        ),
+      ).rejects.toThrow(ForbiddenException);
+
+      // Valid extended ON_PROBATION -> succeeds
+      mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+      mockPrisma.employee.findMany.mockResolvedValueOnce([]);
+      mockPrisma.user.create.mockResolvedValueOnce({ id: 'u-2', email: 'ext@acme.com', role: UserRole.EMPLOYEE });
+      mockPrisma.employee.create.mockResolvedValueOnce({ id: 'e-2', employeeCode: 'EMP-001', status: EmployeeStatus.ON_PROBATION });
+      mockPrisma.shift.findFirst.mockResolvedValueOnce(null);
+      mockPrisma.leaveTypeSetting.findMany.mockResolvedValueOnce([]);
+
+      await service.onboardEmployee(
+        {
+          firstName: 'Ext',
+          lastName: 'Hire',
+          email: 'ext@acme.com',
+          hireDate: sevenMonthsAgo,
+          initialStatus: 'ON_PROBATION',
+          probationEndDate: futureDate,
+        },
+        mockAdminUser,
+      );
+
+      expect(mockPrisma.employee.create).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: EmployeeStatus.ON_PROBATION,
+            probationEndDate: new Date(futureDate),
+          }),
+        }),
+      );
     });
   });
 

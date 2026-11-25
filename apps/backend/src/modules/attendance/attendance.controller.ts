@@ -25,6 +25,7 @@ import { CheckInDto } from './dto/check-in.dto';
 import { CheckOutDto } from './dto/check-out.dto';
 import { CreateRemotePermissionDto } from './dto/create-remote-permission.dto';
 import { ShiftPolicyDto } from './dto/shift-policy.dto';
+import { AssignShiftDto } from './dto/assign-shift.dto';
 import { ResolveExceptionDto } from './dto/resolve-exception.dto';
 
 @ApiTags('Attendance')
@@ -54,8 +55,28 @@ export class AttendanceController {
 
   @Post('shifts/:id/assign/:employeeId')
   @Roles(UserRole.COMPANY_ADMIN, UserRole.HR_MANAGER)
-  assignShift(@Param('id') id: string, @Param('employeeId') employeeId: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.attendanceService.assignShift(id, employeeId, user);
+  assignShift(
+    @Param('id') id: string,
+    @Param('employeeId') employeeId: string,
+    @Body() dto: AssignShiftDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.attendanceService.assignShift(id, employeeId, user, dto);
+  }
+
+  @Get('employees/:employeeId/shifts')
+  @Roles(
+    UserRole.COMPANY_ADMIN,
+    UserRole.HR_MANAGER,
+    UserRole.DEPARTMENT_MANAGER,
+    UserRole.TEAM_LEAD,
+    UserRole.EMPLOYEE,
+  )
+  getEmployeeShifts(
+    @Param('employeeId') employeeId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.attendanceService.getEmployeeShifts(employeeId, user);
   }
 
   @Post('check-in')

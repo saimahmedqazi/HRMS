@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
@@ -71,6 +71,8 @@ export default function EmployeesPage() {
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [hireDate, setHireDate] = useState('');
+  const [initialStatus, setInitialStatus] = useState<'AUTO' | 'ACTIVE' | 'ON_PROBATION'>('AUTO');
+  const [probationEndDate, setProbationEndDate] = useState('');
   const [role, setRole] = useState('EMPLOYEE');
   const [departmentId, setDepartmentId] = useState('');
   const [designationId, setDesignationId] = useState('');
@@ -94,7 +96,7 @@ export default function EmployeesPage() {
   });
 
   // Fetch employees list
-  const { data, isLoading, isError, isFetching, refetch } = useQuery({
+  const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
     queryKey: ['employees', user?.id, companyId, search, statusFilter, deptFilter, page],
     retry: false,
     queryFn: () => {
@@ -108,6 +110,22 @@ export default function EmployeesPage() {
     },
   });
 
+  const canOverrideInitialStatus =
+    user?.role === 'COMPANY_ADMIN' ||
+    user?.role === 'HR_MANAGER' ||
+    user?.role === 'SUPER_ADMIN';
+
+  const effectiveHireDate = hireDate ? new Date(`${hireDate}T00:00:00Z`) : new Date();
+  const calculatedProbationEnd = new Date(effectiveHireDate.getTime() + 90 * 86_400_000);
+  const calculatedProbationEndStr = Number.isFinite(calculatedProbationEnd.getTime())
+    ? calculatedProbationEnd.toISOString().slice(0, 10)
+    : '';
+  const todayUtcStr = new Date().toISOString().slice(0, 10);
+  const autoDerivedStatus =
+    calculatedProbationEndStr && calculatedProbationEndStr <= todayUtcStr
+      ? 'Active'
+      : 'On Probation';
+
   // Onboard mutation
   const onboardMutation = useMutation({
     mutationFn: () =>
@@ -116,6 +134,11 @@ export default function EmployeesPage() {
         lastName,
         email,
         hireDate: hireDate || undefined,
+        initialStatus: canOverrideInitialStatus ? initialStatus : 'AUTO',
+        probationEndDate:
+          canOverrideInitialStatus && initialStatus === 'ON_PROBATION' && probationEndDate
+            ? probationEndDate
+            : undefined,
         role,
         departmentId: departmentId || undefined,
         designationId: designationId || undefined,
@@ -128,6 +151,8 @@ export default function EmployeesPage() {
       setLastName('');
       setEmail('');
       setHireDate('');
+      setInitialStatus('AUTO');
+      setProbationEndDate('');
       setDepartmentId('');
       setDesignationId('');
       setTeamId('');
@@ -218,15 +243,25 @@ export default function EmployeesPage() {
         <p className="text-sm text-zinc-500">Loading employees...</p>
       ) : isError && !data ? (
         <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm dark:border-zinc-800 dark:bg-zinc-900">
-          <p role="alert">The employee list couldn’t load.</p>
-          <button
-            type="button"
-            onClick={() => void refetch()}
-            disabled={isFetching}
-            className="mt-3 rounded-lg border border-zinc-300 px-4 py-2 font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            {isFetching ? 'Retrying…' : 'Try again'}
-          </button>
+          <p role="alert" className="font-medium text-zinc-900 dark:text-zinc-100">
+            {error instanceof ApiError && error.status === 401
+              ? 'Your session has expired. Redirecting to sign in…'
+              : error instanceof ApiError && error.status === 403
+                ? 'You do not have permission to view this employee directory.'
+                : error instanceof ApiError && error.status === 400
+                  ? error.message || 'Invalid directory filter parameters.'
+                  : 'Unable to load the employee directory due to a temporary server or connection issue.'}
+          </p>
+          {!(error instanceof ApiError && (error.status === 401 || error.status === 403)) && (
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="mt-3 rounded-lg border border-zinc-300 px-4 py-2 font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              {isFetching ? 'Retrying…' : 'Try again'}
+            </button>
+          )}
         </div>
       ) : employees.length === 0 ? (
         <div className="rounded-xl border border-dashed border-zinc-300 p-12 text-center dark:border-zinc-700">
@@ -480,6 +515,50 @@ export default function EmployeesPage() {
                       <option value="HR_MANAGER">HR Manager</option>
                     </select>
                   </div>
+                  {canOverrideInitialStatus && (
+                    <div>
+                      <label htmlFor="onboard-initial-status" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                        Initial Employment Status
+                      </label>
+                      <select
+                        id="onboard-initial-status"
+                        value={initialStatus}
+                        onChange={(e) => {
+                          const next = e.target.value as 'AUTO' | 'ACTIVE' | 'ON_PROBATION';
+                          setInitialStatus(next);
+                          if (next !== 'ON_PROBATION') setProbationEndDate('');
+                        }}
+                        className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+                      >
+                        <option value="AUTO">Automatic — based on joining date ({autoDerivedStatus})</option>
+                        <option value="ACTIVE">Active</option>
+                        <option value="ON_PROBATION">On probation</option>
+                      </select>
+                      {calculatedProbationEndStr && (
+                        <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                          Calculated 90-day probation end: {calculatedProbationEndStr}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {canOverrideInitialStatus && initialStatus === 'ON_PROBATION' && (
+                    <div>
+                      <label htmlFor="onboard-probation-end" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                        Probation End Date {calculatedProbationEndStr <= todayUtcStr ? '*' : '(Optional Override)'}
+                      </label>
+                      <input
+                        id="onboard-probation-end"
+                        type="date"
+                        value={probationEndDate}
+                        min={todayUtcStr}
+                        onChange={(e) => setProbationEndDate(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+                      />
+                      <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                        Required if the original 90-day probation period has already elapsed.
+                      </p>
+                    </div>
+                  )}
                 </div>
                 {onboardMutation.isError && (
                   <p role="alert" className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">

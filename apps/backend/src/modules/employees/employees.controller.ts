@@ -33,6 +33,7 @@ import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
 import { CreateEmergencyContactDto } from './dto/create-emergency-contact.dto';
 import { AdminResetPasswordDto } from './dto/admin-reset-password.dto';
+import { ListEmployeesQueryDto } from './dto/list-employees-query.dto';
 
 @ApiTags('Employees')
 @ApiCookieAuth()
@@ -60,21 +61,9 @@ export class EmployeesController {
   )
   async listEmployees(
     @CurrentUser() user: AuthenticatedUser,
-    @Query('search') search?: string,
-    @Query('departmentId') departmentId?: string,
-    @Query('teamId') teamId?: string,
-    @Query('status') status?: EmployeeStatus,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: ListEmployeesQueryDto,
   ) {
-    return this.employeesService.listEmployees(user, {
-      search,
-      departmentId,
-      teamId,
-      status,
-      page,
-      limit,
-    });
+    return this.employeesService.listEmployees(user, query);
   }
 
   @Get(':id')

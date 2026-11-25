@@ -124,6 +124,17 @@ export default function SettingsPage() {
     enabled: canManageLeave,
   });
 
+  const regularization = useQuery({
+    queryKey: ['regularization-policy', user?.companyId],
+    queryFn: () => api.get<{ regularizationEnabled: boolean; regularizationLookback: number;
+      regularizationExceptional: boolean; regularizationDocument: boolean }>('/leave/regularization/policy'),
+    enabled: canManageLeave,
+  });
+  const updateRegularization = useMutation({
+    mutationFn: (data: Record<string, boolean | number>) => api.patch('/leave/regularization/policy', data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['regularization-policy'] }),
+  });
+
   const updateLeaveTypeMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) =>
       api.patch(`/leave/types/${id}`, data),
@@ -580,7 +591,51 @@ export default function SettingsPage() {
             Company Leave Quotas & Compliance Rules
           </h2>
           <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {leaveTypes.map((lt: any) => (
+            {regularization.data && (
+              <form className="grid gap-3 py-4 text-sm sm:grid-cols-2" onSubmit={(event) => {
+                event.preventDefault();
+                const data = new FormData(event.currentTarget);
+                updateRegularization.mutate({
+                  regularizationEnabled: data.has('enabled'), regularizationLookback: Number(data.get('window')),
+                  regularizationExceptional: data.has('exceptional'), regularizationDocument: data.has('document'),
+                });
+              }}>
+                <h3 className="font-semibold sm:col-span-2">Retrospective leave</h3>
+                <label><input type="checkbox" name="enabled" defaultChecked={regularization.data.regularizationEnabled} /> Enable absence regularization</label>
+                <label>Lookback (calendar days) <input name="window" type="number" min={1} max={366} required defaultValue={regularization.data.regularizationLookback}
+                  className="w-20 rounded border px-2 dark:bg-zinc-800" /></label>
+                <label><input type="checkbox" name="exceptional" defaultChecked={regularization.data.regularizationExceptional} /> Allow special and unpaid leave</label>
+                <label><input type="checkbox" name="document" defaultChecked={regularization.data.regularizationDocument} /> Require a supporting document</label>
+                <button type="submit" disabled={updateRegularization.isPending} className="justify-self-start rounded bg-indigo-700 px-3 py-2 text-white">Save regularization policy</button>
+                {updateRegularization.isSuccess && <p role="status">Policy saved.</p>}
+                {updateRegularization.isError && <p role="alert">{updateRegularization.error.message}</p>}
+              </form>
+            )}
+            {regularization.isError && <p role="alert">Regularization policy could not be loaded.</p>}
+            {leaveTypes.map((lt: any) => (lt.leaveType === 'SPECIAL' || lt.leaveType === 'UNPAID') ? (
+              <form key={lt.id} className="grid gap-3 py-4 text-sm sm:grid-cols-2" onSubmit={(event) => {
+                event.preventDefault();
+                const data = new FormData(event.currentTarget);
+                const enforceEntitlement = data.has('entitlement');
+                updateLeaveTypeMutation.mutate({ id: lt.id, data: {
+                  isActive: data.has('active'), isPaid: lt.leaveType === 'SPECIAL' && data.has('paid'),
+                  enforceEntitlement, annualAllocation: enforceEntitlement ? Number(data.get('allocation')) : 0,
+                  carryForwardDays: enforceEntitlement ? lt.carryForwardDays : 0,
+                  allowDuringProbation: data.has('probation'), requiresMedicalCert: data.has('document'),
+                  maxConsecutiveDays: data.get('maxDays') ? Number(data.get('maxDays')) : null,
+                } });
+              }}>
+                <h3 className="font-semibold sm:col-span-2">{lt.leaveType === 'SPECIAL' ? 'Special leave' : 'Unpaid leave'}</h3>
+                <label><input type="checkbox" name="active" defaultChecked={lt.isActive} /> Available to employees</label>
+                {lt.leaveType === 'SPECIAL' && <label><input type="checkbox" name="paid" defaultChecked={lt.isPaid} /> Paid leave</label>}
+                <label><input type="checkbox" name="entitlement" defaultChecked={lt.enforceEntitlement} /> Use this leave type’s annual entitlement</label>
+                <label>Annual entitlement <input name="allocation" type="number" min={0} defaultValue={lt.annualAllocation} className="w-20 rounded border px-2 dark:bg-zinc-800" /></label>
+                <label><input type="checkbox" name="probation" defaultChecked={lt.allowDuringProbation} /> Allow during probation</label>
+                <label><input type="checkbox" name="document" defaultChecked={lt.requiresMedicalCert} /> Require a supporting document</label>
+                <label>Maximum consecutive days <input name="maxDays" type="number" min={1} max={366} defaultValue={lt.maxConsecutiveDays ?? ''} className="w-20 rounded border px-2 dark:bg-zinc-800" /></label>
+                <button type="submit" disabled={updateLeaveTypeMutation.isPending} className="justify-self-start rounded bg-indigo-700 px-3 py-2 text-white">Save {lt.leaveType.toLowerCase()} policy</button>
+              </form>
+            ) : (
               <div key={lt.id} className="py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
                   <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">

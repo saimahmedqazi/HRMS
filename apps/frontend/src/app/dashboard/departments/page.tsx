@@ -1,9 +1,21 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { Building2, Users, Plus, Shield, FolderPlus, Tag } from 'lucide-react';
+import { useAuth } from '@/lib/auth-context';
+import { StatusBadge } from '@/components/ui/status-badge';
+import {
+  Building2,
+  Users,
+  Plus,
+  FolderPlus,
+  Tag,
+  X,
+  ChevronRight,
+  AlertCircle,
+} from 'lucide-react';
 
 interface Department {
   id: string;
@@ -29,9 +41,59 @@ interface Team {
   _count: { employees: number };
 }
 
+interface OrgMember {
+  id: string;
+  employeeCode: string;
+  firstName: string;
+  lastName: string;
+  status?: string;
+  profilePictureUrl?: string | null;
+  designation?: { id: string; name: string } | null;
+}
+
+interface DepartmentDetail {
+  id: string;
+  name: string;
+  description?: string | null;
+  teams: { id: string; name: string; description?: string | null }[];
+  employees: OrgMember[];
+}
+
+interface TeamDetail {
+  id: string;
+  name: string;
+  description?: string | null;
+  department?: { id: string; name: string } | null;
+  employees: OrgMember[];
+}
+
+type SelectedOrgEntity =
+  | { type: 'department'; id: string }
+  | { type: 'team'; id: string }
+  | null;
+
 export default function DepartmentsPage() {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'departments' | 'designations' | 'teams'>('departments');
+  const [selectedEntity, setSelectedEntity] = useState<SelectedOrgEntity>(null);
+
+  const canViewEmploymentStatus = [
+    'SUPER_ADMIN',
+    'OPERATION_MANAGER',
+    'COMPANY_ADMIN',
+    'HR_MANAGER',
+    'DEPARTMENT_MANAGER',
+    'TEAM_LEAD',
+  ].includes(user?.role || '');
+
+  const canOpenEmployeeProfile = [
+    'SUPER_ADMIN',
+    'OPERATION_MANAGER',
+    'COMPANY_ADMIN',
+    'HR_MANAGER',
+    'DEPARTMENT_MANAGER',
+  ].includes(user?.role || '');
 
   // Modals state
   const [showDeptModal, setShowDeptModal] = useState(false);
@@ -66,6 +128,18 @@ export default function DepartmentsPage() {
   const departments: Department[] = departmentsData || [];
   const designations: Designation[] = designationsData || [];
   const teams: Team[] = teamsData || [];
+
+  const departmentDetailQuery = useQuery({
+    queryKey: ['department-detail', selectedEntity?.type === 'department' ? selectedEntity.id : null],
+    queryFn: () => api.get<DepartmentDetail>(`/departments/${selectedEntity!.id}`),
+    enabled: selectedEntity?.type === 'department',
+  });
+
+  const teamDetailQuery = useQuery({
+    queryKey: ['team-detail', selectedEntity?.type === 'team' ? selectedEntity.id : null],
+    queryFn: () => api.get<TeamDetail>(`/teams/${selectedEntity!.id}`),
+    enabled: selectedEntity?.type === 'team',
+  });
 
   // Mutations
   const createDeptMutation = useMutation({
@@ -147,11 +221,12 @@ export default function DepartmentsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-zinc-200 dark:border-zinc-800">
-        <nav className="-mb-px flex space-x-8">
+      <div className="border-b border-zinc-200 dark:border-zinc-800 overflow-x-auto">
+        <nav className="-mb-px flex min-w-max gap-4 sm:gap-8">
           <button
+            type="button"
             onClick={() => setActiveTab('departments')}
-            className={`flex items-center gap-2 border-b-2 py-4 px-1 text-sm font-medium ${
+            className={`flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 py-3.5 px-1 text-sm font-medium ${
               activeTab === 'departments'
                 ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300'
@@ -161,8 +236,9 @@ export default function DepartmentsPage() {
             Departments ({departments.length})
           </button>
           <button
+            type="button"
             onClick={() => setActiveTab('designations')}
-            className={`flex items-center gap-2 border-b-2 py-4 px-1 text-sm font-medium ${
+            className={`flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 py-3.5 px-1 text-sm font-medium ${
               activeTab === 'designations'
                 ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300'
@@ -172,8 +248,9 @@ export default function DepartmentsPage() {
             Designations ({designations.length})
           </button>
           <button
+            type="button"
             onClick={() => setActiveTab('teams')}
-            className={`flex items-center gap-2 border-b-2 py-4 px-1 text-sm font-medium ${
+            className={`flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 py-3.5 px-1 text-sm font-medium ${
               activeTab === 'teams'
                 ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
                 : 'border-transparent text-zinc-500 hover:border-zinc-300 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300'
@@ -202,17 +279,19 @@ export default function DepartmentsPage() {
             </div>
           ) : (
             departments.map((dept) => (
-              <div
+              <button
                 key={dept.id}
-                className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900"
+                type="button"
+                onClick={() => setSelectedEntity({ type: 'department', id: dept.id })}
+                className="group w-full rounded-xl border border-zinc-200 bg-white p-5 text-left shadow-sm transition hover:border-indigo-300 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-indigo-700"
               >
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400">
                       <Building2 className="h-5 w-5" />
                     </div>
-                    <div>
-                      <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">
+                    <div className="min-w-0">
+                      <h3 className="truncate font-semibold text-zinc-900 dark:text-zinc-100">
                         {dept.name}
                       </h3>
                       <p className="text-xs text-zinc-500 line-clamp-1">
@@ -220,6 +299,7 @@ export default function DepartmentsPage() {
                       </p>
                     </div>
                   </div>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400 transition-transform group-hover:translate-x-0.5 group-hover:text-indigo-500" />
                 </div>
                 <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
                   <span className="flex items-center gap-1">
@@ -231,7 +311,7 @@ export default function DepartmentsPage() {
                     {dept._count.teams} Team{dept._count.teams === 1 ? '' : 's'}
                   </span>
                 </div>
-              </div>
+              </button>
             ))
           )}
         </div>
@@ -239,7 +319,7 @@ export default function DepartmentsPage() {
 
       {/* Tab: Designations */}
       {activeTab === 'designations' && (
-        <div className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-800">
             <thead>
               <tr className="bg-zinc-50 dark:bg-zinc-900/50">
@@ -301,23 +381,28 @@ export default function DepartmentsPage() {
             </div>
           ) : (
             teams.map((team) => (
-              <div
+              <button
                 key={team.id}
-                className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
+                type="button"
+                onClick={() => setSelectedEntity({ type: 'team', id: team.id })}
+                className="group w-full rounded-xl border border-zinc-200 bg-white p-5 text-left shadow-sm transition hover:border-purple-300 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-purple-700"
               >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-50 text-purple-600 dark:bg-purple-950/40 dark:text-purple-400">
-                    <FolderPlus className="h-5 w-5" />
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-purple-50 text-purple-600 dark:bg-purple-950/40 dark:text-purple-400">
+                      <FolderPlus className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="truncate font-semibold text-zinc-900 dark:text-zinc-100">{team.name}</h3>
+                      <p className="truncate text-xs text-zinc-500">{team.department?.name}</p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">{team.name}</h3>
-                    <p className="text-xs text-zinc-500">{team.department?.name}</p>
-                  </div>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400 transition-transform group-hover:translate-x-0.5 group-hover:text-purple-500" />
                 </div>
                 <div className="mt-4 border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
                   <span>{team._count.employees} Member{team._count.employees === 1 ? '' : 's'}</span>
                 </div>
-              </div>
+              </button>
             ))
           )}
         </div>
@@ -473,6 +558,281 @@ export default function DepartmentsPage() {
               >
                 {createTeamMutation.isPending ? 'Saving...' : 'Create Team'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Department / Team Detail Drawer */}
+      {selectedEntity && (
+        <div
+          className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-[1px]"
+          onClick={() => setSelectedEntity(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={
+              selectedEntity.type === 'department' ? 'Department details' : 'Team details'
+            }
+            className="flex h-full w-full max-w-lg flex-col bg-white shadow-2xl dark:bg-zinc-950"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+              <div className="flex min-w-0 items-center gap-3">
+                <div
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                    selectedEntity.type === 'department'
+                      ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950/50 dark:text-indigo-400'
+                      : 'bg-purple-50 text-purple-600 dark:bg-purple-950/50 dark:text-purple-400'
+                  }`}
+                >
+                  {selectedEntity.type === 'department' ? (
+                    <Building2 className="h-5 w-5" />
+                  ) : (
+                    <FolderPlus className="h-5 w-5" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                    {selectedEntity.type === 'department' ? 'Department' : 'Team'}
+                  </p>
+                  <h2 className="truncate text-base font-bold text-zinc-900 dark:text-zinc-100">
+                    {selectedEntity.type === 'department'
+                      ? departmentDetailQuery.data?.name || 'Loading...'
+                      : teamDetailQuery.data?.name || 'Loading...'}
+                  </h2>
+                </div>
+              </div>
+              <button
+                type="button"
+                aria-label="Close details"
+                onClick={() => setSelectedEntity(null)}
+                className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 space-y-6 overflow-y-auto p-5">
+              {(selectedEntity.type === 'department'
+                ? departmentDetailQuery.isLoading
+                : teamDetailQuery.isLoading) && (
+                <div className="flex items-center justify-center py-12">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+                </div>
+              )}
+
+              {(selectedEntity.type === 'department'
+                ? departmentDetailQuery.isError
+                : teamDetailQuery.isError) && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">
+                  <div className="flex items-center gap-2 font-semibold">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    Unable to load details
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      selectedEntity.type === 'department'
+                        ? departmentDetailQuery.refetch()
+                        : teamDetailQuery.refetch()
+                    }
+                    className="mt-2 font-semibold underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {selectedEntity.type === 'department' && departmentDetailQuery.data && (
+                <>
+                  {departmentDetailQuery.data.description && (
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                      {departmentDetailQuery.data.description}
+                    </p>
+                  )}
+
+                  {/* Teams in Department */}
+                  <div>
+                    <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                      Teams ({departmentDetailQuery.data.teams.length})
+                    </h3>
+                    {departmentDetailQuery.data.teams.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-zinc-200 p-4 text-center text-xs text-zinc-500 dark:border-zinc-800">
+                        No teams in this department yet.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {departmentDetailQuery.data.teams.map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => setSelectedEntity({ type: 'team', id: t.id })}
+                            className="flex w-full items-center justify-between rounded-lg border border-zinc-200 bg-zinc-50/70 px-3.5 py-2.5 text-left text-sm transition hover:border-purple-300 dark:border-zinc-800 dark:bg-zinc-900/60 dark:hover:border-purple-700"
+                          >
+                            <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                              {t.name}
+                            </span>
+                            <ChevronRight className="h-4 w-4 text-zinc-400" />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Employees in Department */}
+                  <div>
+                    <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                      Employees ({departmentDetailQuery.data.employees.length})
+                    </h3>
+                    {departmentDetailQuery.data.employees.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-zinc-200 p-4 text-center text-xs text-zinc-500 dark:border-zinc-800">
+                        No employees assigned to this department yet.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {departmentDetailQuery.data.employees.map((m) => {
+                          const initials = `${m.firstName?.[0] || ''}${m.lastName?.[0] || ''}`.toUpperCase();
+                          const content = (
+                            <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+                              <div className="flex min-w-0 items-center gap-3">
+                                {m.profilePictureUrl ? (
+                                  <img
+                                    src={m.profilePictureUrl}
+                                    alt={`${m.firstName} ${m.lastName}`}
+                                    className="h-9 w-9 shrink-0 rounded-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                                    {initials || '?'}
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                                    {m.firstName} {m.lastName}
+                                  </p>
+                                  <p className="truncate text-xs text-zinc-500">
+                                    {m.employeeCode}
+                                    {m.designation?.name ? ` • ${m.designation.name}` : ''}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-2">
+                                {canViewEmploymentStatus && m.status && <StatusBadge status={m.status} />}
+                                {canOpenEmployeeProfile && (
+                                  <ChevronRight className="h-4 w-4 text-zinc-400" />
+                                )}
+                              </div>
+                            </div>
+                          );
+
+                          return canOpenEmployeeProfile ? (
+                            <Link
+                              key={m.id}
+                              href={`/dashboard/employees/${m.id}`}
+                              className="block rounded-lg transition hover:ring-1 hover:ring-indigo-400"
+                            >
+                              {content}
+                            </Link>
+                          ) : (
+                            <div key={m.id}>{content}</div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {selectedEntity.type === 'team' && teamDetailQuery.data && (
+                <>
+                  {teamDetailQuery.data.department && (
+                    <div className="flex items-center gap-2 text-xs text-zinc-500">
+                      <span>Department:</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedEntity({
+                            type: 'department',
+                            id: teamDetailQuery.data!.department!.id,
+                          })
+                        }
+                        className="font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                      >
+                        {teamDetailQuery.data.department.name}
+                      </button>
+                    </div>
+                  )}
+
+                  {teamDetailQuery.data.description && (
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                      {teamDetailQuery.data.description}
+                    </p>
+                  )}
+
+                  <div>
+                    <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                      Team Members ({teamDetailQuery.data.employees.length})
+                    </h3>
+                    {teamDetailQuery.data.employees.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-zinc-200 p-4 text-center text-xs text-zinc-500 dark:border-zinc-800">
+                        No members assigned to this team yet.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {teamDetailQuery.data.employees.map((m) => {
+                          const initials = `${m.firstName?.[0] || ''}${m.lastName?.[0] || ''}`.toUpperCase();
+                          const content = (
+                            <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+                              <div className="flex min-w-0 items-center gap-3">
+                                {m.profilePictureUrl ? (
+                                  <img
+                                    src={m.profilePictureUrl}
+                                    alt={`${m.firstName} ${m.lastName}`}
+                                    className="h-9 w-9 shrink-0 rounded-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">
+                                    {initials || '?'}
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                                    {m.firstName} {m.lastName}
+                                  </p>
+                                  <p className="truncate text-xs text-zinc-500">
+                                    {m.employeeCode}
+                                    {m.designation?.name ? ` • ${m.designation.name}` : ''}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-2">
+                                {canViewEmploymentStatus && m.status && <StatusBadge status={m.status} />}
+                                {canOpenEmployeeProfile && (
+                                  <ChevronRight className="h-4 w-4 text-zinc-400" />
+                                )}
+                              </div>
+                            </div>
+                          );
+
+                          return canOpenEmployeeProfile ? (
+                            <Link
+                              key={m.id}
+                              href={`/dashboard/employees/${m.id}`}
+                              className="block rounded-lg transition hover:ring-1 hover:ring-purple-400"
+                            >
+                              {content}
+                            </Link>
+                          ) : (
+                            <div key={m.id}>{content}</div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

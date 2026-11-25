@@ -1,3 +1,4 @@
+import { DataScopeService } from '../../../common/services/data-scope.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DepartmentsService } from './departments.service';
 import { PrismaService } from '../../../common/prisma/prisma.service';
@@ -30,6 +31,7 @@ describe('DepartmentsService', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        DataScopeService,
         DepartmentsService,
         { provide: PrismaService, useValue: mockPrisma },
       ],
@@ -115,6 +117,70 @@ describe('DepartmentsService', () => {
           }),
         }),
       );
+    });
+  });
+
+  describe('getDepartmentById (DEF-03 visibility)', () => {
+    it('omits employee employment status for regular EMPLOYEE viewers', async () => {
+      const employeeUser: AuthenticatedUser = {
+        id: 'user-emp',
+        email: 'emp@acme.com',
+        role: UserRole.EMPLOYEE,
+        companyId: 'comp-1',
+      };
+      mockPrisma.department.findFirst.mockResolvedValueOnce({
+        id: 'dept-1',
+        name: 'Engineering',
+        teams: [],
+        employees: [
+          {
+            id: 'emp-1',
+            employeeCode: 'EMP-001',
+            firstName: 'Saim',
+            lastName: 'Ahmed',
+            status: 'ON_PROBATION',
+            profilePictureUrl: null,
+            designation: { id: 'des-1', name: 'Engineer' },
+          },
+        ],
+        _count: { employees: 1, teams: 0 },
+      });
+
+      const res = await service.getDepartmentById('dept-1', employeeUser);
+      expect(mockPrisma.department.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          include: expect.objectContaining({
+            employees: expect.objectContaining({
+              select: expect.not.objectContaining({ status: true }),
+            }),
+          }),
+        }),
+      );
+      expect(res.employees[0]).not.toHaveProperty('status');
+      expect(res.employees[0]).toMatchObject({ id: 'emp-1', employeeCode: 'EMP-001', firstName: 'Saim' });
+    });
+
+    it('includes employee employment status for HR_MANAGER / COMPANY_ADMIN viewers', async () => {
+      mockPrisma.department.findFirst.mockResolvedValueOnce({
+        id: 'dept-1',
+        name: 'Engineering',
+        teams: [],
+        employees: [
+          {
+            id: 'emp-1',
+            employeeCode: 'EMP-001',
+            firstName: 'Saim',
+            lastName: 'Ahmed',
+            status: 'ACTIVE',
+            profilePictureUrl: null,
+            designation: { id: 'des-1', name: 'Engineer' },
+          },
+        ],
+        _count: { employees: 1, teams: 0 },
+      });
+
+      const res = await service.getDepartmentById('dept-1', mockUser);
+      expect(res.employees[0]).toHaveProperty('status', 'ACTIVE');
     });
   });
 });

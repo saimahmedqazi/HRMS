@@ -1,3 +1,5 @@
+import { lockEmployeeShift } from '@common/utils/attendance-locks';
+import { lockEmployeeLeave } from '@common/utils/leave-locks';
 import {
   Injectable,
   NotFoundException,
@@ -7,11 +9,12 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { attendanceDayStart, getCompanyAttendanceTime } from '../../common/utils/attendance-date';
+import { attendanceDayStart, getCompanyAttendanceTime, previousAttendanceDate } from '../../common/utils/attendance-date';
 import { parseEmployeeDate } from '../../common/utils/employee-dates';
 import { classifyWork, netWorkMinutes, punchPolicy, savedPunchPolicy, validPolicyDurations } from '../../common/utils/attendance-policy';
 import { ShiftPolicyDto } from './dto/shift-policy.dto';
-import { findCurrentPunch, resolveEmployeeAttendanceDay } from '../../common/utils/attendance-shift';
+import { AssignShiftDto } from './dto/assign-shift.dto';
+import { findCurrentPunch, resolveEmployeeAttendanceDay, scheduleOn } from '../../common/utils/attendance-shift';
 import { normalizeIpAddress } from '../../common/utils/request-ip';
 import { rethrowMissingRecordAsConflict } from '../../common/utils/prisma-conflict';
 import { DataScopeService } from '../../common/services/data-scope.service';
@@ -80,12 +83,35 @@ export class AttendanceService {
     }
     const local = await getCompanyAttendanceTime(this.prisma, companyId, new Date());
     if (effectiveDate <= local.date) throw new BadRequestException('Choose an effective date after today in the company timezone.');
-    if (!shiftId && !name?.trim()) throw new BadRequestException('Enter a shift name.');
+    const normalizedName = name?.trim() ?? '';
+    if (!shiftId && !normalizedName) throw new BadRequestException('Enter a shift name.');
     return this.prisma.$transaction(async (tx) => {
-      const shift = shiftId
-        ? await tx.shift.findFirst({ where: { id: shiftId, companyId } })
-        : await tx.shift.create({ data: { companyId, name: name!.trim(), startTime: rules.startTime,
-            endTime: rules.endTime, workDays: rules.workDays, breakDuration: rules.breakDuration } });
+      let shift;
+      if (shiftId) {
+        shift = await tx.shift.findFirst({ where: { id: shiftId, companyId } });
+      } else {
+        await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${'shift-name:' + companyId + ':' + normalizedName.toLowerCase()}, 0))`;
+        const existingShifts = await tx.shift.findMany({
+          where: { companyId },
+          select: { id: true, name: true },
+        });
+        const duplicate = existingShifts.find(
+          (s) => s.name.trim().toLowerCase() === normalizedName.toLowerCase(),
+        );
+        if (duplicate) {
+          throw new ConflictException(`A shift named "${normalizedName}" already exists in your company.`);
+        }
+        shift = await tx.shift.create({
+          data: {
+            companyId,
+            name: normalizedName,
+            startTime: rules.startTime,
+            endTime: rules.endTime,
+            workDays: rules.workDays,
+            breakDuration: rules.breakDuration,
+          },
+        });
+      }
       if (!shift) throw new NotFoundException('Shift not found');
       const inserted = await tx.shiftRevision.createMany({
         data: { ...rules, companyId, shiftId: shift.id, effectiveDate },
@@ -96,28 +122,296 @@ export class AttendanceService {
     });
   }
 
-  async assignShift(shiftId: string, employeeId: string, user: AuthenticatedUser) {
+  async assignShift(
+    shiftId: string,
+    employeeId: string,
+    user: AuthenticatedUser,
+    dto: AssignShiftDto = {},
+  ) {
+    if (user.role !== UserRole.COMPANY_ADMIN && user.role !== UserRole.HR_MANAGER) {
+      throw new ForbiddenException('Only authorized CEO or HR managers may assign employee shifts.');
+    }
     const companyId = this.getEffectiveCompanyId(user);
+    const callerUserId = user.id || user.sub;
     const local = await getCompanyAttendanceTime(this.prisma, companyId, new Date());
-    const effectiveDate = new Date(local.date.getTime() + 86400000);
-    const effectiveFrom = attendanceDayStart(effectiveDate, local.timezone);
-    return this.prisma.$transaction(async (tx) => {
-      const employee = await tx.employee.findFirst({ where: { id: employeeId, companyId, deletedAt: null } });
-      const shift = await tx.shift.findFirst({ where: { id: shiftId, companyId }, include: {
-        revisions: { orderBy: { effectiveDate: 'asc' }, take: 1 },
-      } });
-      if (!employee || !shift) throw new NotFoundException('Employee or shift not found');
-      if (!shift.isDefault && shift.revisions[0]?.effectiveDate > effectiveDate) {
-        throw new BadRequestException('This shift is not yet available for assignment tomorrow.');
+    const today = local.date;
+    const tomorrow = new Date(today.getTime() + 86_400_000);
+
+    let requestedDate = tomorrow;
+    if (dto.effectiveDate) {
+      const parsed = parseEmployeeDate(dto.effectiveDate);
+      if (!parsed) {
+        throw new BadRequestException('Effective date must be a valid calendar date (YYYY-MM-DD).');
       }
-      await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${'employee-shift:' + companyId + ':' + employeeId}, 0))`;
-      await tx.employeeShift.deleteMany({ where: { companyId, employeeId, effectiveFrom: { gte: effectiveFrom } } });
-      await tx.employeeShift.updateMany({
-        where: { companyId, employeeId, OR: [{ effectiveTo: null }, { effectiveTo: { gte: effectiveFrom } }] },
-        data: { effectiveTo: new Date(effectiveFrom.getTime() - 1) },
+      requestedDate = new Date(
+        Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()),
+      );
+      if (requestedDate.getTime() < today.getTime()) {
+        throw new BadRequestException('Cannot assign a shift retroactively to a past date.');
+      }
+    }
+
+    const requestedDateStr = requestedDate.toISOString().slice(0, 10);
+    const effectiveFrom = attendanceDayStart(requestedDate, local.timezone);
+
+    return this.prisma.$transaction(async (tx) => {
+      await lockEmployeeShift(tx, companyId, employeeId);
+
+      const employee = await tx.employee.findFirst({
+        where: { id: employeeId, companyId, deletedAt: null },
+        select: { id: true, userId: true, firstName: true, lastName: true },
       });
-      return tx.employeeShift.create({ data: { companyId, employeeId, shiftId, effectiveFrom } });
+      const shift = await tx.shift.findFirst({
+        where: { id: shiftId, companyId },
+        include: { revisions: { orderBy: { effectiveDate: 'asc' }, take: 1 } },
+      });
+      if (!employee || !shift) throw new NotFoundException('Employee or shift not found');
+
+      if (!shift.isDefault && shift.revisions[0] && shift.revisions[0].effectiveDate > requestedDate) {
+        throw new BadRequestException('This shift does not have an active policy revision on the selected effective date.');
+      }
+
+      if (requestedDate.getTime() === today.getTime()) {
+        const previousDate = previousAttendanceDate(today);
+        const [todayAttendance, activeOvernight, activeTimer] = await Promise.all([
+          tx.attendanceRecord.findFirst({
+            where: { companyId, employeeId, date: today },
+            select: { id: true },
+          }),
+          tx.attendanceRecord.findFirst({
+            where: {
+              companyId,
+              employeeId,
+              date: previousDate,
+              checkInTime: { not: null },
+              checkOutTime: null,
+              finalizedAt: null,
+              status: { not: AttendanceStatus.MISSING_CHECKOUT },
+            },
+            select: { id: true },
+          }),
+          tx.workTimerEntry.findFirst({
+            where: {
+              companyId,
+              employeeId,
+              date: { in: [today, previousDate] },
+              status: { in: [TimerStatus.RUNNING, TimerStatus.PAUSED] },
+            },
+            select: { id: true },
+          }),
+        ]);
+        if (todayAttendance || activeOvernight || activeTimer) {
+          throw new BadRequestException(
+            'Cannot assign a shift effective today because the employee already has attendance activity or an active punch for the current working day. Choose tomorrow or a later date.',
+          );
+        }
+      }
+
+      const existingAssignments = await tx.employeeShift.findMany({
+        where: { companyId, employeeId },
+        orderBy: [{ effectiveFrom: 'asc' }, { id: 'asc' }],
+      });
+
+      const sameDateAssignment = existingAssignments.find(
+        (item) => item.effectiveFrom.getTime() === effectiveFrom.getTime(),
+      );
+
+      let savedAssignment;
+      let shouldNotify = true;
+
+      if (sameDateAssignment) {
+        if (sameDateAssignment.shiftId === shiftId) {
+          return { ...sameDateAssignment, idempotent: true };
+        }
+        if (!dto.replaceExisting) {
+          throw new ConflictException(
+            `A shift assignment already exists for ${requestedDateStr}. Confirm replacement to update it.`,
+          );
+        }
+        savedAssignment = await tx.employeeShift.update({
+          where: { id: sameDateAssignment.id },
+          data: { shiftId },
+        });
+      } else {
+        const prev = existingAssignments.filter((item) => item.effectiveFrom < effectiveFrom).at(-1);
+        const next = existingAssignments.find((item) => item.effectiveFrom > effectiveFrom);
+
+        if (prev && (prev.effectiveTo === null || prev.effectiveTo >= effectiveFrom)) {
+          await tx.employeeShift.update({
+            where: { id: prev.id },
+            data: { effectiveTo: new Date(effectiveFrom.getTime() - 1) },
+          });
+        }
+
+        savedAssignment = await tx.employeeShift.create({
+          data: {
+            companyId,
+            employeeId,
+            shiftId,
+            effectiveFrom,
+            effectiveTo: next ? new Date(next.effectiveFrom.getTime() - 1) : null,
+          },
+        });
+      }
+
+      if (shouldNotify && employee.userId && employee.userId !== callerUserId) {
+        const isImmediate = requestedDate.getTime() === today.getTime();
+        await tx.notification.create({
+          data: {
+            companyId,
+            userId: employee.userId,
+            type: NotificationType.GENERAL,
+            title: isImmediate ? 'Shift Updated (Effective Today)' : 'Upcoming Shift Scheduled',
+            body: isImmediate
+              ? `Your shift has been updated to ${shift.name} effective today (${requestedDateStr}).`
+              : `Your shift has been scheduled to ${shift.name} effective ${requestedDateStr}.`,
+            data: {
+              kind: 'SHIFT_ASSIGNMENT',
+              shiftId: shift.id,
+              employeeId,
+              effectiveDate: requestedDateStr,
+              isImmediate,
+            },
+          },
+        });
+      }
+
+      return savedAssignment;
     });
+  }
+
+  async getEmployeeShifts(employeeId: string, user: AuthenticatedUser) {
+    const companyId = this.getEffectiveCompanyId(user);
+    const scope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
+    const employee = await this.prisma.employee.findFirst({
+      where: { id: employeeId, ...scope },
+      select: { id: true, userId: true },
+    });
+    if (!employee) throw new NotFoundException('Employee not found');
+
+    const now = new Date();
+    const local = await getCompanyAttendanceTime(this.prisma, companyId, now);
+    const today = local.date;
+    const tomorrow = new Date(today.getTime() + 86_400_000);
+    const todayEnd = new Date(attendanceDayStart(tomorrow, local.timezone).getTime() - 1);
+
+    const [assignments, defaultShift] = await Promise.all([
+      this.prisma.employeeShift.findMany({
+        where: { companyId, employeeId },
+        include: {
+          shift: {
+            include: {
+              revisions: { orderBy: { effectiveDate: 'asc' } },
+            },
+          },
+        },
+        orderBy: [{ effectiveFrom: 'asc' }, { id: 'asc' }],
+      }),
+      this.prisma.shift.findFirst({
+        where: { companyId, isDefault: true },
+        include: { revisions: { orderBy: { effectiveDate: 'asc' } } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      }),
+    ]);
+
+    const activeAssignment =
+      assignments
+        .filter((a) => a.effectiveFrom <= todayEnd && (a.effectiveTo === null || a.effectiveTo >= now))
+        .at(-1) ?? null;
+
+    const currentShiftBase = activeAssignment?.shift ?? defaultShift;
+    const currentResolved = currentShiftBase
+      ? scheduleOn(
+          {
+            ...currentShiftBase,
+            revisions: currentShiftBase.revisions.filter((r) => r.effectiveDate <= today).reverse(),
+          },
+          today,
+        )
+      : null;
+
+    const upcomingAssignments = assignments
+      .filter((a) => a.effectiveFrom > todayEnd)
+      .map((a) => {
+        const effDate = new Date(
+          Date.UTC(
+            a.effectiveFrom.getUTCFullYear(),
+            a.effectiveFrom.getUTCMonth(),
+            a.effectiveFrom.getUTCDate(),
+          ),
+        );
+        const effDateStr = effDate.toISOString().slice(0, 10);
+        const resolved = scheduleOn(
+          {
+            ...a.shift,
+            revisions: a.shift.revisions.filter((r) => r.effectiveDate <= effDate).reverse(),
+          },
+          effDate,
+        );
+        return {
+          id: a.id,
+          shiftId: a.shiftId,
+          shiftName: a.shift.name,
+          effectiveDate: effDateStr,
+          effectiveFrom: a.effectiveFrom,
+          effectiveTo: a.effectiveTo,
+          startTime: resolved?.startTime ?? a.shift.startTime,
+          endTime: resolved?.endTime ?? a.shift.endTime,
+          workDays: resolved?.workDays ?? a.shift.workDays,
+          breakDuration: resolved?.breakDuration ?? a.shift.breakDuration,
+          status: 'SCHEDULED' as const,
+        };
+      });
+
+    const relevantShiftIds = new Set<string>();
+    if (currentShiftBase) relevantShiftIds.add(currentShiftBase.id);
+    for (const a of upcomingAssignments) relevantShiftIds.add(a.shiftId);
+
+    const upcomingCompanyRevisions = [
+      ...(currentShiftBase ? [currentShiftBase] : []),
+      ...assignments.map((a) => a.shift),
+    ]
+      .filter((s, idx, arr) => relevantShiftIds.has(s.id) && arr.findIndex((x) => x.id === s.id) === idx)
+      .flatMap((s) =>
+        s.revisions
+          .filter((r) => r.effectiveDate > today)
+          .map((r) => ({
+            id: `${s.id}:${r.effectiveDate.toISOString().slice(0, 10)}`,
+            shiftId: s.id,
+            shiftName: s.name,
+            effectiveDate: r.effectiveDate.toISOString().slice(0, 10),
+            startTime: r.startTime,
+            endTime: r.endTime,
+            workDays: r.workDays,
+            breakDuration: r.breakDuration,
+          })),
+      )
+      .sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate));
+
+    return {
+      timezone: local.timezone ?? 'UTC',
+      today: today.toISOString().slice(0, 10),
+      tomorrow: tomorrow.toISOString().slice(0, 10),
+      currentShift: currentShiftBase && currentResolved
+        ? {
+            shiftId: currentShiftBase.id,
+            shiftName: currentShiftBase.name,
+            isDefaultFallback: !activeAssignment,
+            effectiveFrom: activeAssignment?.effectiveFrom ?? null,
+            startTime: currentResolved.startTime,
+            endTime: currentResolved.endTime,
+            workDays: currentResolved.workDays,
+            breakDuration: currentResolved.breakDuration,
+            requiredMinutes: currentResolved.revision?.requiredMinutes ?? null,
+            halfDayMinutes: currentResolved.revision?.halfDayMinutes ?? null,
+            fullDayMinutes: currentResolved.revision?.fullDayMinutes ?? null,
+            overtimeEnabled: currentResolved.revision?.overtimeEnabled ?? true,
+            overtimeCapMinutes: currentResolved.revision?.overtimeCapMinutes ?? null,
+          }
+        : null,
+      upcomingAssignments,
+      upcomingCompanyRevisions,
+    };
   }
 
   async checkIn(dto: CheckInDto, ip: string | null, user: AuthenticatedUser) {
@@ -137,50 +431,52 @@ export class AttendanceService {
     const checkInTime = new Date();
     const scope = { companyId, employeeId: employee.id };
     const local = await getCompanyAttendanceTime(this.prisma, companyId, checkInTime);
-    const dates = await resolveEmployeeAttendanceDay(this.prisma, scope, checkInTime, local);
-    const shiftDate = dates.date;
     const cleanIp = normalizeIpAddress(ip ?? undefined);
-    let status: AttendanceStatus = AttendanceStatus.IN_PROGRESS;
-    let isRemote = dto.isRemote;
-
     // Check HR IP Whitelist for Office & Remote/Hybrid employees
     const whitelist = await this.prisma.ipWhitelist.findMany({ where: { companyId } });
     const isIpWhitelisted = cleanIp !== null && whitelist.some(
       (entry) => entry.ipAddress === cleanIp || entry.ipAddress === '*',
     );
 
-    // Check for approved standing remote work permission covering the shift.
-    const permission = await this.prisma.remoteWorkPermission.findFirst({
-      where: {
-        companyId,
-        employeeId: employee.id,
-        status: RemoteWorkStatus.APPROVED,
-        startDate: { lte: shiftDate },
-        endDate: { gte: shiftDate },
-      },
-    });
+    const { record, hrUsers, status, shiftDate } = await this.prisma.$transaction(async (tx) => {
+      await lockEmployeeLeave(tx, companyId, employee.id);
+      await lockEmployeeShift(tx, companyId, employee.id);
+      const lockedDates = await resolveEmployeeAttendanceDay(tx, scope, checkInTime, local);
+      const lockedShiftDate = lockedDates.date;
+      let status: AttendanceStatus = AttendanceStatus.IN_PROGRESS;
+      let isRemote = dto.isRemote;
 
-    if (dto.isRemote) {
-      if (isIpWhitelisted || permission) {
-        status = AttendanceStatus.IN_PROGRESS;
-      } else {
-        // Unauthorized remote check-in -> route to HR Exceptions Queue
-        status = AttendanceStatus.ABSENT_PENDING_REVIEW;
+      // Check for approved standing remote work permission covering the shift.
+      const permission = await tx.remoteWorkPermission.findFirst({
+        where: {
+          companyId,
+          employeeId: employee.id,
+          status: RemoteWorkStatus.APPROVED,
+          startDate: { lte: lockedShiftDate },
+          endDate: { gte: lockedShiftDate },
+        },
+      });
+
+      if (dto.isRemote) {
+        if (isIpWhitelisted || permission) {
+          status = AttendanceStatus.IN_PROGRESS;
+        } else {
+          // Unauthorized remote check-in -> route to HR Exceptions Queue
+          status = AttendanceStatus.ABSENT_PENDING_REVIEW;
+        }
+      } else if (whitelist.length > 0 && !isIpWhitelisted) {
+        // Office IP restriction active: employee attempted onsite punch from non-whitelisted IP
+        isRemote = true;
+        status = permission
+          ? AttendanceStatus.IN_PROGRESS
+          : AttendanceStatus.ABSENT_PENDING_REVIEW;
       }
-    } else if (whitelist.length > 0 && !isIpWhitelisted) {
-      // Office IP restriction active: employee attempted onsite punch from non-whitelisted IP
-      isRemote = true;
-      status = permission
-        ? AttendanceStatus.IN_PROGRESS
-        : AttendanceStatus.ABSENT_PENDING_REVIEW;
-    }
 
-    const attendanceKey = { ...scope, date: shiftDate };
-    const { record, hrUsers } = await this.prisma.$transaction(async (tx) => {
-      const existing = await findCurrentPunch(tx, scope, dates);
+      const lockedKey = { ...scope, date: lockedShiftDate };
+      const existing = await findCurrentPunch(tx, scope, lockedDates);
       if (existing?.checkInTime) {
         throw new ConflictException(
-          existing.date.getTime() === shiftDate.getTime()
+          existing.date.getTime() === lockedShiftDate.getTime()
             ? 'You have already checked in for this shift'
             : 'Check out of your previous shift before starting a new one',
         );
@@ -203,14 +499,18 @@ export class AttendanceService {
       if (existing && ([AttendanceStatus.ON_LEAVE, AttendanceStatus.HOLIDAY, AttendanceStatus.WEEKEND] as AttendanceStatus[]).includes(existing.status)) {
         throw new ConflictException('This date is recorded as leave, holiday or a non-working day.');
       }
-      await tx.attendanceRecord.createMany({ data: attendanceKey, skipDuplicates: true });
+      await tx.attendanceRecord.createMany({ data: lockedKey, skipDuplicates: true });
       const record = await tx.attendanceRecord.update({
-        where: { companyId_employeeId_date: attendanceKey, checkInTime: null },
+        where: {
+          companyId_employeeId_date: lockedKey,
+          checkInTime: null,
+          status: { notIn: [AttendanceStatus.ON_LEAVE, AttendanceStatus.HOLIDAY, AttendanceStatus.WEEKEND] },
+        },
         data: {
           checkInTime,
           status,
           isRemote,
-          punchPolicy: punchPolicy(dates.shift, shiftDate, local.timezone),
+          punchPolicy: punchPolicy(lockedDates.shift, lockedShiftDate, local.timezone),
           remoteReviewPending: status === AttendanceStatus.ABSENT_PENDING_REVIEW,
           checkInIp: cleanIp,
           checkInLocation,
@@ -218,7 +518,7 @@ export class AttendanceService {
           markedBySystem: false,
         },
       });
-      if (status !== AttendanceStatus.ABSENT_PENDING_REVIEW) return { record, hrUsers: [] };
+      if (status !== AttendanceStatus.ABSENT_PENDING_REVIEW) return { record, hrUsers: [], status, shiftDate: lockedShiftDate };
 
       const hrUsers = await tx.user.findMany({
         where: { companyId, role: UserRole.HR_MANAGER, deletedAt: null },
@@ -234,8 +534,8 @@ export class AttendanceService {
           data: { attendanceId: record.id, employeeId: employee.id },
         })) });
       }
-      return { record, hrUsers };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }).catch((error: unknown) => {
+      return { record, hrUsers, status, shiftDate: lockedShiftDate };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }).catch((error: unknown) => {
       if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2025', 'P2034'].includes(error.code)) {
         throw new ConflictException('The attendance record changed. Refresh it before trying again.');
       }

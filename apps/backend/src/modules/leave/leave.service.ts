@@ -1,3 +1,7 @@
+import { attendanceDayStart, getAttendanceDay } from '@common/utils/attendance-date';
+import { lockEmployeeLeave } from '@common/utils/leave-locks';
+import { RegularizationPolicyDto } from './dto/regularization-policy.dto';
+import { approvedLeaveOverlapping } from './effective-leave-range';
 import 'multer';
 import {
   Injectable,
@@ -9,6 +13,7 @@ import {
 } from '@nestjs/common';
 import {
   ApprovalStatus,
+  AuditAction,
   AttendanceStatus,
   EmployeeStatus,
   LeaveStatus,
@@ -49,6 +54,18 @@ const leaveEmployee = {
   team: { select: { id: true, name: true } },
   user: { select: { id: true, email: true, role: true } },
 } as const;
+
+const dayMs = 86_400_000;
+const isExceptional = (type: LeaveType) => type === LeaveType.SPECIAL || type === LeaveType.UNPAID;
+const policyFields = {
+  regularizationEnabled: true, regularizationLookback: true,
+  regularizationExceptional: true, regularizationDocument: true, timezone: true,
+} as const;
+const eligibleAbsence = {
+  status: AttendanceStatus.ABSENT, checkInTime: null, checkOutTime: null,
+  workMinutes: 0, overtimeMinutes: 0, remoteReviewPending: false, remoteRejected: false,
+} satisfies Prisma.AttendanceRecordWhereInput;
+type RequestPolicy = { isPaid: boolean; enforceEntitlement: boolean; exceptional: boolean };
 
 type LeaveBalanceDays = { year: number; days: number };
 
@@ -128,25 +145,194 @@ export class LeaveService {
     }
   }
 
+  private async companyLeavePolicy(tx: Pick<Prisma.TransactionClient, 'company'>, companyId: string) {
+    const company = await tx.company.findUnique({ where: { id: companyId }, select: policyFields });
+    if (!company) throw new NotFoundException('Company not found.');
+    return company;
+  }
+
+  async getRegularizationPolicy(companyId: string) {
+    return this.companyLeavePolicy(this.prisma, companyId);
+  }
+
+  async updateRegularizationPolicy(companyId: string, dto: RegularizationPolicyDto) {
+    return this.prisma.company.update({ where: { id: companyId }, data: dto, select: policyFields });
+  }
+
+  private async lockHistoricalPayroll(tx: Prisma.TransactionClient, companyId: string) {
+    const key = `zenhr-payroll:${companyId}`;
+    await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+  }
+
+  private async eligibleHistoricalRecords(tx: Prisma.TransactionClient, companyId: string, employeeId: string, start: Date, end: Date, timezone: string) {
+    const scope = { companyId, employeeId, date: { gte: start, lte: end } };
+    const periods: { month: number; year: number }[] = [];
+    for (let period = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1)); period <= end;
+      period.setUTCMonth(period.getUTCMonth() + 1)) {
+      periods.push({ month: period.getUTCMonth() + 1, year: period.getUTCFullYear() });
+    }
+    const [records, timers, paid] = await Promise.all([
+      tx.attendanceRecord.findMany({ where: { ...scope, ...eligibleAbsence }, select: { id: true, date: true } }),
+      // A timer row is work evidence even if its duration has not yet been recorded.
+      tx.workTimerEntry.findMany({
+        where: { companyId, employeeId, OR: [
+          { date: scope.date },
+          { startedAt: { lt: attendanceDayStart(new Date(+end + dayMs), timezone) },
+            OR: [{ stoppedAt: null }, { stoppedAt: { gt: attendanceDayStart(start, timezone) } }] },
+        ] },
+        select: { date: true, startedAt: true, stoppedAt: true },
+      }),
+      tx.payslip.findMany({ where: { companyId, status: 'PAID', OR: periods }, select: { month: true, year: true } }),
+    ]);
+    const blocked = new Set(paid.map(({ year, month }) => `${year}-${month}`));
+    return {
+      records: records.filter(({ date }) => {
+        if (blocked.has(`${date.getUTCFullYear()}-${date.getUTCMonth() + 1}`)) return false;
+        if (!timers.length) return true;
+        const start = attendanceDayStart(date, timezone);
+        const next = attendanceDayStart(new Date(+date + dayMs), timezone);
+        return !timers.some((timer) => +timer.date === +date ||
+          (timer.startedAt < next && (!timer.stoppedAt || timer.stoppedAt > start)));
+      }),
+      paid: paid.length > 0,
+    };
+  }
+
+  async getEligibleAbsences(companyId: string, userId: string) {
+    const policy = await this.companyLeavePolicy(this.prisma, companyId);
+    const employee = await this.prisma.employee.findFirst({
+      where: { companyId, userId, deletedAt: null }, select: { id: true },
+    });
+    if (!employee) throw new NotFoundException('Employee profile not found.');
+    const today = getAttendanceDay(new Date(), policy.timezone).date;
+    if (!policy.regularizationEnabled) return { ...policy, dates: [] };
+    const start = new Date(+today - policy.regularizationLookback * dayMs);
+    const end = new Date(+today - dayMs);
+    const [{ records }, existing] = await Promise.all([
+      this.eligibleHistoricalRecords(this.prisma, companyId, employee.id, start, end, policy.timezone),
+      this.prisma.leaveRequest.findMany({
+        where: { companyId, employeeId: employee.id, OR: [
+          { status: LeaveStatus.PENDING, startDate: { lte: end }, endDate: { gte: start } },
+          approvedLeaveOverlapping(start, end),
+        ] },
+        select: { startDate: true, endDate: true, approvedStart: true, approvedEnd: true },
+      }),
+    ]);
+    const dates = records.filter(({ date }) => !existing.some((request) =>
+      date >= (request.approvedStart ?? request.startDate) && date <= (request.approvedEnd ?? request.endDate)))
+      .map(({ date }) => date.toISOString().slice(0, 10)).sort();
+    return { ...policy, dates };
+  }
+
+  private async assertHistoricalRange(tx: Prisma.TransactionClient, companyId: string, employeeId: string, start: Date, end: Date, timezone: string) {
+    await this.lockHistoricalPayroll(tx, companyId);
+    const result = await this.eligibleHistoricalRecords(tx, companyId, employeeId, start, end, timezone);
+    if (result.paid) throw new ConflictException('Attendance cannot be regularized in a paid payroll period.');
+    if (result.records.length !== (+end - +start) / dayMs + 1) {
+      throw new ConflictException('Every historical date must have an absence with no punch or work timer activity.');
+    }
+    return result.records;
+  }
+
+  private async applyApprovedAttendance(tx: Prisma.TransactionClient, request: LeaveRequest, start: Date, end: Date, actorId: string, now: Date) {
+    const policy = await this.companyLeavePolicy(tx, request.companyId);
+    const today = getAttendanceDay(now, policy.timezone).date;
+    // Legacy pending requests keep their original workflow but historical writes need the same safeguards.
+    if (request.retrospective || start < today) {
+      const historicalEnd = request.retrospective ? end : new Date(Math.min(+end, +today - dayMs));
+      if (historicalEnd >= today) throw new ConflictException('Retrospective leave must cover past dates only.');
+      const records = await this.assertHistoricalRange(tx, request.companyId, request.employeeId, start, historicalEnd, policy.timezone);
+      for (const record of records) {
+        const changed = await tx.attendanceRecord.updateMany({
+          where: { id: record.id, companyId: request.companyId, employeeId: request.employeeId, ...eligibleAbsence },
+          data: { status: AttendanceStatus.ON_LEAVE },
+        });
+        if (changed.count !== 1) throw new ConflictException('Attendance changed before this leave could be approved.');
+      }
+      await tx.auditLog.createMany({ data: records.map(({ id, date }) => ({
+        companyId: request.companyId, userId: actorId, action: AuditAction.UPDATE,
+        entity: 'AttendanceRecord', entityId: id, createdAt: now,
+        oldValues: { status: AttendanceStatus.ABSENT },
+        newValues: { status: AttendanceStatus.ON_LEAVE, employeeId: request.employeeId, leaveRequestId: request.id,
+          date: date.toISOString(), reason: request.reason, requestedStart: request.startDate.toISOString(),
+          requestedEnd: request.endDate.toISOString(), approvedStart: start.toISOString(), approvedEnd: end.toISOString() },
+      })) });
+    }
+    if (!request.retrospective && end >= today) {
+      await this.markApprovedLeaveAttendance(tx, { ...request, startDate: start < today ? today : start, endDate: end });
+    }
+  }
+
+  private approvalRange(request: LeaveRequest, dto: ApproveStepDto, step: 1 | 2) {
+    const scopeStart = (step === 2 && request.step1ApprovedStart) || request.startDate;
+    const scopeEnd = (step === 2 && request.step1ApprovedEnd) || request.endDate;
+    const reason = dto.partialReason?.trim();
+    const parse = (value?: string) => {
+      if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+      const date = new Date(value);
+      return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? date : null;
+    };
+    const start = dto.decision === 'PARTIAL' ? parse(dto.approvedStart) : scopeStart;
+    const end = dto.decision === 'PARTIAL' ? parse(dto.approvedEnd) : scopeEnd;
+    if (dto.decision === 'PARTIAL' && (!start || !end || start < scopeStart || end > scopeEnd ||
+        start > end || (+start === +scopeStart && +end === +scopeEnd) || !reason || reason.length < 3)) {
+      throw new BadRequestException('Choose a shorter date range within the approval scope and explain why it was reduced.');
+    }
+    const partial = +start! !== +request.startDate || +end! !== +request.endDate;
+    const days = partial ? this.approvalEngine.calculateTotalDays(start!, end!) : request.totalDays;
+    const allocation = partial ? splitLeaveBalanceDays(start!, end!, days)
+      : (request.balanceDaysByYear as LeaveBalanceDays[] | null) ?? [{ year: request.startDate.getFullYear(), days }];
+    return { start: start!, end: end!, partial, days, allocation, reason: dto.decision === 'PARTIAL' ? reason : undefined };
+  }
+
+  private finalApproval(range: ReturnType<LeaveService['approvalRange']>) {
+    return { approvedStart: range.start, approvedEnd: range.end, approvedDays: range.days, approvedDaysByYear: range.allocation };
+  }
+
+  private approvedNotification(request: LeaveRequest, range: ReturnType<LeaveService['approvalRange']>) {
+    const reasons = [request.step1PartialReason, range.reason].filter(Boolean).join(' ');
+    return range.partial ? {
+      title: 'Leave Request Partially Approved',
+      body: `Of ${request.totalDays} requested days, ${range.days} were approved (${range.start.toISOString().slice(0, 10)} to ${range.end.toISOString().slice(0, 10)}). ${reasons}`.trim(),
+    } : { title: 'Leave Request Fully Approved', body: `Your leave request for ${request.totalDays} day(s) has been approved.` };
+  }
+
   private async settleLeaveBalances(
     tx: Prisma.TransactionClient,
-    request: Pick<LeaveRequest, 'companyId' | 'employeeId' | 'startDate' | 'totalDays' | 'balanceDaysByYear'> & {
+    request: Pick<LeaveRequest, 'companyId' | 'employeeId' | 'startDate' | 'totalDays' | 'balanceDaysByYear' | 'policySnapshot'> & {
       leaveTypeSetting: { leaveType: LeaveType };
     },
-    approved: boolean,
+    approved: boolean | LeaveBalanceDays[],
   ): Promise<void> {
+    if ((request.policySnapshot as RequestPolicy | null)?.enforceEntitlement === false) return;
     // Older requests reserved every day against their original start-year balance.
     const allocations = (request.balanceDaysByYear as LeaveBalanceDays[] | null) ?? [
       { year: request.startDate.getFullYear(), days: request.totalDays },
     ];
-    for (const { year, days } of allocations) {
-      await tx.leaveBalance.updateMany({
-        where: {
-          companyId: request.companyId, employeeId: request.employeeId,
-          leaveType: request.leaveTypeSetting.leaveType, year,
-        },
-        data: { pending: { decrement: days }, ...(approved && { used: { increment: days } }) },
-      });
+    const used = Array.isArray(approved) ? approved : approved ? allocations : [];
+    const years = [...new Set([...allocations, ...used].map(({ year }) => year))].sort((a, b) => a - b);
+    for (const year of years) {
+      const pending = allocations.find((item) => item.year === year)?.days ?? 0;
+      const consumed = used.find((item) => item.year === year)?.days ?? 0;
+      const key = { companyId: request.companyId, employeeId: request.employeeId,
+        leaveType: request.leaveTypeSetting.leaveType, year };
+      if (consumed > pending) {
+        // A legacy request may have reserved every day in its start year.
+        const changed = await tx.$executeRaw`
+          UPDATE "leave_balances" SET "pending" = "pending" - ${pending},
+            "used" = "used" + ${consumed}, "updatedAt" = CURRENT_TIMESTAMP
+          WHERE "companyId" = ${key.companyId} AND "employeeId" = ${key.employeeId}
+            AND "leaveType" = ${key.leaveType}::"LeaveType" AND "year" = ${year}
+            AND "pending" >= ${pending}
+            AND "allocated" + "carried" - "used" - "pending" >= ${consumed - pending}`;
+        if (!changed) throw new ConflictException(`Insufficient unreserved leave for ${year} to narrow this legacy request.`);
+      } else {
+        const result = await tx.leaveBalance.updateMany({
+          where: { ...key, pending: { gte: pending } },
+          data: { pending: { decrement: pending }, ...(consumed > 0 && { used: { increment: consumed } }) },
+        });
+        if (result.count !== 1) throw new ConflictException(`The leave reservation for ${year} is unavailable.`);
+      }
     }
   }
 
@@ -181,10 +367,14 @@ export class LeaveService {
     const existing = await this.prisma.leaveTypeSetting.findMany({
       where: { companyId },
     });
-    if (existing.length === 0) {
+    if (!existing.some(({ leaveType }) => !isExceptional(leaveType)) || !existing.some(({ leaveType }) => leaveType === LeaveType.SPECIAL) ||
+        !existing.some(({ leaveType }) => leaveType === LeaveType.UNPAID)) {
       await this.prisma.leaveTypeSetting.createMany({
         skipDuplicates: true,
         data: [
+          ...[LeaveType.SPECIAL, LeaveType.UNPAID].filter((leaveType) => !existing.some((setting) => setting.leaveType === leaveType))
+            .map((leaveType) => ({ companyId, leaveType, isActive: false, isPaid: leaveType === LeaveType.SPECIAL, enforceEntitlement: false })),
+          ...(existing.some(({ leaveType }) => !isExceptional(leaveType)) ? [] : [
           {
             companyId,
             leaveType: LeaveType.CASUAL,
@@ -206,6 +396,7 @@ export class LeaveService {
             requiresReason: false,
             requiresMedicalCert: false,
           },
+          ]),
         ],
       });
     }
@@ -237,6 +428,15 @@ export class LeaveService {
       throw new NotFoundException('Leave type setting not found.');
     }
 
+    const exceptional = isExceptional(setting.leaveType);
+    if ((!exceptional && (dto.isPaid !== undefined || dto.enforceEntitlement !== undefined ||
+        dto.allowDuringProbation !== undefined || dto.maxConsecutiveDays !== undefined)) ||
+        (setting.leaveType === LeaveType.UNPAID && dto.isPaid === true) ||
+        (exceptional && dto.requiresReason === false) ||
+        (exceptional && (dto.enforceEntitlement ?? setting.enforceEntitlement) === false &&
+          ((dto.annualAllocation ?? setting.annualAllocation) > 0 || (dto.carryForwardDays ?? setting.carryForwardDays) > 0))) {
+      throw new BadRequestException('These leave policy options are incompatible with this leave type.');
+    }
     return this.prisma.leaveTypeSetting.update({
       where: { id },
       data: dto,
@@ -271,7 +471,7 @@ export class LeaveService {
     const resolvedEmployeeId = emp.id;
     const targetYear = year || new Date().getFullYear();
     const [settings, balances] = await Promise.all([
-      this.prisma.leaveTypeSetting.findMany({ where: { companyId, isActive: true } }),
+      this.prisma.leaveTypeSetting.findMany({ where: { companyId, isActive: true, enforceEntitlement: true } }),
       this.prisma.leaveBalance.findMany({ where: { companyId, employeeId: resolvedEmployeeId, year: targetYear } }),
     ]);
     return settings.map((setting) => {
@@ -305,27 +505,25 @@ export class LeaveService {
       throw new NotFoundException('Employee profile not found for user.');
     }
 
-    // 2. Probation gating assertion
-    this.approvalEngine.assertCanRequestLeave({
-      status: employee.status,
-      hireDate: employee.hireDate,
-      role: employee.user.role,
-    });
-
-    // 3. Find leave type setting
     const setting = await this.prisma.leaveTypeSetting.findFirst({
       where: { id: dto.leaveTypeSettingId, companyId },
     });
-    if (!setting || !setting.isActive) {
-      throw new BadRequestException('Selected leave type is inactive or does not exist.');
-    }
+    if (!setting?.isActive) throw new BadRequestException('Selected leave type is inactive or does not exist.');
+    const exceptional = isExceptional(setting.leaveType);
+    const policySnapshot: RequestPolicy = {
+      exceptional, isPaid: setting.leaveType !== LeaveType.UNPAID && (!exceptional || setting.isPaid),
+      enforceEntitlement: !exceptional || setting.enforceEntitlement,
+    };
+    this.approvalEngine.assertCanRequestLeave({
+      status: employee.status, hireDate: employee.hireDate, probationEndDate: employee.probationEndDate,
+      role: exceptional ? UserRole.EMPLOYEE : employee.user.role, allowDuringProbation: exceptional && setting.allowDuringProbation,
+    });
 
-    // 4. Validate reason if required
-    if (setting.requiresReason && (!dto.reason || dto.reason.trim().length === 0)) {
-      throw new BadRequestException('A reason is mandatory for this leave type.');
+    const retrospective = dto.mode === 'RETROSPECTIVE';
+    const reason = dto.reason?.trim();
+    if (((exceptional || retrospective) && (!reason || reason.length < 3)) || (setting.requiresReason && !reason)) {
+      throw new BadRequestException('Enter a meaningful explanation for this leave request.');
     }
-
-    // 5. Calculate total days
     const totalDays = this.approvalEngine.calculateTotalDays(dto.startDate, dto.endDate);
     const startDate = new Date(dto.startDate);
     const endDate = new Date(dto.endDate);
@@ -333,10 +531,24 @@ export class LeaveService {
     endDate.setUTCHours(0, 0, 0, 0);
     const balanceDaysByYear = splitLeaveBalanceDays(startDate, endDate, totalDays);
 
-    if (setting.requiresMedicalCert && !file) {
-      throw new BadRequestException(
-        'A medical prescription/certificate document is required for this leave type.',
-      );
+    const company = await this.companyLeavePolicy(this.prisma, companyId);
+    const today = getAttendanceDay(new Date(), company.timezone).date;
+    if (retrospective) {
+      if (!company.regularizationEnabled) throw new ForbiddenException('Retrospective leave is disabled by company policy.');
+      if (endDate >= today || startDate < new Date(+today - company.regularizationLookback * dayMs)) {
+        throw new BadRequestException('Select only past dates within the company lookback window. Submit current or future dates separately.');
+      }
+      if (exceptional && !company.regularizationExceptional) {
+        throw new ForbiddenException('Exceptional leave is not enabled for retrospective requests.');
+      }
+    } else if (startDate < today) {
+      throw new BadRequestException('Use Regularize Absence for past dates and submit current or future dates separately.');
+    }
+    if (exceptional && setting.maxConsecutiveDays != null && totalDays > setting.maxConsecutiveDays) {
+      throw new BadRequestException(`This leave type allows at most ${setting.maxConsecutiveDays} consecutive days.`);
+    }
+    if ((setting.requiresMedicalCert || (retrospective && company.regularizationDocument)) && !file) {
+      throw new BadRequestException('A supporting document is required for this request.');
     }
 
     const reportingIds = [employee.team?.leadId, employee.department?.managerId, employee.reportingManagerId]
@@ -373,6 +585,23 @@ export class LeaveService {
       ceoUser?.id,
     );
 
+    if (exceptional) {
+      if (!ceoUser) throw new BadRequestException('Exceptional leave requires an independent CEO reviewer.');
+      if (approvers.step1ApproverId === ceoUser.id) {
+        approvers.step1Status = ApprovalStatus.PENDING;
+        approvers.step2Status = ApprovalStatus.SKIPPED;
+        approvers.step2ApproverId = null;
+      } else {
+        if (!approvers.step1ApproverId) approvers.step1Status = ApprovalStatus.SKIPPED;
+        approvers.step2Status = ApprovalStatus.PENDING;
+        approvers.step2ApproverId = ceoUser.id;
+      }
+    } else if (retrospective && approvers.step1Status === ApprovalStatus.SKIPPED && approvers.step2Status === ApprovalStatus.SKIPPED) {
+      const independent = ceoUser ?? hrUser;
+      if (!independent) throw new BadRequestException('Retrospective leave requires an independent reviewer.');
+      approvers.step2Status = ApprovalStatus.PENDING;
+      approvers.step2ApproverId = independent.id;
+    }
     const isAutoApproved =
       approvers.step1Status === ApprovalStatus.SKIPPED &&
       approvers.step2Status === ApprovalStatus.SKIPPED;
@@ -392,16 +621,19 @@ export class LeaveService {
       : undefined;
 
     const leaveRequest = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${'leave:' + companyId + ':' + employee.id}, 0))`;
+      await lockEmployeeLeave(tx, companyId, employee.id);
       const overlap = await tx.leaveRequest.findFirst({
-        where: { companyId, employeeId: employee.id, status: { in: [LeaveStatus.PENDING, LeaveStatus.APPROVED] },
-          startDate: { lte: endDate }, endDate: { gte: startDate } },
-        select: { startDate: true, endDate: true, status: true },
+        where: { companyId, employeeId: employee.id, OR: [
+          { status: LeaveStatus.PENDING, startDate: { lte: endDate }, endDate: { gte: startDate } },
+          approvedLeaveOverlapping(startDate, endDate),
+        ] },
+        select: { startDate: true, endDate: true, approvedStart: true, approvedEnd: true, status: true },
       });
       if (overlap) {
-        throw new ConflictException(`Leave overlaps an existing ${overlap.status.toLowerCase()} request (${overlap.startDate.toISOString().slice(0, 10)} to ${overlap.endDate.toISOString().slice(0, 10)}).`);
+        throw new ConflictException(`Leave overlaps an existing ${overlap.status.toLowerCase()} request (${(overlap.approvedStart ?? overlap.startDate).toISOString().slice(0, 10)} to ${(overlap.approvedEnd ?? overlap.endDate).toISOString().slice(0, 10)}).`);
       }
-      for (const { year, days } of balanceDaysByYear) {
+      if (retrospective) await this.assertHistoricalRange(tx, companyId, employee.id, startDate, endDate, company.timezone);
+      for (const { year, days } of policySnapshot.enforceEntitlement ? balanceDaysByYear : []) {
         const yearlyKey = { ...balanceKey, year };
         await tx.leaveBalance.createMany({
           data: { ...yearlyKey, allocated: setting.annualAllocation },
@@ -440,6 +672,8 @@ export class LeaveService {
           endDate,
           totalDays,
           balanceDaysByYear,
+          policySnapshot,
+          retrospective,
           reason: dto.reason,
           medicalCertUrl,
           status: isAutoApproved ? LeaveStatus.APPROVED : LeaveStatus.PENDING,
@@ -624,9 +858,17 @@ export class LeaveService {
       throw new ForbiddenException('You are not authorized to approve Step 1 of this request.');
     }
 
+    const ceoRequired = (request.policySnapshot as RequestPolicy | null)?.exceptional &&
+      request.step2Status === ApprovalStatus.SKIPPED;
+    if (ceoRequired && userRole !== UserRole.COMPANY_ADMIN) {
+      throw new ForbiddenException('Only the CEO can make the final exceptional leave decision.');
+    }
+
     if (dto.decision === 'REJECT') {
       return this.prisma.$transaction(async (tx) => {
+      await lockEmployeeLeave(tx, companyId, request.employeeId);
         const actor = await this.decisionActor(tx, companyId, userId);
+      if (ceoRequired && actor.role !== UserRole.COMPANY_ADMIN) throw new ForbiddenException('CEO reviewer required.');
         const updated = await this.updatePendingLeaveRequest(tx, request, {
           step1ActorId: actor.id, step1ActorName: actor.name, step1ActorRole: actor.role,
           step1Status: ApprovalStatus.REJECTED,
@@ -652,14 +894,20 @@ export class LeaveService {
       });
     }
 
-    // Decision === APPROVE
+    const range = this.approvalRange(request, dto, 1);
     return this.prisma.$transaction(async (tx) => {
+      await lockEmployeeLeave(tx, companyId, request.employeeId);
       const isFinal = request.step2Status === ApprovalStatus.SKIPPED;
       const actor = await this.decisionActor(tx, companyId, userId);
+      if (ceoRequired && actor.role !== UserRole.COMPANY_ADMIN) throw new ForbiddenException('CEO reviewer required.');
 
       const updated = await this.updatePendingLeaveRequest(tx, request, {
         step1ActorId: actor.id, step1ActorName: actor.name, step1ActorRole: actor.role,
         step1Status: ApprovalStatus.APPROVED,
+        step1ApprovedStart: range.start,
+        step1ApprovedEnd: range.end,
+        step1PartialReason: range.reason,
+        ...(isFinal ? this.finalApproval(range) : {}),
         step1ApprovedAt: new Date(),
         step1Notes: dto.notes,
         status: isFinal ? LeaveStatus.APPROVED : LeaveStatus.PENDING,
@@ -669,16 +917,15 @@ export class LeaveService {
       });
 
       if (isFinal) {
-        await this.settleLeaveBalances(tx, request, true);
-        await this.markApprovedLeaveAttendance(tx, request);
+        await this.settleLeaveBalances(tx, request, range.allocation);
+        await this.applyApprovedAttendance(tx, request, range.start, range.end, userId, updated.finalApprovedAt ?? new Date());
 
         await tx.notification.create({
           data: {
             companyId,
             userId: request.employee.userId,
             type: NotificationType.LEAVE_APPROVED,
-            title: 'Leave Request Fully Approved',
-            body: `Your leave request for ${request.totalDays} day(s) has been approved.`,
+            ...this.approvedNotification(request, range),
             data: { leaveRequestId: id },
           },
         });
@@ -687,7 +934,8 @@ export class LeaveService {
         const eligible = await tx.user.findMany({
           where: {
             ...availableApprover, companyId, id: { not: request.employee.userId },
-            role: { in: [UserRole.HR_MANAGER, UserRole.COMPANY_ADMIN] },
+            role: { in: (request.policySnapshot as RequestPolicy | null)?.exceptional
+              ? [UserRole.COMPANY_ADMIN] : [UserRole.HR_MANAGER, UserRole.COMPANY_ADMIN] },
           },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
           select: { id: true, role: true },
@@ -701,7 +949,7 @@ export class LeaveService {
               userId: recipient.id,
               type: NotificationType.LEAVE_SUBMITTED,
               title: 'Leave Request Awaiting Final Approval (Step 2)',
-              body: `A leave request from ${request.employee.firstName} ${request.employee.lastName} passed Step 1 and requires HR approval.`,
+              body: `A leave request from ${request.employee.firstName} ${request.employee.lastName} passed Step 1. Review ${range.days} day(s) from ${range.start.toISOString().slice(0, 10)} to ${range.end.toISOString().slice(0, 10)}.`,
               data: { leaveRequestId: id },
             },
           });
@@ -746,9 +994,17 @@ export class LeaveService {
       throw new ForbiddenException('You are not authorized to approve Step 2 of this request.');
     }
 
+    const ceoRequired = (request.policySnapshot as RequestPolicy | null)?.exceptional &&
+      true;
+    if (ceoRequired && userRole !== UserRole.COMPANY_ADMIN) {
+      throw new ForbiddenException('Only the CEO can make the final exceptional leave decision.');
+    }
+
     if (dto.decision === 'REJECT') {
       return this.prisma.$transaction(async (tx) => {
+      await lockEmployeeLeave(tx, companyId, request.employeeId);
         const actor = await this.decisionActor(tx, companyId, userId);
+      if (ceoRequired && actor.role !== UserRole.COMPANY_ADMIN) throw new ForbiddenException('CEO reviewer required.');
         const updated = await this.updatePendingLeaveRequest(tx, request, {
           step2ActorId: actor.id, step2ActorName: actor.name, step2ActorRole: actor.role,
           step2Status: ApprovalStatus.REJECTED,
@@ -774,12 +1030,16 @@ export class LeaveService {
       });
     }
 
-    // Step 2 APPROVE -> Final Approval
+    const range = this.approvalRange(request, dto, 2);
     return this.prisma.$transaction(async (tx) => {
+      await lockEmployeeLeave(tx, companyId, request.employeeId);
       const actor = await this.decisionActor(tx, companyId, userId);
+      if (ceoRequired && actor.role !== UserRole.COMPANY_ADMIN) throw new ForbiddenException('CEO reviewer required.');
       const updated = await this.updatePendingLeaveRequest(tx, request, {
         step2ActorId: actor.id, step2ActorName: actor.name, step2ActorRole: actor.role,
         step2Status: ApprovalStatus.APPROVED,
+        step2PartialReason: range.reason,
+        ...this.finalApproval(range),
         step2ApprovedAt: new Date(),
         step2Notes: dto.notes,
         status: LeaveStatus.APPROVED,
@@ -788,16 +1048,15 @@ export class LeaveService {
         finalApprovedAt: new Date(),
       });
 
-      await this.settleLeaveBalances(tx, request, true);
-      await this.markApprovedLeaveAttendance(tx, request);
+      await this.settleLeaveBalances(tx, request, range.allocation);
+      await this.applyApprovedAttendance(tx, request, range.start, range.end, userId, updated.finalApprovedAt ?? new Date());
 
       await tx.notification.create({
         data: {
           companyId,
           userId: request.employee.userId,
           type: NotificationType.LEAVE_APPROVED,
-          title: 'Leave Request Fully Approved',
-          body: `Your leave request for ${request.totalDays} day(s) has been approved by HR.`,
+          ...this.approvedNotification(request, range),
           data: { leaveRequestId: id },
         },
       });
@@ -832,6 +1091,7 @@ export class LeaveService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await lockEmployeeLeave(tx, companyId, request.employeeId);
       const updated = await this.updatePendingLeaveRequest(tx, request, {
         status: LeaveStatus.CANCELLED,
         cancelledAt: new Date(),

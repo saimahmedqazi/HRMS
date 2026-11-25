@@ -40,6 +40,7 @@ export const ROLE_MODULE_MAP: Record<UserRole, string[]> = {
     'support-mode',
     'billing',
     'settings',
+    'notifications',
     'my-profile',
   ],
   [UserRole.OPERATION_MANAGER]: [
@@ -48,6 +49,7 @@ export const ROLE_MODULE_MAP: Record<UserRole, string[]> = {
     'resources',
     'billing',
     'settings',
+    'notifications',
     'my-profile',
   ],
   [UserRole.COMPANY_ADMIN]: [
@@ -62,6 +64,7 @@ export const ROLE_MODULE_MAP: Record<UserRole, string[]> = {
     'billing',
     'ai-assistant',
     'settings',
+    'notifications',
     'my-profile',
   ],
   [UserRole.HR_MANAGER]: [
@@ -76,6 +79,7 @@ export const ROLE_MODULE_MAP: Record<UserRole, string[]> = {
     'resources',
     'ai-assistant',
     'settings',
+    'notifications',
     'my-profile',
   ],
   [UserRole.DEPARTMENT_MANAGER]: [
@@ -88,6 +92,7 @@ export const ROLE_MODULE_MAP: Record<UserRole, string[]> = {
     'resources',
     'ai-assistant',
     'settings',
+    'notifications',
     'my-profile',
   ],
   [UserRole.TEAM_LEAD]: [
@@ -99,6 +104,7 @@ export const ROLE_MODULE_MAP: Record<UserRole, string[]> = {
     'resources',
     'ai-assistant',
     'settings',
+    'notifications',
     'my-profile',
   ],
   [UserRole.EMPLOYEE]: [
@@ -110,6 +116,7 @@ export const ROLE_MODULE_MAP: Record<UserRole, string[]> = {
     'ai-assistant',
     'resources',
     'settings',
+    'notifications',
     'my-profile',
   ],
 };

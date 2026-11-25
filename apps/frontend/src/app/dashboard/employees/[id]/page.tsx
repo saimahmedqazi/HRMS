@@ -720,10 +720,19 @@ export default function EmployeeDetailPage() {
                     : 'Company Admin (CEO)'}
                 </dd>
               </div>
-              <div className="flex justify-between py-2.5">
+              <div className="flex justify-between gap-3 py-2.5">
                 <dt className="text-zinc-500">Probation End Date</dt>
-                <dd className="font-medium text-zinc-900 dark:text-zinc-100">
-                  {emp.probationEndDate ? new Date(emp.probationEndDate).toLocaleDateString(undefined, { timeZone: 'UTC' }) : 'N/A'}
+                <dd className="text-right font-medium text-zinc-900 dark:text-zinc-100">
+                  <div>
+                    {emp.probationEndDate ? new Date(emp.probationEndDate).toLocaleDateString(undefined, { timeZone: 'UTC' }) : 'N/A'}
+                  </div>
+                  {emp.status === 'ON_PROBATION' &&
+                    emp.probationEndDate &&
+                    new Date(emp.probationEndDate).getTime() <= Date.now() && (
+                      <span className="mt-0.5 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                        Probation elapsed — confirmation recommended
+                      </span>
+                    )}
                 </dd>
               </div>
             </dl>
@@ -856,6 +865,15 @@ export default function EmployeeDetailPage() {
               </div>
             </div>
           </div>
+
+          {id && user?.companyId && emp?.user?.role !== 'COMPANY_ADMIN' && (
+            <ShiftPolicies
+              canEdit={false}
+              canAssign={user.role === 'COMPANY_ADMIN' || user.role === 'HR_MANAGER'}
+              tenantId={user.companyId}
+              employeeId={id}
+            />
+          )}
         </div>
       )}
 
@@ -1072,10 +1090,6 @@ export default function EmployeeDetailPage() {
             </div>
           </div>
         </div>
-      )}
-
-      {id && user?.companyId && (user.role === 'COMPANY_ADMIN' || user.role === 'HR_MANAGER') && emp?.user?.role !== 'COMPANY_ADMIN' && (
-        <ShiftPolicies canEdit={false} tenantId={user.companyId} employeeId={id} />
       )}
 
       {/* Emergency Contact Modal */}

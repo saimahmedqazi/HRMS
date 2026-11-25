@@ -1,9 +1,12 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { resolveNotificationHref } from '@/lib/notification-links';
 import { io } from 'socket.io-client';
 import {
   Bell,
@@ -27,6 +30,7 @@ interface NotificationItem {
   createdAt: string;
   isRead: boolean;
   type: string;
+  data?: Record<string, unknown> | null;
 }
 
 interface HeaderProps {
@@ -45,6 +49,7 @@ const timeAgo = (dateStr: string) => {
 
 export function Header({ onMenuClick, mobileMenuOpen }: HeaderProps) {
   const { user } = useAuth();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const [isDark, setIsDark] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -83,15 +88,40 @@ export function Header({ onMenuClick, mobileMenuOpen }: HeaderProps) {
     retry: false,
   });
 
+  const { data: unreadCountData } = useQuery<{ unreadCount: number }>({
+    queryKey: ['notifications', 'unread-count', user?.id, user?.supportModeCompanyId ? null : user?.companyId ?? null],
+    queryFn: () => api.get<{ unreadCount: number }>('/notifications/unread-count'),
+    enabled: Boolean(user?.id),
+    refetchInterval: 30_000,
+    retry: false,
+  });
+
+  const markReadMutation = useMutation({
+    mutationFn: (id: string) => api.patch(`/notifications/${id}/read`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+
   const markAllMutation = useMutation({
     mutationFn: () => api.patch('/notifications/mark-all-read', {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
   });
 
-  const unreadCount = notifications.filter((n) => !n.isRead).length;
+  const unreadCount = unreadCountData?.unreadCount ?? notifications.filter((n) => !n.isRead).length;
 
   const markAllAsRead = () => {
     markAllMutation.mutate();
+  };
+
+  const handleNotificationClick = async (item: NotificationItem) => {
+    setShowNotifications(false);
+    if (!item.isRead) {
+      try {
+        await markReadMutation.mutateAsync(item.id);
+      } catch {
+        // Proceed with navigation even if read update fails transiently.
+      }
+    }
+    router.push(resolveNotificationHref(item, user?.role));
   };
 
   // Sync theme with DOM and localStorage
@@ -186,8 +216,8 @@ export function Header({ onMenuClick, mobileMenuOpen }: HeaderProps) {
           </button>
 
           {showNotifications && (
-            <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95">
-              <div className="p-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+            <div className="fixed inset-x-3 top-16 sm:inset-x-auto sm:top-auto sm:absolute sm:right-0 sm:mt-2 sm:w-96 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95">
+              <div className="p-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
                     Notifications
@@ -200,6 +230,7 @@ export function Header({ onMenuClick, mobileMenuOpen }: HeaderProps) {
                 </div>
                 {unreadCount > 0 && (
                   <button
+                    type="button"
                     onClick={markAllAsRead}
                     className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 font-medium"
                   >
@@ -216,9 +247,11 @@ export function Header({ onMenuClick, mobileMenuOpen }: HeaderProps) {
                   </div>
                 ) : (
                   notifications.map((item) => (
-                    <div
+                    <button
                       key={item.id}
-                      className={`p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition flex items-start gap-3 ${
+                      type="button"
+                      onClick={() => void handleNotificationClick(item)}
+                      className={`w-full text-left p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition flex items-start gap-3 focus:outline-none focus-visible:bg-slate-50 dark:focus-visible:bg-slate-800/40 ${
                         !item.isRead ? 'bg-blue-50/40 dark:bg-blue-950/20' : ''
                       }`}
                     >
@@ -243,9 +276,19 @@ export function Header({ onMenuClick, mobileMenuOpen }: HeaderProps) {
                           {item.body}
                         </p>
                       </div>
-                    </div>
+                    </button>
                   ))
                 )}
+              </div>
+
+              <div className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/80 px-3.5 py-2.5 text-center">
+                <Link
+                  href="/dashboard/notifications"
+                  onClick={() => setShowNotifications(false)}
+                  className="text-xs font-semibold text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  View all notifications
+                </Link>
               </div>
             </div>
           )}

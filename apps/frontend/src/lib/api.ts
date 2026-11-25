@@ -10,18 +10,129 @@ const publicAuthRoutes = new Set([
   '/auth/verify-email',
 ]);
 
+export type AuthSyncEvent =
+  | { type: 'SESSION_EXPIRED' }
+  | { type: 'LOGGED_OUT' }
+  | { type: 'SESSION_REFRESHED'; seq: number };
+
+const AUTH_CHANNEL_NAME = 'zenhr-auth-sync';
+const REFRESH_SEQ_KEY = 'zenhr_auth_refresh_seq';
+const REFRESH_LOCK_NAME = 'zenhr_auth_refresh';
+
 let refreshInFlight: Promise<boolean> | undefined;
 let sessionVersion = 0;
+const authListeners = new Set<(event: AuthSyncEvent) => void>();
+let authChannel: BroadcastChannel | null = null;
+
+function readRefreshSeq(): number {
+  if (typeof window === 'undefined') return sessionVersion;
+  try {
+    const raw = window.localStorage.getItem(REFRESH_SEQ_KEY);
+    const parsed = raw ? Number(raw) : 0;
+    return Number.isFinite(parsed) ? Math.max(parsed, sessionVersion) : sessionVersion;
+  } catch {
+    return sessionVersion;
+  }
+}
+
+function writeRefreshSeq(next: number): void {
+  sessionVersion = next;
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(REFRESH_SEQ_KEY, String(next));
+  } catch {
+    // Ignore storage quota / private mode restrictions.
+  }
+}
+
+function getAuthChannel(): BroadcastChannel | null {
+  if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return null;
+  if (!authChannel) {
+    authChannel = new BroadcastChannel(AUTH_CHANNEL_NAME);
+    authChannel.onmessage = (event: MessageEvent<AuthSyncEvent>) => {
+      const payload = event.data;
+      if (!payload || typeof payload.type !== 'string') return;
+      if (payload.type === 'SESSION_REFRESHED' && typeof payload.seq === 'number') {
+        sessionVersion = Math.max(sessionVersion, payload.seq);
+      }
+      for (const listener of authListeners) listener(payload);
+    };
+  }
+  return authChannel;
+}
+
+export function subscribeAuthSync(listener: (event: AuthSyncEvent) => void): () => void {
+  authListeners.add(listener);
+  getAuthChannel();
+  return () => {
+    authListeners.delete(listener);
+  };
+}
+
+export function broadcastAuthEvent(event: AuthSyncEvent): void {
+  for (const listener of authListeners) listener(event);
+  try {
+    getAuthChannel()?.postMessage(event);
+  } catch {
+    // Ignore channel errors on closing tabs.
+  }
+}
+
+async function runWithCrossTabLock<T>(fn: () => Promise<T>): Promise<T> {
+  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10_000);
+    try {
+      return await navigator.locks.request(
+        REFRESH_LOCK_NAME,
+        { mode: 'exclusive', signal: controller.signal },
+        fn,
+      );
+    } catch {
+      // If lock wait aborted (e.g. hung tab), fall back directly.
+      return fn();
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+  return fn();
+}
 
 function refreshSession(): Promise<boolean> {
   if (!refreshInFlight) {
-    refreshInFlight = fetch(`${API_PREFIX}/auth/refresh`, {
-      method: 'POST',
-      credentials: 'include',
-    }).then((response) => {
-      if (response.ok) sessionVersion += 1;
-      else if (response.status !== 401) throw new ApiError(response.status, 'Unable to refresh the session.');
-      return response.ok;
+    const seqBeforeWait = readRefreshSeq();
+    refreshInFlight = runWithCrossTabLock(async () => {
+      // Another tab completed refresh while we waited for the lock.
+      if (readRefreshSeq() > seqBeforeWait) {
+        return true;
+      }
+
+      let response: Response;
+      try {
+        response = await fetch(`${API_PREFIX}/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include',
+        });
+      } catch {
+        throw new ApiError(0, 'Unable to reach the server to refresh your session.');
+      }
+
+      if (response.ok) {
+        const nextSeq = readRefreshSeq() + 1;
+        writeRefreshSeq(nextSeq);
+        broadcastAuthEvent({ type: 'SESSION_REFRESHED', seq: nextSeq });
+        return true;
+      }
+
+      if (response.status === 401) {
+        broadcastAuthEvent({ type: 'SESSION_EXPIRED' });
+        return false;
+      }
+
+      throw new ApiError(
+        response.status,
+        'Unable to verify your session right now. Please try again.',
+      );
     }).finally(() => {
       refreshInFlight = undefined;
     });
@@ -73,11 +184,17 @@ export async function apiRequest<T = unknown>(
     },
     credentials: 'include', // Automatically send and receive httpOnly cookies
   };
-  const initialSessionVersion = sessionVersion;
+
+  const initialSeq = readRefreshSeq();
   let response = await fetch(url, requestOptions);
   if (response.status === 401 && !isPublicAuthRoute) {
-    const refreshed = initialSessionVersion !== sessionVersion || await refreshSession();
-    if (refreshed) response = await fetch(url, requestOptions);
+    const refreshed = readRefreshSeq() !== initialSeq || (await refreshSession());
+    if (refreshed) {
+      response = await fetch(url, requestOptions);
+      if (response.status === 401) {
+        broadcastAuthEvent({ type: 'SESSION_EXPIRED' });
+      }
+    }
   }
 
   const json = await response.json().catch(() => null);

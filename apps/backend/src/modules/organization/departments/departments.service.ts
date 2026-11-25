@@ -1,3 +1,4 @@
+import { DataScopeService } from '../../../common/services/data-scope.service';
 import {
   Injectable,
   NotFoundException,
@@ -7,12 +8,16 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
+import { DataScope, UserRole } from '@prisma/client';
 import { CreateDepartmentDto } from './dto/create-department.dto';
 import { UpdateDepartmentDto } from './dto/update-department.dto';
 
 @Injectable()
 export class DepartmentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly dataScopeService: DataScopeService,
+  ) {}
 
   private getEffectiveCompanyId(user: AuthenticatedUser): string {
     const companyId = user.supportModeCompanyId || user.companyId;
@@ -48,6 +53,8 @@ export class DepartmentsService {
 
   async getDepartmentById(id: string, user: AuthenticatedUser) {
     const companyId = this.getEffectiveCompanyId(user);
+    const scope = this.dataScopeService.getScope(user.role as UserRole);
+    const canViewAllStatuses = scope === DataScope.PLATFORM || scope === DataScope.COMPANY;
 
     const department = await this.prisma.department.findFirst({
       where: {
@@ -72,7 +79,7 @@ export class DepartmentsService {
             employeeCode: true,
             firstName: true,
             lastName: true,
-            status: true,
+            ...(canViewAllStatuses ? { status: true } : {}),
             profilePictureUrl: true,
             designation: { select: { id: true, name: true } },
           },
@@ -88,6 +95,26 @@ export class DepartmentsService {
 
     if (!department) {
       throw new NotFoundException('Department not found');
+    }
+
+    if (!canViewAllStatuses && Array.isArray(department.employees)) {
+      const members = department.employees.map(({ status: _status, ...member }) => member);
+      if (scope === DataScope.SELF || members.length === 0) {
+        return { ...department, employees: members };
+      }
+      const employeeScope = await this.dataScopeService.resolveEmployeeScope(this.prisma, companyId, user);
+      const scopedMembers = await this.prisma.employee.findMany({
+        where: { AND: [employeeScope, { id: { in: members.map(({ id }) => id) } }] },
+        select: { id: true, status: true },
+      });
+      const statuses = new Map(scopedMembers.map(({ id, status }) => [id, status]));
+      return {
+        ...department,
+        employees: members.map((member) => {
+          const status = statuses.get(member.id);
+          return status ? { ...member, status } : member;
+        }),
+      };
     }
 
     return department;

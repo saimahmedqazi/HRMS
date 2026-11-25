@@ -111,6 +111,8 @@ export class AuthService {
       // 3. Create default leave types
       await tx.leaveTypeSetting.createMany({
         data: [
+          { companyId: company.id, leaveType: LeaveType.SPECIAL, isActive: false, enforceEntitlement: false },
+          { companyId: company.id, leaveType: LeaveType.UNPAID, isActive: false, isPaid: false, enforceEntitlement: false },
           { companyId: company.id, leaveType: LeaveType.CASUAL, annualAllocation: 10, requiresReason: true, requiresMedicalCert: false },
           { companyId: company.id, leaveType: LeaveType.SICK, annualAllocation: 12, requiresReason: false, requiresMedicalCert: true },
           { companyId: company.id, leaveType: LeaveType.ANNUAL, annualAllocation: 14, requiresReason: true, requiresMedicalCert: false },
@@ -505,10 +507,15 @@ export class AuthService {
       companyId: user.companyId,
       sessionVersion: nextSessionVersion,
     });
-    const refreshTokenHash = await bcrypt.hash(tokens.refreshToken, 10);
+    const refreshTokenHash = this.hashRefreshToken(tokens.refreshToken);
 
-    await this.prisma.user.update({
-      where: { id: user.id },
+    const changed = await this.prisma.user.updateMany({
+      where: {
+        id: user.id,
+        sessionVersion: user.sessionVersion,
+        passwordHash: user.passwordHash,
+        deletedAt: null,
+      },
       data: {
         passwordHash,
         mustChangePassword: false,
@@ -520,6 +527,8 @@ export class AuthService {
         lockedUntil: null,
       },
     });
+
+    if (changed.count !== 1) throw new UnauthorizedException('Session expired');
 
     return {
       ...tokens,

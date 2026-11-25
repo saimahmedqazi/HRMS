@@ -81,6 +81,16 @@ export class CreateEmployeeDto {
   @IsOptional()
   hireDate?: string;
 
+  @ApiPropertyOptional({ enum: ['AUTO', 'ACTIVE', 'ON_PROBATION'], default: 'AUTO' })
+  @IsIn(['AUTO', 'ACTIVE', 'ON_PROBATION'])
+  @IsOptional()
+  initialStatus?: 'AUTO' | 'ACTIVE' | 'ON_PROBATION';
+
+  @ApiPropertyOptional({ example: '2026-12-31' })
+  @IsString()
+  @IsOptional()
+  probationEndDate?: string;
+
   @ApiPropertyOptional({ example: 'cuid_department_id' })
   @IsString()
   @IsOptional()

@@ -36,6 +36,7 @@ const moduleRoutePrefixes: ReadonlyArray<readonly [string, string]> = [
   ['/dashboard/support-mode', 'support-mode'],
   ['/dashboard/companies', 'companies'],
   ['/dashboard/billing', 'billing'],
+  ['/dashboard/notifications', 'notifications'],
   ['/dashboard/settings', 'settings'],
 ];
 
@@ -60,7 +61,7 @@ function hasModuleAccess(pathname: string, user: UserProfile, allowedModules: st
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, allowedModules, modulesLoading, isLoading, sessionUnavailable, refetchUser, logout } = useAuth();
+  const { user, allowedModules, modulesLoading, isLoading, sessionUnavailable, sessionExpired, refetchUser, logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [curPw, setCurPw] = useState('');
   const [newPw, setNewPw] = useState('');
@@ -72,9 +73,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   useEffect(() => {
     if (!isLoading && !user && !sessionUnavailable) {
-      router.replace('/login');
+      if (sessionExpired) {
+        const params = new URLSearchParams({ expired: '1' });
+        if (pathname?.startsWith('/dashboard') && !pathname.includes('//')) {
+          params.set('redirect', pathname);
+        }
+        router.replace(`/login?${params.toString()}`);
+      } else {
+        router.replace('/login');
+      }
     }
-  }, [user, isLoading, sessionUnavailable, router]);
+  }, [user, isLoading, sessionUnavailable, sessionExpired, pathname, router]);
 
   if (isLoading) {
     return (

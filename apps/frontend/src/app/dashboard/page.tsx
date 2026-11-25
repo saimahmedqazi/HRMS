@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { EmployeeQuickStart } from '@/components/help/employee-quick-start';
 import {
   Users,
   Building2,
@@ -33,7 +34,13 @@ import {
   Tooltip,
   ResponsiveContainer,
   CartesianGrid,
+  LabelList,
 } from 'recharts';
+import {
+  ChartTooltipContent,
+  CHART_TOOLTIP_CURSOR,
+  AREA_TOOLTIP_CURSOR,
+} from '@/components/ui/chart-tooltip';
 
 export default function DashboardHubPage() {
   const { user } = useAuth();
@@ -159,7 +166,10 @@ export default function DashboardHubPage() {
                   <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
                   <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                   <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                  <Tooltip />
+                  <Tooltip
+                    cursor={CHART_TOOLTIP_CURSOR}
+                    content={<ChartTooltipContent valueSuffix=" tenants" />}
+                  />
                   <Bar dataKey="count" fill="#4F46E5" radius={[6, 6, 0, 0]} name="Tenants" />
                 </BarChart>
               </ResponsiveContainer>
@@ -176,7 +186,10 @@ export default function DashboardHubPage() {
                   <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
                   <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip />
+                  <Tooltip
+                    cursor={CHART_TOOLTIP_CURSOR}
+                    content={<ChartTooltipContent />}
+                  />
                   <Bar dataKey="mrr" fill="#10B981" radius={[6, 6, 0, 0]} name="Monthly Rate ($)" />
                   <Bar dataKey="employees" fill="#3B82F6" radius={[6, 6, 0, 0]} name="Employees" />
                 </BarChart>
@@ -356,8 +369,11 @@ export default function DashboardHubPage() {
                 <AreaChart data={stats.attendanceTrend || []}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
                   <XAxis dataKey="day" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                  <Tooltip
+                    cursor={AREA_TOOLTIP_CURSOR}
+                    content={<ChartTooltipContent />}
+                  />
                   <Area type="monotone" dataKey="present" stroke="#10B981" fill="#10B981" fillOpacity={0.2} name="Onsite" />
                   <Area type="monotone" dataKey="remote" stroke="#3B82F6" fill="#3B82F6" fillOpacity={0.2} name="Remote" />
                   <Area type="monotone" dataKey="halfDay" name="Half day" stroke="#8B5CF6" fill="#8B5CF6" fillOpacity={0.12} />
@@ -371,17 +387,57 @@ export default function DashboardHubPage() {
             <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-4">
               Department Headcount Distribution
             </h3>
-            <div className="h-64 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stats.departmentDistribution || []}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
-                  <XAxis dataKey="name" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Bar dataKey="headcount" fill="#4F46E5" radius={[4, 4, 0, 0]} name="Headcount" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            {(stats.departmentDistribution || []).length === 0 ? (
+              <div className="flex h-64 items-center justify-center text-xs text-gray-500 dark:text-gray-400">
+                No departments configured yet.
+              </div>
+            ) : (
+              <div className="max-h-[380px] w-full overflow-y-auto pr-1">
+                <div
+                  style={{ height: Math.max(240, (stats.departmentDistribution || []).length * 42) }}
+                  className="w-full"
+                >
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={stats.departmentDistribution || []}
+                      layout="vertical"
+                      margin={{ top: 4, right: 32, left: 4, bottom: 4 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} opacity={0.3} />
+                      <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        width={124}
+                        interval={0}
+                        tick={{ fontSize: 11 }}
+                        tickFormatter={(val: string) =>
+                          val.length > 18 ? `${val.slice(0, 17)}…` : val
+                        }
+                      />
+                      <Tooltip
+                        cursor={CHART_TOOLTIP_CURSOR}
+                        content={<ChartTooltipContent valueSuffix=" employees" />}
+                      />
+                      <Bar
+                        dataKey="headcount"
+                        fill="#4F46E5"
+                        radius={[0, 4, 4, 0]}
+                        barSize={20}
+                        name="Headcount"
+                      >
+                        <LabelList
+                          dataKey="headcount"
+                          position="right"
+                          fontSize={11}
+                          className="fill-zinc-600 dark:fill-zinc-300"
+                        />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -563,6 +619,8 @@ export default function DashboardHubPage() {
           Your daily punch clock, active work timer, leave balances, and payslips.
         </p>
       </div>
+
+      <EmployeeQuickStart userId={user?.id} role={user?.role} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Attendance Widget */}

@@ -1,10 +1,11 @@
+import { approvedLeaveOverlapping } from '../leave/effective-leave-range';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { attendanceDayStart, getAttendanceDay, previousAttendanceDate } from '../../common/utils/attendance-date';
 import { activeShiftWhere, overnightShiftEnd, scheduleOn, shiftRevisionSelection } from '../../common/utils/attendance-shift';
 import { missingCheckoutDue, savedPunchPolicy } from '../../common/utils/attendance-policy';
-import { AttendanceStatus, LeaveStatus, Prisma } from '@prisma/client';
+import { AttendanceStatus, Prisma } from '@prisma/client';
 
 @Injectable()
 export class AttendanceCronService {
@@ -98,9 +99,7 @@ export class AttendanceCronService {
           where: {
             companyId: company.id,
             employeeId: emp.id,
-            status: LeaveStatus.APPROVED,
-            startDate: { lte: date },
-            endDate: { gte: date },
+            ...approvedLeaveOverlapping(date, date),
           },
         });
 

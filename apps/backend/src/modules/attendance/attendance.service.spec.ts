@@ -23,6 +23,7 @@ describe('AttendanceService', () => {
       createMany: jest.fn(),
       update: jest.fn(),
     },
+    workTimer: { findFirst: jest.fn().mockResolvedValue(null) },
     workTimerEntry: { findFirst: jest.fn().mockResolvedValue(null) },
     remoteWorkPermission: {
       findFirst: jest.fn(),
@@ -32,8 +33,15 @@ describe('AttendanceService', () => {
     },
     employeeShift: {
       findFirst: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
+      create: jest.fn(),
+      update: jest.fn(),
     },
-    shift: { findFirst: jest.fn().mockResolvedValue(null) },
+    shift: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
+      create: jest.fn(),
+    },
     shiftRevision: { createMany: jest.fn() },
     notification: {
       create: jest.fn(),
@@ -43,6 +51,7 @@ describe('AttendanceService', () => {
       findMany: jest.fn(),
     },
     ipWhitelist: { findMany: jest.fn().mockResolvedValue([]) },
+    $queryRaw: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
     $transaction: jest.fn((callback) => callback(mockPrisma)),
   };
 
@@ -123,6 +132,88 @@ describe('AttendanceService', () => {
       mockPrisma.shift.findFirst.mockResolvedValueOnce(null);
       await expect(service.scheduleShiftPolicy(dto, ceo, 'foreign')).rejects.toThrow('Shift not found');
       expect(mockPrisma.shift.findFirst).toHaveBeenCalledWith({ where: { id: 'foreign', companyId: ceo.companyId } });
+    });
+    it('rejects duplicate shift names within the same tenant (case and whitespace insensitive)', async () => {
+      const ceo = { ...mockEmployeeUser, role: UserRole.COMPANY_ADMIN };
+      mockPrisma.shift.findMany.mockResolvedValueOnce([{ id: 's-1', name: 'Standard Day Shift' }]);
+      await expect(
+        service.scheduleShiftPolicy({ ...dto, name: '  standard day shift  ' }, ceo),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrisma.$queryRaw).toHaveBeenCalled();
+    });
+  });
+
+  describe('HR-16 shift assignment effective dates & visibility', () => {
+    const hrUser = { ...mockEmployeeUser, id: 'hr-1', role: UserRole.HR_MANAGER };
+
+    it('rejects shift assignment by non-CEO/HR roles', async () => {
+      await expect(service.assignShift('shift-1', 'emp-1', mockEmployeeUser)).rejects.toThrow('Only authorized CEO or HR');
+    });
+
+    it('rejects retroactive past effective dates', async () => {
+      await expect(
+        service.assignShift('shift-1', 'emp-1', hrUser, { effectiveDate: '2020-01-01' }),
+      ).rejects.toThrow('retroactively');
+    });
+
+    it('rejects same-day assignment when attendance or active overnight punch exists', async () => {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-1', userId: 'u-emp-1', firstName: 'Evan', lastName: 'Wright' });
+      mockPrisma.shift.findFirst.mockResolvedValueOnce({ id: 'shift-1', name: 'Night Shift', isDefault: false, revisions: [] });
+      mockPrisma.attendanceRecord.findFirst
+        .mockResolvedValueOnce({ id: 'att-today' })
+        .mockResolvedValueOnce(null);
+      mockPrisma.workTimerEntry.findFirst.mockResolvedValueOnce(null);
+
+      await expect(
+        service.assignShift('shift-1', 'emp-1', hrUser, { effectiveDate: todayStr }),
+      ).rejects.toThrow('already has attendance activity');
+    });
+
+    it('inserts an assignment between existing future assignments without deleting unrelated ones and notifies once', async () => {
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-1', userId: 'u-emp-1', firstName: 'Evan', lastName: 'Wright' });
+      mockPrisma.shift.findFirst.mockResolvedValueOnce({
+        id: 'shift-mid',
+        name: 'Mid Shift',
+        isDefault: false,
+        revisions: [{ effectiveDate: new Date('2099-01-01') }],
+      });
+      const prevFrom = new Date('2099-01-02T00:00:00.000Z');
+      const nextFrom = new Date('2099-01-20T00:00:00.000Z');
+      mockPrisma.employeeShift.findMany.mockResolvedValueOnce([
+        { id: 'es-1', shiftId: 'shift-a', effectiveFrom: prevFrom, effectiveTo: null },
+        { id: 'es-2', shiftId: 'shift-b', effectiveFrom: nextFrom, effectiveTo: null },
+      ]);
+      mockPrisma.employeeShift.create.mockResolvedValueOnce({ id: 'es-mid', shiftId: 'shift-mid' });
+
+      await service.assignShift('shift-mid', 'emp-1', hrUser, { effectiveDate: '2099-01-10' });
+
+      expect(mockPrisma.employeeShift.update).toHaveBeenCalledWith({
+        where: { id: 'es-1' },
+        data: { effectiveTo: new Date(new Date('2099-01-10T00:00:00.000Z').getTime() - 1) },
+      });
+      expect(mockPrisma.employeeShift.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          shiftId: 'shift-mid',
+          effectiveFrom: new Date('2099-01-10T00:00:00.000Z'),
+          effectiveTo: new Date(nextFrom.getTime() - 1),
+        }),
+      });
+      expect(mockPrisma.notification.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns idempotently without duplicate notification when identical assignment is repeated', async () => {
+      const targetFrom = new Date('2099-02-01T00:00:00.000Z');
+      mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp-1', userId: 'u-emp-1', firstName: 'Evan', lastName: 'Wright' });
+      mockPrisma.shift.findFirst.mockResolvedValueOnce({ id: 'shift-1', name: 'Day Shift', isDefault: true, revisions: [] });
+      mockPrisma.employeeShift.findMany.mockResolvedValueOnce([
+        { id: 'es-1', shiftId: 'shift-1', effectiveFrom: targetFrom, effectiveTo: null },
+      ]);
+
+      const res = await service.assignShift('shift-1', 'emp-1', hrUser, { effectiveDate: '2099-02-01' });
+      expect((res as { idempotent?: boolean }).idempotent).toBe(true);
+      expect(mockPrisma.employeeShift.create).not.toHaveBeenCalled();
+      expect(mockPrisma.notification.create).not.toHaveBeenCalled();
     });
   });
 

@@ -29,9 +29,20 @@ export default function LoginPage() {
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isReady, setIsReady] = useState(false);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  const [returnPath, setReturnPath] = useState('/dashboard');
 
   React.useEffect(() => {
     setIsReady(true);
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('expired') === '1') {
+      setSessionNotice('Your session has expired. Please sign in again.');
+    }
+    const candidate = params.get('redirect');
+    if (candidate && candidate.startsWith('/dashboard') && !candidate.startsWith('//') && !candidate.includes('\\')) {
+      setReturnPath(candidate);
+    }
   }, []);
 
   const {
@@ -117,7 +128,7 @@ export default function LoginPage() {
         await submitConsentedLoginLocation(response.user);
       }
       await refetchUser();
-      router.push('/dashboard');
+      router.push(returnPath);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Invalid credentials';
       setError(msg);
@@ -143,7 +154,7 @@ export default function LoginPage() {
         await submitConsentedLoginLocation(response.user);
       }
       await refetchUser();
-      router.push('/dashboard');
+      router.push(returnPath);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Invalid two-factor code';
       setError(msg);
@@ -170,6 +181,12 @@ export default function LoginPage() {
             Enterprise Multi-Tenant SaaS HRMS
           </p>
         </div>
+
+        {sessionNotice && !error && (
+          <div role="status" className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/50 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+            {sessionNotice}
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-400 border border-red-200 dark:border-red-800">

@@ -1,5 +1,7 @@
+import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { EmployeesController } from './employees.controller';
 import { EmployeesService } from './employees.service';
+import { ListEmployeesQueryDto } from './dto/list-employees-query.dto';
 import { UserRole, EmployeeStatus } from '@prisma/client';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 
@@ -36,16 +38,48 @@ describe('EmployeesController', () => {
       const mockResult = { data: [{ id: 'emp-1', firstName: 'John' }], total: 1 } as any;
       (mockEmployeesService.listEmployees as jest.Mock).mockResolvedValue(mockResult);
 
-      const result = await controller.listEmployees(mockUser, 'John', undefined, undefined, EmployeeStatus.ACTIVE, 1, 10);
-      expect(result).toEqual(mockResult);
-      expect(mockEmployeesService.listEmployees).toHaveBeenCalledWith(mockUser, {
+      const query: ListEmployeesQueryDto = {
         search: 'John',
-        departmentId: undefined,
-        teamId: undefined,
         status: EmployeeStatus.ACTIVE,
         page: 1,
         limit: 10,
+      };
+      const result = await controller.listEmployees(mockUser, query);
+      expect(result).toEqual(mockResult);
+      expect(mockEmployeesService.listEmployees).toHaveBeenCalledWith(mockUser, query);
+    });
+
+    it('validates ListEmployeesQueryDto: accepts ON_PROBATION and rejects invalid status or bounds', async () => {
+      const pipe = new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+        transformOptions: { enableImplicitConversion: true },
       });
+
+      const valid = await pipe.transform(
+        { status: 'ON_PROBATION', page: '1', limit: '12', sortBy: 'firstName', sortOrder: 'asc' },
+        { type: 'query', metatype: ListEmployeesQueryDto },
+      );
+      expect(valid).toMatchObject({
+        status: EmployeeStatus.ON_PROBATION,
+        page: 1,
+        limit: 12,
+        sortBy: 'firstName',
+        sortOrder: 'asc',
+      });
+
+      await expect(
+        pipe.transform({ status: 'INVALID_STATUS' }, { type: 'query', metatype: ListEmployeesQueryDto }),
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        pipe.transform({ page: '0' }, { type: 'query', metatype: ListEmployeesQueryDto }),
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        pipe.transform({ limit: '500' }, { type: 'query', metatype: ListEmployeesQueryDto }),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 

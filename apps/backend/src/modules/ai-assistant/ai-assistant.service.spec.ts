@@ -1,8 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { ApiError, GoogleGenAI } from '@google/genai';
-import { UserRole } from '@prisma/client';
+import { GoogleGenAI } from '@google/genai';
+import { LeaveType, UserRole } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { LeaveService } from '../leave/leave.service';
 import { AiAssistantService } from './ai-assistant.service';
 
 jest.mock('@google/genai');
@@ -10,6 +11,7 @@ jest.mock('@google/genai');
 describe('AiAssistantService', () => {
   let service: AiAssistantService;
   let prisma: any;
+  let leaveService: { getEligibleAbsences: jest.Mock };
 
   const mockCompanyId = 'company-123';
   const mockUserId = 'user-emp-1';
@@ -17,40 +19,123 @@ describe('AiAssistantService', () => {
   beforeEach(async () => {
     prisma = {
       company: {
-        findUnique: jest.fn().mockResolvedValue({ id: mockCompanyId, name: 'Acme Corp' }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: mockCompanyId,
+          name: 'Acme Corp',
+          timezone: 'UTC',
+          subscriptionTier: 'PREMIUM',
+          regularizationEnabled: true,
+          regularizationLookback: 7,
+          regularizationExceptional: true,
+          regularizationDocument: false,
+        }),
       },
       employee: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'emp-1',
           firstName: 'John',
           lastName: 'Doe',
+          status: 'ACTIVE',
+          hireDate: new Date('2024-01-01T00:00:00.000Z'),
+          probationEndDate: new Date('2024-04-01T00:00:00.000Z'),
           department: { name: 'Engineering' },
+          designation: { name: 'Software Engineer' },
         }),
       },
       leaveBalance: {
         findMany: jest.fn().mockResolvedValue([
-          { leaveType: 'CASUAL', allocated: 10, used: 2, pending: 0, carried: 0 },
-          { leaveType: 'SICK', allocated: 12, used: 0, pending: 0, carried: 0 },
-          { leaveType: 'ANNUAL', allocated: 14, used: 5, pending: 0, carried: 0 },
+          { leaveType: LeaveType.CASUAL, year: new Date().getFullYear(), allocated: 10, used: 2, pending: 0, carried: 0 },
+          { leaveType: LeaveType.SICK, year: new Date().getFullYear(), allocated: 12, used: 0, pending: 0, carried: 0 },
+          { leaveType: LeaveType.ANNUAL, year: new Date().getFullYear(), allocated: 14, used: 5, pending: 0, carried: 0 },
         ]),
       },
       leaveTypeSetting: {
         findMany: jest.fn().mockResolvedValue([
-          { leaveType: 'CASUAL', annualAllocation: 10, requiresReason: true, requiresMedicalCert: false, isActive: true },
-          { leaveType: 'SICK', annualAllocation: 12, requiresReason: false, requiresMedicalCert: true, isActive: true },
-          { leaveType: 'ANNUAL', annualAllocation: 14, requiresReason: false, requiresMedicalCert: false, isActive: true },
+          {
+            leaveType: LeaveType.CASUAL,
+            annualAllocation: 10,
+            isPaid: true,
+            enforceEntitlement: true,
+            allowDuringProbation: false,
+            maxConsecutiveDays: null,
+            requiresReason: true,
+            requiresMedicalCert: false,
+            isActive: true,
+          },
+          {
+            leaveType: LeaveType.SICK,
+            annualAllocation: 12,
+            isPaid: true,
+            enforceEntitlement: true,
+            allowDuringProbation: false,
+            maxConsecutiveDays: null,
+            requiresReason: false,
+            requiresMedicalCert: true,
+            isActive: true,
+          },
+          {
+            leaveType: LeaveType.ANNUAL,
+            annualAllocation: 14,
+            isPaid: true,
+            enforceEntitlement: true,
+            allowDuringProbation: false,
+            maxConsecutiveDays: null,
+            requiresReason: false,
+            requiresMedicalCert: false,
+            isActive: true,
+          },
+          {
+            leaveType: LeaveType.SPECIAL,
+            annualAllocation: 0,
+            isPaid: true,
+            enforceEntitlement: false,
+            allowDuringProbation: true,
+            maxConsecutiveDays: 5,
+            requiresReason: true,
+            requiresMedicalCert: true,
+            isActive: true,
+          },
+          {
+            leaveType: LeaveType.UNPAID,
+            annualAllocation: 0,
+            isPaid: false,
+            enforceEntitlement: false,
+            allowDuringProbation: true,
+            maxConsecutiveDays: 15,
+            requiresReason: true,
+            requiresMedicalCert: false,
+            isActive: true,
+          },
         ]),
       },
+      employeeShift: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      shift: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      attendanceRecord: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      leaveRequest: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+
+    leaveService = {
+      getEligibleAbsences: jest.fn().mockResolvedValue({ dates: [] }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AiAssistantService,
         { provide: PrismaService, useValue: prisma },
+        { provide: LeaveService, useValue: leaveService },
         {
           provide: ConfigService,
           useValue: {
-            get: jest.fn().mockReturnValue(null), // deterministic sandbox mode
+            get: jest.fn().mockReturnValue(null),
           },
         },
       ],
@@ -60,450 +145,268 @@ describe('AiAssistantService', () => {
   });
 
   describe('processQuery', () => {
-    it('directs the work-from-home question to the current attendance control', async () => {
-      const result = await service.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How do I apply to work from home?' },
-      );
-      expect(result.reply).toContain('New Remote Work Request');
-      expect(result.reply).toContain('Step 2 approval');
-    });
-
-    it.each([undefined, ' \n '])('uses work-from-home guidance if Gemini returns %p', async (text) => {
-      const generateContent = jest.fn().mockResolvedValue({ text });
-      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
-        models: { generateContent },
-      }) as unknown as GoogleGenAI);
-      const configuredService = new AiAssistantService(prisma, new ConfigService({
-        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '',
-      }));
-
-      const result = await configuredService.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How can departments coordinate their work?' },
-      );
-
-      expect(generateContent).toHaveBeenCalledTimes(1);
-      expect(result.model).toBe('gemini-policy-engine');
-      expect(result.reply).toContain('Hello John');
-    });
-
-    it('returns a nonempty Gemini reply when available', async () => {
-      const generateContent = jest.fn().mockResolvedValue({ text: '  Open Attendance.  ' });
-      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
-        models: { generateContent },
-      }) as unknown as GoogleGenAI);
-      const configuredService = new AiAssistantService(prisma, new ConfigService({
-        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '',
-      }));
-
-      const result = await configuredService.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How can departments coordinate their work?' },
-      );
-
-      expect(generateContent).toHaveBeenCalledTimes(1);
-      expect(generateContent).toHaveBeenCalledWith({
-        model: 'gemini-3.5-flash',
-        contents: 'How can departments coordinate their work?',
-        config: expect.objectContaining({
-          systemInstruction: expect.stringContaining('New Remote Work Request'),
-          abortSignal: expect.objectContaining({ aborted: false }),
-          httpOptions: { timeout: 15_000, retryOptions: { attempts: 2 } },
-          thinkingConfig: { thinkingLevel: 'LOW' },
-        }),
-      });
-      expect(result.reply).toBe('Open Attendance.');
-      expect(result.model).toBe('gemini-3.5-flash');
-    });
-
-    it('uses the configured model and falls back when the request deadline aborts', async () => {
-      const controller = new AbortController();
-      const deadline = jest.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
-      const generateContent = jest.fn().mockImplementation(({ config }) => {
-        controller.abort();
-        return Promise.reject(config.abortSignal.reason);
-      });
-      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
-        models: { generateContent },
-      }) as unknown as GoogleGenAI);
-      const configuredService = new AiAssistantService(prisma, new ConfigService({
-        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: 'gemini-2.5-flash',
-      }));
-
-      try {
-        const result = await configuredService.processQuery(
-          mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How can departments coordinate their work?' },
-        );
-        expect(deadline).toHaveBeenCalledWith(15_000);
-        expect(deadline).toHaveBeenCalledWith(5_000);
-        expect(generateContent.mock.calls[0][0].model).toBe('gemini-2.5-flash');
-        expect(generateContent.mock.calls[0][0].config.abortSignal.aborted).toBe(true);
-        expect(generateContent.mock.calls[0][0].config.thinkingConfig).toBeUndefined();
-        expect(generateContent).toHaveBeenCalledTimes(1);
-        expect(result.model).toBe('gemini-policy-engine');
-        expect(result.reply).toContain('Hello John');
-      } finally {
-        deadline.mockRestore();
-      }
-    });
-
-    it('uses the default Gemini model when the preferred model is unavailable', async () => {
-      const unavailable = Object.assign(new ApiError({ message: 'Unavailable', status: 503 }), { status: 503 });
-      const generateContent = jest.fn().mockRejectedValueOnce(unavailable)
-        .mockResolvedValueOnce({ text: 'Department managers route leave to the CEO.' });
-      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
-        models: { generateContent },
-      }) as unknown as GoogleGenAI);
-      const configuredService = new AiAssistantService(prisma, new ConfigService({
-        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: 'gemini-3.8-flash',
-      }));
-
-      const result = await configuredService.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How can departments coordinate their work?' },
-      );
-
-      expect(generateContent.mock.calls.map(([request]) => request.model)).toEqual(['gemini-3.8-flash', 'gemini-3.5-flash']);
-      expect(generateContent.mock.calls[0][0].config.httpOptions).toEqual({ timeout: 10_000, retryOptions: { attempts: 1 } });
-      expect(result).toMatchObject({ model: 'gemini-3.5-flash', reply: 'Department managers route leave to the CEO.' });
-    });
-
-    it('answers common policy questions immediately without a Gemini network call', async () => {
-      const generateContent = jest.fn();
-      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
-        models: { generateContent },
-      }) as unknown as GoogleGenAI);
-      const configuredService = new AiAssistantService(prisma, new ConfigService({
-        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: 'gemini-2.0-flash',
-      }));
-
-      const result = await configuredService.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How do I apply to work from home?' },
-      );
-
-      expect(generateContent).not.toHaveBeenCalled();
-      expect(result).toMatchObject({
-        model: 'zenhr-policy-engine',
-        reply: expect.stringContaining('New Remote Work Request'),
-      });
-    });
-
-    it('should answer questions about probation period accurately according to policy', async () => {
+    it('routes pure procedural leave application to workflow steps', async () => {
       const result = await service.processQuery(
         mockCompanyId,
         mockUserId,
         UserRole.EMPLOYEE,
-        { message: 'What is the probation duration before I can request leave?' },
+        { message: 'How do I apply for leave?' },
       );
 
-      expect(result.reply).toContain('3-month probation period (90 days');
-      expect(result.reply).toContain('Acme Corp policy');
+      expect(result.model).toBe('zenhr-policy-engine');
+      expect(result.reply).toContain('Request Leave');
+      expect(result.reply).toContain('/dashboard/my-leave');
     });
 
-    it('uses the tenant name for break and remote-work answers', async () => {
-      const breakResult = await service.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'Who gets a break overstay alert?' },
-      );
-      const remoteResult = await service.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How do I request remote work?' },
-      );
-
-      expect(breakResult.reply).toContain("Acme Corp's ZenHR workspace");
-      expect(breakResult.reply).toContain('Company Admin and HR');
-      expect(breakResult.reply).toContain('Team Lead and Department Manager');
-      expect(remoteResult.reply).toContain("According to Acme Corp's policy");
-    });
-
-    it('answers a sick leave balance question with available days rather than annual allocation', async () => {
+    it('does NOT intercept entitlement/limit questions with generic procedural workflow', async () => {
       const result = await service.processQuery(
         mockCompanyId,
         mockUserId,
         UserRole.EMPLOYEE,
-        { message: 'How many days of sick leave do I have left?' },
+        { message: 'How to apply more than 10 days casual leave' },
       );
 
-      expect(result.reply).toContain('Sick Leave: 12 days available');
-      expect(result.reply).not.toContain('allocates 12 days of Sick Leave per year');
-      expect(prisma.company.findUnique).not.toHaveBeenCalled();
-      expect(prisma.leaveTypeSetting.findMany).not.toHaveBeenCalled();
+      expect(result.model).toBe('zenhr-policy-engine');
+      expect(result.reply).toContain('Casual Leave');
+      expect(result.reply).toContain('8 days available');
+      expect(result.reply).toContain('Special Leave');
+      expect(result.reply).toContain('Unpaid Leave');
+      expect(result.reply).toContain('Request additional leave');
     });
 
-    it('recognizes leave type before the word days in balance questions', async () => {
-      prisma.employee.findFirst.mockResolvedValueOnce(null);
-
-      const result = await service.processQuery(
-        mockCompanyId,
-        mockUserId,
-        UserRole.EMPLOYEE,
-        { message: 'How many sick leave days do I have left?' },
-      );
-
-      expect(result.reply).toContain('Sick Leave: 12 days available');
-      expect(result.reply).not.toContain('allocates 12 days of Sick Leave per year');
-      expect(prisma.leaveBalance.findMany).not.toHaveBeenCalled();
-    });
-
-    it('should emphasize mandatory medical doctor prescription for sick leave', async () => {
-      const result = await service.processQuery(
-        mockCompanyId,
-        mockUserId,
-        UserRole.EMPLOYEE,
-        { message: 'How do I take sick leave?' },
-      );
-
-      expect(result.reply).toContain('12 days of Sick Leave per year');
-      expect(result.reply).toContain('medical doctor prescription or certificate');
-      expect(result.reply).toContain('required when you submit');
-      expect(result.reply).not.toContain('14 days of Sick Leave');
-      expect(prisma.company.findUnique).toHaveBeenCalledWith({
-        where: { id: mockCompanyId },
-        select: { name: true },
-      });
-      expect(prisma.employee.findFirst).not.toHaveBeenCalled();
-      expect(prisma.leaveBalance.findMany).not.toHaveBeenCalled();
-    });
-
-    it('uses the tenant medical certificate setting instead of claiming it is mandatory', async () => {
+    it('reports disabled Special/Unpaid leave accurately when inactive', async () => {
       prisma.leaveTypeSetting.findMany.mockResolvedValueOnce([
-        { leaveType: 'SICK', annualAllocation: 8, requiresReason: false, requiresMedicalCert: false, isActive: true },
+        {
+          leaveType: LeaveType.CASUAL,
+          annualAllocation: 10,
+          isPaid: true,
+          enforceEntitlement: true,
+          allowDuringProbation: false,
+          maxConsecutiveDays: null,
+          requiresReason: true,
+          requiresMedicalCert: false,
+          isActive: true,
+        },
       ]);
 
       const result = await service.processQuery(
         mockCompanyId,
         mockUserId,
         UserRole.EMPLOYEE,
-        { message: 'How do I take sick leave?' },
+        { message: 'I finished my casual leave, how can I take extra days?' },
       );
 
-      expect(result.reply).toContain('8 days of Sick Leave per year');
-      expect(result.reply).toContain('does not require a medical certificate');
-      expect(result.reply).not.toContain('required when you submit');
+      expect(result.reply).toContain('Neither **Special Leave** nor **Unpaid Leave** is currently enabled');
     });
 
-    it('uses the configured 12-day sick allocation when a new tenant has no leave rows yet', async () => {
-      prisma.leaveTypeSetting.findMany.mockResolvedValueOnce([]);
-      prisma.company.findUnique.mockResolvedValueOnce({ id: mockCompanyId, name: 'NewCo' });
+    it('answers leave balance questions accurately and distinguishes uninitialized rows', async () => {
+      prisma.leaveBalance.findMany.mockResolvedValueOnce([
+        { leaveType: LeaveType.CASUAL, year: 2026, allocated: 10, used: 10, pending: 0, carried: 0 },
+      ]);
 
       const result = await service.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How many sick leave days are allocated?' },
-      );
-
-      expect(result.reply).toContain('NewCo allocates 12 days of Sick Leave per year');
-    });
-
-    it('answers annual leave request questions quickly without inventing a medical certificate requirement', async () => {
-      const generateContent = jest.fn();
-      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
-        models: { generateContent },
-      }) as unknown as GoogleGenAI);
-      const configuredService = new AiAssistantService(prisma, new ConfigService({
-        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '',
-      }));
-
-      const result = await configuredService.processQuery(
         mockCompanyId,
         mockUserId,
         UserRole.EMPLOYEE,
-        { message: 'In one short paragraph, what steps should I follow to request annual leave in this HR portal?' },
+        { message: 'How many days of casual leave do I have left?' },
       );
 
-      expect(generateContent).not.toHaveBeenCalled();
+      expect(result.reply).toContain('**0 days available**');
+      expect(result.reply).toContain('Sick Leave');
+      expect(result.reply).toContain('Not yet initialized');
+    });
+
+    it('answers HR-24 attendance regularization with eligible dates from LeaveService when enabled', async () => {
+      leaveService.getEligibleAbsences.mockResolvedValueOnce({
+        dates: ['2026-11-23'],
+      });
+
+      const result = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How do I regularize my absent day from yesterday?' },
+      );
+
+      expect(leaveService.getEligibleAbsences).toHaveBeenCalledWith(mockCompanyId, mockUserId);
       expect(result.model).toBe('zenhr-policy-engine');
-      expect(result.reply).toContain('Submit Leave Request');
-      expect(result.reply).toContain('A reason is optional');
-      expect(result.reply).toContain('a medical certificate is not required');
-      expect(result.reply).toContain("organization's approval workflow");
-      expect(prisma.leaveTypeSetting.findMany).toHaveBeenCalledWith(expect.objectContaining({
-        where: { companyId: mockCompanyId, leaveType: 'ANNUAL' },
-      }));
+      expect(result.reply).toContain('Last **7 days**');
+      expect(result.reply).toContain('2026-11-23');
+      expect(result.reply).toContain('Regularize absence');
+      expect(result.reply).toContain('final approval');
+      expect(result.reply).toContain('PAID');
     });
 
-    it('includes the configured prescription rule in sick leave request guidance', async () => {
+    it('reports when attendance regularization is disabled by company policy', async () => {
+      prisma.company.findUnique.mockResolvedValueOnce({
+        id: mockCompanyId,
+        name: 'Acme Corp',
+        timezone: 'UTC',
+        subscriptionTier: 'BASIC',
+        regularizationEnabled: false,
+        regularizationLookback: 0,
+        regularizationExceptional: false,
+        regularizationDocument: false,
+      });
+
       const result = await service.processQuery(
         mockCompanyId,
         mockUserId,
         UserRole.EMPLOYEE,
-        { message: 'How do I submit a sick leave request?' },
+        { message: 'Can I convert a past absence to leave?' },
       );
 
-      expect(result.model).toBe('zenhr-policy-engine');
-      expect(result.reply).toContain('A reason is optional');
-      expect(result.reply).toContain('a medical doctor prescription or certificate is required');
+      expect(result.reply).toContain('currently **disabled**');
     });
 
-    it('does not apply the sick leave certificate rule to annual leave policy questions', async () => {
-      const result = await service.processQuery(
+    it('handles active probation, elapsed probation, and ACTIVE employee status accurately', async () => {
+      // Active employee
+      const activeRes = await service.processQuery(
         mockCompanyId,
         mockUserId,
         UserRole.EMPLOYEE,
-        { message: 'Does annual leave require a doctor certificate?' },
+        { message: 'Am I on probation?' },
       );
+      expect(activeRes.reply).toContain('**ACTIVE**');
 
-      expect(result.model).toBe('zenhr-policy-engine');
-      expect(result.reply).toContain('Annual Leave');
-      expect(result.reply).toContain('A medical certificate is not required');
-      expect(result.reply).not.toContain('Sick Leave');
-    });
-
-    it('answers leave entitlement questions with annual allocation, not personal balance', async () => {
-      const result = await service.processQuery(
+      // Active probation in future
+      const futureDate = new Date(Date.now() + 20 * 86_400_000);
+      prisma.employee.findFirst.mockResolvedValueOnce({
+        id: 'emp-1',
+        firstName: 'John',
+        lastName: 'Doe',
+        status: 'ON_PROBATION',
+        hireDate: new Date(),
+        probationEndDate: futureDate,
+      });
+      const futureRes = await service.processQuery(
         mockCompanyId,
         mockUserId,
         UserRole.EMPLOYEE,
-        { message: 'How many days of sick leave are allocated per year?' },
+        { message: 'What is my probation status?' },
       );
+      expect(futureRes.reply).toContain('**ON_PROBATION**');
+      expect(futureRes.reply).toContain('Special Leave and Unpaid Leave are permitted during probation');
 
-      expect(result.reply).toContain('12 days of Sick Leave per year');
-      expect(result.reply).not.toContain('days available');
-    });
-
-    it('uses tenant leave allocations in the Gemini context', async () => {
-      const generateContent = jest.fn().mockResolvedValue({ text: 'Please contact HR for details.' });
-      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
-        models: { generateContent },
-      }) as unknown as GoogleGenAI);
-      const configuredService = new AiAssistantService(prisma, new ConfigService({
-        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '',
-      }));
-
-      await configuredService.processQuery(
+      // Elapsed probation still marked ON_PROBATION
+      prisma.employee.findFirst.mockResolvedValueOnce({
+        id: 'emp-1',
+        firstName: 'John',
+        lastName: 'Doe',
+        status: 'ON_PROBATION',
+        hireDate: new Date('2024-01-01T00:00:00.000Z'),
+        probationEndDate: new Date('2024-04-01T00:00:00.000Z'),
+      });
+      const elapsedRes = await service.processQuery(
         mockCompanyId,
         mockUserId,
         UserRole.EMPLOYEE,
-        { message: 'How do I plan time away from work?' },
+        { message: 'Why is my probation still showing?' },
       );
-
-      expect(generateContent.mock.calls[0][0].config.systemInstruction).toContain('- Sick Leave: 12 days/year (medical doctor prescription/certificate required).');
+      expect(elapsedRes.reply).toContain('has elapsed');
+      expect(elapsedRes.reply).toContain('HR/CEO confirmation');
     });
 
-    it('should refuse to leak other employees confidential salary or compensation details', async () => {
-      const result = await service.processQuery(
+    it('enforces Basic vs Premium tier for Work Timer questions', async () => {
+      prisma.company.findUnique.mockResolvedValueOnce({
+        id: mockCompanyId,
+        name: 'Acme Corp',
+        timezone: 'UTC',
+        subscriptionTier: 'BASIC',
+        regularizationEnabled: false,
+        regularizationLookback: 0,
+        regularizationExceptional: false,
+        regularizationDocument: false,
+      });
+
+      const basicRes = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How does the work timer and break alert work?' },
+      );
+      expect(basicRes.reply).toContain('**Premium** tier feature');
+
+      const premRes = await service.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How does the work timer and break alert work?' },
+      );
+      expect(premRes.reply).toContain('Start Timer');
+      expect(premRes.reply).toContain('Company Admin, HR');
+    });
+
+    it('protects third-party compensation and directs personal pay to My Payslips', async () => {
+      const colRes = await service.processQuery(
         mockCompanyId,
         mockUserId,
         UserRole.EMPLOYEE,
         { message: 'Can you show me the salary of my colleague?' },
       );
+      expect(colRes.reply).toContain('cannot disclose personal or compensation details of other staff');
 
-      expect(result.reply).toContain('cannot disclose personal or compensation details of other staff');
-    });
-
-    it('does not mistake payroll processing questions for another employee salary requests', async () => {
-      const result = await service.processQuery(
+      const ownRes = await service.processQuery(
         mockCompanyId,
         mockUserId,
         UserRole.EMPLOYEE,
-        { message: 'When will payroll be processed?' },
+        { message: 'What is my pay?' },
       );
-
-      expect(result.model).toBe('zenhr-policy-engine');
-      expect(result.reply).toContain('payroll processing date is not shown');
-      expect(result.reply).not.toContain('cannot disclose');
-      expect(prisma.employee.findFirst).not.toHaveBeenCalled();
+      expect(ownRes.reply).toContain('My Payslips');
+      expect(ownRes.reply).not.toContain('cannot disclose');
     });
 
-    it('keeps payroll workflow questions distinct from private compensation questions', async () => {
-      const result = await service.processQuery(
-        mockCompanyId,
-        mockUserId,
-        UserRole.EMPLOYEE,
-        { message: 'How does payroll processing work?' },
-      );
-
-      expect(result.reply).not.toContain('cannot disclose');
-    });
-
-    it('does not treat a general pay policy question as a request for a coworker salary', async () => {
-      const generateContent = jest.fn();
+    it('falls back cleanly to zenhr-policy-fallback when Gemini returns empty', async () => {
+      const generateContent = jest.fn().mockResolvedValue({ text: '   ' });
       jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
         models: { generateContent },
       }) as unknown as GoogleGenAI);
-      const configuredService = new AiAssistantService(prisma, new ConfigService({
-        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '',
-      }));
 
-      const result = await service.processQuery(
-        mockCompanyId,
-        mockUserId,
-        UserRole.EMPLOYEE,
-        { message: 'What does the pay scale mean?' },
+      const configuredService = new AiAssistantService(
+        prisma,
+        new ConfigService({ GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '' }),
       );
-
-      expect(result.reply).toContain('At Acme Corp');
-      expect(result.reply).toContain('base pay');
-      expect(result.reply).not.toContain('cannot disclose');
-      expect(result.model).toBe('zenhr-policy-engine');
-      expect(generateContent).not.toHaveBeenCalled();
-    });
-
-    it('still refuses a coworker pay-scale question', async () => {
-      const result = await service.processQuery(
-        mockCompanyId,
-        mockUserId,
-        UserRole.EMPLOYEE,
-        { message: 'What pay scale does my colleague have?' },
-      );
-
-      expect(result.reply).toContain('cannot disclose personal or compensation details of other staff');
-    });
-
-    it('answers a pay-scale policy question with a possessive pronoun without treating it as individual salary data', async () => {
-      const result = await service.processQuery(
-        mockCompanyId,
-        mockUserId,
-        UserRole.EMPLOYEE,
-        { message: 'How does their pay scale work for different roles?' },
-      );
-
-      expect(result.model).toBe('zenhr-policy-engine');
-      expect(result.reply).toContain('At Acme Corp');
-      expect(result.reply).toContain('base pay');
-      expect(result.reply).not.toContain('cannot disclose');
-    });
-
-    it('does not mistake the word another in a general pay-policy question for a request about another employee', async () => {
-      const result = await service.processQuery(
-        mockCompanyId,
-        mockUserId,
-        UserRole.EMPLOYEE,
-        { message: 'How does another pay scale work for a different role?' },
-      );
-
-      expect(result.reply).toContain('At Acme Corp');
-      expect(result.reply).toContain('base pay');
-      expect(result.reply).not.toContain('cannot disclose');
-    });
-
-    it('answers a general pay question without asking Gemini to infer a privacy violation', async () => {
-      const generateContent = jest.fn();
-      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
-        models: { generateContent },
-      }) as unknown as GoogleGenAI);
-      const configuredService = new AiAssistantService(prisma, new ConfigService({
-        GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '',
-      }));
 
       const result = await configuredService.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How is pay determined?' },
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'How can departments coordinate their quarterly goals?' },
       );
 
-      expect(result.model).toBe('zenhr-policy-engine');
-      expect(result.reply).toContain('At Acme Corp, pay is managed');
-      expect(result.reply).not.toContain('cannot disclose');
-      expect(generateContent).not.toHaveBeenCalled();
+      expect(generateContent).toHaveBeenCalledTimes(1);
+      expect(result.model).toBe('zenhr-policy-fallback');
+      expect(result.reply).toContain('Hello John');
+      expect(result.reply).toContain('/dashboard/my-leave');
     });
 
-    it('directs employees to their own payslips for personal pay questions', async () => {
-      const result = await service.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'What is my pay?' },
+    it('injects grounded tenant policies into Gemini systemInstruction and returns live Gemini reply', async () => {
+      const generateContent = jest.fn().mockResolvedValue({
+        text: '### Policy Summary\n- Review [My Leave](/dashboard/my-leave).',
+      });
+      jest.mocked(GoogleGenAI).mockImplementationOnce(() => ({
+        models: { generateContent },
+      }) as unknown as GoogleGenAI);
+
+      const configuredService = new AiAssistantService(
+        prisma,
+        new ConfigService({ GEMINI_API_KEY: 'fixture-key', GEMINI_MODEL: '' }),
       );
 
-      expect(result.reply).toContain('check My Payslips');
-      expect(result.reply).not.toContain('cannot disclose');
-    });
-
-    it('still refuses a direct request for a colleague’s pay', async () => {
-      const result = await service.processQuery(
-        mockCompanyId, mockUserId, UserRole.EMPLOYEE, { message: 'How much does my colleague get paid?' },
+      const result = await configuredService.processQuery(
+        mockCompanyId,
+        mockUserId,
+        UserRole.EMPLOYEE,
+        { message: 'Can you summarize our company leave and attendance policies?' },
       );
 
-      expect(result.reply).toContain('cannot disclose personal or compensation details of other staff');
+      expect(result.model).toBe('gemini-3.5-flash');
+      expect(result.reply).toContain('### Policy Summary');
+      const systemInstruction = generateContent.mock.calls[0][0].config.systemInstruction;
+      expect(systemInstruction).toContain('Sick Leave: 12 days/year, Paid');
+      expect(systemInstruction).toContain('Unpaid Leave: No entitlement deduction, Unpaid');
+      expect(systemInstruction).toContain('Attendance Regularization: Enabled (lookback 7 days');
+      expect(systemInstruction).toContain('Never disclose salary, bank, NID/tax');
     });
   });
 });

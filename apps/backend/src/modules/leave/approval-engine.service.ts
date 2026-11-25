@@ -30,7 +30,9 @@ export class ApprovalEngineService {
    */
   assertCanRequestLeave(employee: {
     status: string;
+    allowDuringProbation?: boolean;
     hireDate: Date;
+    probationEndDate?: Date | null;
     role?: UserRole;
   }): void {
     if (
@@ -41,8 +43,8 @@ export class ApprovalEngineService {
       throw new ForbiddenException('Inactive employee accounts cannot request leave.');
     }
 
-    if (employee.role === UserRole.EMPLOYEE && employee.status === 'ON_PROBATION') {
-      const probationEnd = getProbationEndDate(employee.hireDate);
+    if (!employee.allowDuringProbation && employee.role === UserRole.EMPLOYEE && employee.status === 'ON_PROBATION') {
+      const probationEnd = employee.probationEndDate ?? getProbationEndDate(employee.hireDate);
       const now = new Date();
 
       if (now < probationEnd) {

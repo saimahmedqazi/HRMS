@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, API_PREFIX } from '@/lib/api';
 import { StatusBadge } from '@/components/ui/status-badge';
@@ -16,13 +16,29 @@ import {
   Download,
 } from 'lucide-react';
 
+function requiresCeoDecision(request: { policySnapshot?: { exceptional?: boolean }; step1Status?: string; step2Status?: string }) {
+  return request.policySnapshot?.exceptional && (request.step1Status !== 'PENDING' || request.step2Status === 'SKIPPED');
+}
+
 export default function LeaveApprovalsPage() {
   const queryClient = useQueryClient();
   const [actionModalOpen, setActionModalOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<any>(null);
-  const [decision, setDecision] = useState<'APPROVE' | 'REJECT'>('APPROVE');
+  const [decision, setDecision] = useState<'APPROVE' | 'PARTIAL' | 'REJECT'>('APPROVE');
   const [notes, setNotes] = useState('');
+  const [approvedStart, setApprovedStart] = useState('');
+  const [approvedEnd, setApprovedEnd] = useState('');
+  const [partialReason, setPartialReason] = useState('');
   const [activeTab, setActiveTab] = useState<'pending' | 'all'>('pending');
+  const [targetRequestId, setTargetRequestId] = useState<string | null>(null);
+  const [missingTargetNotice, setMissingTargetNotice] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const reqId = new URLSearchParams(window.location.search).get('requestId');
+    setTargetRequestId(reqId);
+    setMissingTargetNotice(false);
+  }, []);
 
   // Fetch current user
   const { data: user } = useQuery({
@@ -36,9 +52,30 @@ export default function LeaveApprovalsPage() {
     queryFn: () => api.get<any[]>('/leave/requests'),
   });
 
+  useEffect(() => {
+    if (!targetRequestId || isLoading) return;
+    const match = requests.find((r: any) => r.id === targetRequestId);
+    if (!match) {
+      setMissingTargetNotice(true);
+      return;
+    }
+    setMissingTargetNotice(false);
+    if (match.status !== 'PENDING') {
+      setActiveTab('all');
+    } else {
+      setSelectedRequest(match);
+      setDecision('APPROVE');
+      setApprovedStart('');
+      setApprovedEnd('');
+      setPartialReason('');
+      setNotes('');
+      setActionModalOpen(true);
+    }
+  }, [targetRequestId, isLoading, requests]);
+
   // Filter requests that require action
   const pendingRequests = requests.filter((r) => {
-    if (r.status !== 'PENDING') return false;
+    if (r.status !== 'PENDING' || (requiresCeoDecision(r) && user?.role !== 'COMPANY_ADMIN')) return false;
     const isAdminOrHr =
       user?.role === 'SUPER_ADMIN' ||
       user?.role === 'COMPANY_ADMIN' ||
@@ -63,6 +100,31 @@ export default function LeaveApprovalsPage() {
 
   const displayedRequests = activeTab === 'pending' ? pendingRequests : requests;
 
+  const isStep1 = selectedRequest?.step1Status === 'PENDING';
+  const scopeStart = ((!isStep1 && selectedRequest?.step1ApprovedStart) || selectedRequest?.startDate)?.slice(0, 10) ?? '';
+  const scopeEnd = ((!isStep1 && selectedRequest?.step1ApprovedEnd) || selectedRequest?.endDate)?.slice(0, 10) ?? '';
+  const previewStart = decision === 'PARTIAL' ? approvedStart : scopeStart;
+  const previewEnd = decision === 'PARTIAL' ? approvedEnd : scopeEnd;
+  const inScope = Boolean(previewStart && previewEnd && previewStart >= scopeStart &&
+    previewEnd <= scopeEnd && previewEnd >= previewStart);
+  const preview = new Map<number, number>();
+  let days = 0;
+  if (decision !== 'REJECT' && inScope) {
+    const end = Date.parse(previewEnd);
+    for (let start = Date.parse(previewStart); start <= end;) {
+      const year = new Date(start).getUTCFullYear();
+      const next = new Date(start);
+      next.setUTCFullYear(year + 1, 0, 1);
+      const count = (Math.min(next.getTime(), end + 86400000) - start) / 86400000;
+      preview.set(year, count);
+      days += count;
+      start = next.getTime();
+    }
+  }
+  const canDecide = selectedRequest?.employee?.userId !== user?.id &&
+    (!selectedRequest || !requiresCeoDecision(selectedRequest) || user?.role === 'COMPANY_ADMIN');
+  const partialValid = inScope && (approvedStart !== scopeStart || approvedEnd !== scopeEnd) && partialReason.trim().length >= 3;
+
   // Decision Mutation
   const decisionMutation = useMutation({
     mutationFn: async () => {
@@ -71,6 +133,7 @@ export default function LeaveApprovalsPage() {
       return api.post(`/leave/requests/${selectedRequest.id}/${step}`, {
         decision,
         notes: notes || undefined,
+        ...(decision === 'PARTIAL' ? { approvedStart, approvedEnd, partialReason: partialReason.trim() } : {}),
       });
     },
     onSuccess: () => {
@@ -118,6 +181,16 @@ export default function LeaveApprovalsPage() {
           </button>
         </div>
       </div>
+
+      {/* Missing/inaccessible notification target notice */}
+      {missingTargetNotice && (
+        <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+          <span>The referenced leave request could not be found or is no longer accessible.</span>
+          <button type="button" onClick={() => setMissingTargetNotice(false)} className="font-semibold underline">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Main Table */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-sm overflow-hidden">
@@ -224,6 +297,11 @@ export default function LeaveApprovalsPage() {
                             onClick={() => {
                               setSelectedRequest(req);
                               setDecision('APPROVE');
+                              setApprovedStart('');
+                              setApprovedEnd('');
+                              setPartialReason('');
+                              setNotes('');
+                              decisionMutation.reset();
                               setActionModalOpen(true);
                             }}
                             className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-primary-600 hover:bg-primary-700 text-white shadow-sm"
@@ -246,7 +324,7 @@ export default function LeaveApprovalsPage() {
       {/* Decision Action Modal */}
       {actionModalOpen && selectedRequest && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-2xl max-w-md w-full p-6">
+          <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto p-6">
             <div className="flex items-center justify-between pb-4 border-b border-gray-200 dark:border-gray-800">
               <h3 className="text-lg font-bold text-gray-900 dark:text-white">
                 Adjudicate Leave Request
@@ -299,7 +377,7 @@ export default function LeaveApprovalsPage() {
                 <label className="block text-xs font-semibold uppercase text-gray-500 mb-1">
                   Decision
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                   <button
                     type="button"
                     onClick={() => setDecision('APPROVE')}
@@ -311,6 +389,11 @@ export default function LeaveApprovalsPage() {
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     Approve
+                  </button>
+                  <button type="button" onClick={() => setDecision('PARTIAL')} disabled={scopeStart === scopeEnd}
+                    aria-pressed={decision === 'PARTIAL'}
+                    className={`rounded-lg border px-3 py-2 text-xs font-medium disabled:opacity-50 ${decision === 'PARTIAL' ? 'border-amber-600 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200' : 'border-gray-300 dark:border-gray-700'}`}>
+                    Partially approve
                   </button>
                   <button
                     type="button"
@@ -327,6 +410,34 @@ export default function LeaveApprovalsPage() {
                 </div>
               </div>
 
+              {selectedRequest.retrospective && <p className="text-xs">Retrospective leave · attendance changes on final approval.</p>}
+              {selectedRequest.policySnapshot && <p className="text-xs">{selectedRequest.policySnapshot.isPaid ? 'Paid' : 'Unpaid'}
+                {' · '}{selectedRequest.policySnapshot.enforceEntitlement ? 'Uses leave entitlement' : 'No entitlement deduction'}</p>}
+              <p className="text-xs">Requested {selectedRequest.startDate.slice(0, 10)} to {selectedRequest.endDate.slice(0, 10)} · {selectedRequest.totalDays} calendar days</p>
+              <p className="text-xs">Available for this decision: {scopeStart} to {scopeEnd}</p>
+              {decision === 'PARTIAL' && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="text-xs">Approved start
+                    <input className="block w-full rounded border p-2 dark:border-gray-700 dark:bg-gray-800" type="date" min={scopeStart} max={scopeEnd}
+                      value={approvedStart} onChange={(event) => setApprovedStart(event.target.value)} />
+                  </label>
+                  <label className="text-xs">Approved end
+                    <input className="block w-full rounded border p-2 dark:border-gray-700 dark:bg-gray-800" type="date" min={approvedStart || scopeStart} max={scopeEnd}
+                      value={approvedEnd} onChange={(event) => setApprovedEnd(event.target.value)} />
+                  </label>
+                  <label className="text-xs sm:col-span-2">Reason for reducing leave (visible to employee)
+                    <textarea className="block w-full rounded border p-2 dark:border-gray-700 dark:bg-gray-800" maxLength={500}
+                      value={partialReason} onChange={(event) => setPartialReason(event.target.value)} />
+                  </label>
+                </div>
+              )}
+              {inScope && decision !== 'REJECT' && (
+                <p className="text-xs" aria-live="polite">{days} days approved · {selectedRequest.totalDays - days} days unapproved
+                  {Array.from(preview, ([year, count]) => ` · ${year}: ${count}`).join('')}
+                </p>
+              )}
+              {!canDecide && <p role="status" className="text-xs">This request needs an independent authorized reviewer.</p>}
+              {decisionMutation.error && <p role="alert" className="text-xs text-rose-600">{decisionMutation.error.message}</p>}
               <div>
                 <label className="block text-xs font-semibold uppercase text-gray-500 mb-1">
                   Approver Remarks / Notes
@@ -356,7 +467,7 @@ export default function LeaveApprovalsPage() {
               <button
                 type="button"
                 onClick={() => decisionMutation.mutate()}
-                disabled={decisionMutation.isPending}
+                disabled={!canDecide || decisionMutation.isPending || (decision === 'PARTIAL' && !partialValid)}
                 className={`px-4 py-2 text-xs font-semibold rounded-lg text-white ${
                   decision === 'APPROVE'
                     ? 'bg-emerald-600 hover:bg-emerald-700'
@@ -365,7 +476,7 @@ export default function LeaveApprovalsPage() {
               >
                 {decisionMutation.isPending
                   ? 'Submitting...'
-                  : `Confirm ${decision === 'APPROVE' ? 'Approval' : 'Rejection'}`}
+                  : `Confirm ${decision === 'PARTIAL' ? 'Partial Approval' : decision === 'APPROVE' ? 'Approval' : 'Rejection'}`}
               </button>
             </div>
           </div>

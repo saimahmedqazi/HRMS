@@ -1,3 +1,5 @@
+import { lockEmployeeShift } from '@common/utils/attendance-locks';
+import { lockEmployeeLeave } from '@common/utils/leave-locks';
 import {
   Injectable,
   NotFoundException,
@@ -192,11 +194,17 @@ export class WorkTimerService {
     if (!employee) throw new NotFoundException('Employee profile not found');
 
     const scope = { companyId, employeeId: employee.id };
-    const dates = await resolveEmployeeAttendanceDay(this.prisma, scope, now, local);
     try {
       return await this.prisma.$transaction(async (tx) => {
+        await lockEmployeeLeave(tx, companyId, employee.id);
+        await lockEmployeeShift(tx, companyId, employee.id);
+        const dates = await resolveEmployeeAttendanceDay(tx, scope, now, local);
         const punch = await findCurrentPunch(tx, scope, dates);
         const date = punch?.checkInTime && !punch.checkOutTime ? punch.date : dates.date;
+        const approvedLeave = await tx.attendanceRecord.findFirst({
+          where: { ...scope, date, status: 'ON_LEAVE' }, select: { id: true },
+        });
+        if (approvedLeave) throw new ConflictException('A work timer cannot start on an approved leave date.');
         const existing = await findCurrentTimer(tx, scope, { ...dates, date });
         if (existing?.status === TimerStatus.RUNNING) {
           throw new BadRequestException('Timer is already running');
@@ -222,7 +230,7 @@ export class WorkTimerService {
             status: TimerStatus.RUNNING,
           },
         });
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
         throw new ConflictException('The timer changed. Refresh it before trying again.');

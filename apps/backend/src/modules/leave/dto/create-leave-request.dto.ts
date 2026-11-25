@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateLeaveRequestDto {
   @ApiProperty({ example: 'cuid_leave_type_setting_id' })
@@ -22,4 +22,7 @@ export class CreateLeaveRequestDto {
   @IsOptional()
   @MaxLength(500)
   reason?: string;
+  @IsOptional()
+  @IsIn(['RETROSPECTIVE', 'PROSPECTIVE'])
+  mode?: 'RETROSPECTIVE' | 'PROSPECTIVE';
 }

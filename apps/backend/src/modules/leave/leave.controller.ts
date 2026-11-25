@@ -32,6 +32,8 @@ import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { ApproveStepDto } from './dto/approve-step.dto';
 import { UpdateLeaveTypeDto } from './dto/update-leave-type.dto';
 
+import { RegularizationPolicyDto } from './dto/regularization-policy.dto';
+
 @ApiTags('Leave Management')
 @ApiCookieAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -64,6 +66,26 @@ export class LeaveController {
       throw new ForbiddenException('Only the company CEO may change leave policies');
     }
     return this.leaveService.updateLeaveType(user.companyId, id, dto);
+  }
+
+  @Get('regularization/policy')
+  @Roles(UserRole.COMPANY_ADMIN)
+  getRegularizationPolicy(@CurrentUser() user: any) {
+    return this.leaveService.getRegularizationPolicy(user.companyId);
+  }
+
+  @Patch('regularization/policy')
+  @Roles(UserRole.COMPANY_ADMIN)
+  updateRegularizationPolicy(@CurrentUser() user: any, @Body() dto: RegularizationPolicyDto) {
+    if (user.role !== UserRole.COMPANY_ADMIN || !user.companyId || user.supportModeCompanyId) {
+      throw new ForbiddenException('Only the company CEO may change leave policies');
+    }
+    return this.leaveService.updateRegularizationPolicy(user.companyId, dto);
+  }
+
+  @Get('regularization/eligible')
+  getEligibleAbsences(@CurrentUser() user: any) {
+    return this.leaveService.getEligibleAbsences(user.companyId, user.id);
   }
 
   @Get('balances')

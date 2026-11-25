@@ -3,8 +3,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import Link from 'next/link';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { SafeMarkdown } from '@/components/ui/safe-markdown';
 import {
   Bot,
   User,
@@ -15,7 +16,8 @@ import {
   HelpCircle,
   Clock,
   FileText,
-  Package,
+  Calendar,
+  RotateCcw,
 } from 'lucide-react';
 
 interface ChatMessage {
@@ -23,28 +25,29 @@ interface ChatMessage {
   sender: 'user' | 'assistant';
   text: string;
   timestamp: string;
+  failedPrompt?: string;
 }
 
 const PRESET_PROMPTS = [
   {
-    icon: Clock,
-    label: 'Probation Leave Policy',
-    prompt: 'What is the probation duration before an employee can request leave?',
+    icon: Calendar,
+    label: 'Extra & Unpaid Leave',
+    prompt: 'How to apply more than 10 days casual leave',
   },
   {
     icon: FileText,
-    label: 'Sick Leave Prescriptions',
-    prompt: 'What are the rules regarding doctor prescriptions for sick leave?',
-  },
-  {
-    icon: Package,
-    label: 'Equipment Requests',
-    prompt: 'How do I submit an equipment or software resource request?',
+    label: 'Regularize Absence',
+    prompt: 'How do I regularize a missed attendance day?',
   },
   {
     icon: Clock,
-    label: 'Break Overstay Alerts',
-    prompt: 'How does the Work Timer break overstay alert engine work?',
+    label: 'Probation Policy',
+    prompt: 'What is my probation status and when can I apply for leave?',
+  },
+  {
+    icon: HelpCircle,
+    label: 'Shift & Work Timer',
+    prompt: 'Where can I view my shift schedule and work timer rules?',
   },
 ];
 
@@ -54,7 +57,7 @@ interface AssistantSubscription {
 }
 
 export default function AiAssistantPage() {
-  const { user } = useAuth();
+  const { user, allowedModules } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome',
@@ -97,14 +100,22 @@ export default function AiAssistantPage() {
         },
       ]);
     },
-    onError: (err: any) => {
+    onError: (err: unknown, failedText: string) => {
+      if (err instanceof ApiError && err.status === 401) {
+        return;
+      }
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Unable to connect to Gemini AI services.';
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now().toString(),
           sender: 'assistant',
-          text: `Error: ${err.message || 'Unable to connect to Gemini AI services.'}`,
+          text: `Error: ${message}`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          failedPrompt: failedText,
         },
       ]);
     },
@@ -127,7 +138,7 @@ export default function AiAssistantPage() {
   };
 
   return (
-    <div className="space-y-4 max-w-4xl mx-auto h-[calc(100vh-8rem)] flex flex-col">
+    <div className="space-y-4 max-w-4xl mx-auto h-[calc(100vh-8rem)] min-h-0 flex flex-col overflow-x-hidden">
       {/* Header */}
       <div className="flex items-center justify-between pb-3 border-b border-gray-200 dark:border-gray-800">
         <div className="flex items-center gap-3">
@@ -199,19 +210,32 @@ export default function AiAssistantPage() {
               </div>
 
               <div
-                className={`max-w-xl rounded-2xl p-4 text-xs leading-relaxed shadow-sm whitespace-pre-line ${
+                className={`max-w-[85%] sm:max-w-xl min-w-0 break-words rounded-2xl p-3.5 sm:p-4 text-xs leading-relaxed shadow-sm ${
                   isUser
-                    ? 'bg-primary-600 text-white rounded-tr-none'
+                    ? 'bg-primary-600 text-white rounded-tr-none whitespace-pre-line'
                     : 'bg-gray-50 dark:bg-gray-800/60 text-gray-800 dark:text-gray-200 border border-gray-100 dark:border-gray-800 rounded-tl-none'
                 }`}
               >
-                {m.text}
+                {isUser ? m.text : <SafeMarkdown content={m.text} allowedModules={allowedModules} />}
                 <div
-                  className={`mt-1.5 text-[10px] text-right ${
+                  className={`mt-1.5 flex items-center justify-between gap-2 text-[10px] ${
                     isUser ? 'text-primary-200' : 'text-gray-400'
                   }`}
                 >
-                  {m.timestamp}
+                  {m.failedPrompt ? (
+                    <button
+                      type="button"
+                      onClick={() => sendMutation.mutate(m.failedPrompt!)}
+                      disabled={sendMutation.isPending}
+                      className="inline-flex items-center gap-1 font-semibold text-primary-600 dark:text-primary-400 hover:underline disabled:opacity-50"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      Retry
+                    </button>
+                  ) : (
+                    <span />
+                  )}
+                  <span>{m.timestamp}</span>
                 </div>
               </div>
             </div>

@@ -1,8 +1,8 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, ApiError } from './api';
+import { api, ApiError, broadcastAuthEvent, subscribeAuthSync } from './api';
 
 export type UserRole =
   | 'SUPER_ADMIN'
@@ -75,6 +75,7 @@ interface AuthContextType {
   modulesLoading: boolean;
   isLoading: boolean;
   sessionUnavailable: boolean;
+  sessionExpired: boolean;
   isAuthenticated: boolean;
   logout: () => Promise<void>;
   refetchUser: () => Promise<void>;
@@ -86,6 +87,7 @@ const AuthContext = createContext<AuthContextType>({
   modulesLoading: true,
   isLoading: true,
   sessionUnavailable: false,
+  sessionExpired: false,
   isAuthenticated: false,
   logout: async () => {},
   refetchUser: async () => {},
@@ -93,6 +95,28 @@ const AuthContext = createContext<AuthContextType>({
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
+  const [sessionExpired, setSessionExpired] = useState(false);
+
+  const clearCachedSession = useCallback(
+    async (expired: boolean) => {
+      setSessionExpired(expired);
+      await queryClient.cancelQueries({ queryKey: ['auth'] });
+      queryClient.setQueryData(['auth', 'me'], null);
+      queryClient.setQueryData(['auth', 'modules'], null);
+      queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'auth' });
+    },
+    [queryClient],
+  );
+
+  useEffect(() => {
+    return subscribeAuthSync((event) => {
+      if (event.type === 'SESSION_EXPIRED') {
+        void clearCachedSession(true);
+      } else if (event.type === 'LOGGED_OUT') {
+        void clearCachedSession(false);
+      }
+    });
+  }, [clearCachedSession]);
 
   const {
     data: cachedUser,
@@ -110,15 +134,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     queryKey: ['auth', 'modules'],
     queryFn: () => api.get<{ role: UserRole; allowedModules: string[] }>('/auth/me/modules'),
     enabled: !!user,
+    retry: false,
   });
 
   const logoutMutation = useMutation({
     mutationFn: () => api.post('/auth/logout'),
     onSuccess: async () => {
-      await queryClient.cancelQueries({ queryKey: ['auth'] });
-      queryClient.setQueryData(['auth', 'me'], null);
-      queryClient.setQueryData(['auth', 'modules'], null);
-      queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'auth' });
+      await clearCachedSession(false);
+      broadcastAuthEvent({ type: 'LOGGED_OUT' });
     },
   });
 
@@ -130,11 +153,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         modulesLoading,
         isLoading: userLoading,
         sessionUnavailable: !user && !!sessionError && !(sessionError instanceof ApiError && sessionError.status === 401),
+        sessionExpired,
         isAuthenticated: !!user,
         logout: async () => {
           await logoutMutation.mutateAsync();
         },
         refetchUser: async () => {
+          setSessionExpired(false);
+          queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'auth' });
           await queryClient.cancelQueries({ queryKey: ['auth', 'me'], exact: true });
           await refetchUser();
           await queryClient.invalidateQueries({ queryKey: ['auth', 'modules'] });

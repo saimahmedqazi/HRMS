@@ -17,6 +17,7 @@ import {
   Bot,
   Settings,
   ShieldAlert,
+  Bell,
   LogOut,
 } from 'lucide-react';
 
@@ -46,6 +47,7 @@ const ALL_NAV_ITEMS: NavItem[] = [
   { id: 'my-profile', name: 'My Profile', href: '/dashboard/my-profile', icon: Users },
   { id: 'support-mode', name: 'Support Mode', href: '/dashboard/support-mode', icon: ShieldAlert },
   { id: 'billing', name: 'Billing & Plan', href: '/dashboard/billing', icon: CreditCard },
+  { id: 'notifications', name: 'Notifications', href: '/dashboard/notifications', icon: Bell },
   { id: 'settings', name: 'Settings', href: '/dashboard/settings', icon: Settings },
 ];
 

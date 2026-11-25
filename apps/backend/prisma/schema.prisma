@@ -83,6 +83,8 @@ enum LeaveType {
   CASUAL
   SICK
   ANNUAL
+  SPECIAL
+  UNPAID
 }
 
 enum LeaveStatus {
@@ -175,6 +177,10 @@ model Company {
   size             String?
   status           CompanyStatus      @default(ACTIVE)
   suspensionReason CompanySuspensionReason?
+  regularizationEnabled Boolean @default(false)
+  regularizationLookback Int @default(30)
+  regularizationExceptional Boolean @default(false)
+  regularizationDocument Boolean @default(false)
   timezone         String             @default("UTC")
   locale           String             @default("en")
   subscriptionTier SubscriptionTier   @default(BASIC)
@@ -686,6 +692,10 @@ model LeaveTypeSetting {
   id                      String    @id @default(cuid())
   companyId               String
   leaveType               LeaveType
+  isPaid                  Boolean   @default(true)
+  enforceEntitlement      Boolean   @default(true)
+  allowDuringProbation    Boolean   @default(false)
+  maxConsecutiveDays      Int?
   annualAllocation        Int       @default(0)
   requiresReason          Boolean   @default(true)
   requiresMedicalCert     Boolean   @default(false)
@@ -711,7 +721,17 @@ model LeaveRequest {
   startDate          DateTime    @db.Date
   endDate            DateTime    @db.Date
   totalDays          Int
+  policySnapshot     Json?
+  retrospective      Boolean     @default(false)
   balanceDaysByYear  Json?
+  step1ApprovedStart DateTime? @db.Date
+  step1ApprovedEnd   DateTime? @db.Date
+  step1PartialReason String?
+  step2PartialReason String?
+  approvedStart      DateTime? @db.Date
+  approvedEnd        DateTime? @db.Date
+  approvedDays       Int?
+  approvedDaysByYear Json?
   reason             String?
   medicalCertUrl     String?
   status             LeaveStatus @default(PENDING)

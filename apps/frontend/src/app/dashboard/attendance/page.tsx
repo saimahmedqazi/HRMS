@@ -7,6 +7,7 @@ import { api, ApiError } from '@/lib/api';
 import { formatWorkDuration } from '@/lib/attendance-duration';
 import { useAuth, type UserProfile } from '@/lib/auth-context';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { ContextualHelpTip } from '@/components/help/contextual-help-tip';
 import {
   Clock,
   MapPin,
@@ -37,6 +38,10 @@ import {
   CartesianGrid,
   Legend,
 } from 'recharts';
+import {
+  ChartTooltipContent,
+  CHART_TOOLTIP_CURSOR,
+} from '@/components/ui/chart-tooltip';
 
 const calendarStatus: Record<string, string> = {
   PRESENT: 'Present',
@@ -125,6 +130,7 @@ export default function AttendanceDashboardPage() {
   const [remoteEndDate, setRemoteEndDate] = useState('');
   const [remoteReason, setRemoteReason] = useState('');
   const [selectedMonth, setCalendarMonth] = useState<Date | null>(null);
+  const [selectedDateStr, setSelectedDateStr] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Fetch today's attendance
@@ -370,6 +376,8 @@ export default function AttendanceDashboardPage() {
 
   return (
     <div className="space-y-6">
+      {user?.employee?.id && ['EMPLOYEE', 'HR_MANAGER', 'COMPANY_ADMIN'].includes(user.role) && <Link href={user.role === 'EMPLOYEE' ? '/dashboard/my-leave?regularize=1' : '/dashboard/leave?regularize=1'} className="inline-block text-sm font-semibold text-indigo-700 underline dark:text-indigo-300">Regularize absence</Link>}
+
       {actionFeedback && (
         <div
           role="alert"
@@ -423,6 +431,13 @@ export default function AttendanceDashboardPage() {
           </Link>
         </div>
       </div>
+
+      <ContextualHelpTip
+        id="attendance-guide"
+        userId={user?.id}
+        title="Attendance & Shift Guide"
+        description="Check in onsite from an authorized IP or submit a Remote Work Request before working remotely. Check out at shift end to finalize working hours and classification. Need to fix a missed past day? Use Regularize absence in the Monthly Calendar."
+      />
 
       {/* Attendance KPI Summary Cards (Present vs Remote vs Exceptions vs Absent) */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -782,13 +797,8 @@ export default function AttendanceDashboardPage() {
                 <XAxis dataKey="day" tick={{ fontSize: 11 }} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
                 <Tooltip
-                  cursor={{ fill: 'rgba(148, 163, 184, 0.15)' }}
-                  content={({ active, payload, label }) => active && payload?.length ? (
-                    <div role="status" className="max-w-[min(14rem,65vw)] rounded-md border border-zinc-300 bg-white p-2 text-xs text-zinc-900 shadow-lg dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100">
-                      <p className="mb-1 font-semibold">{label}</p>
-                      {payload.map((entry) => <p key={entry.dataKey} className="flex justify-between gap-3"><span>{entry.name}</span><strong>{entry.value}</strong></p>)}
-                    </div>
-                  ) : null}
+                  cursor={CHART_TOOLTIP_CURSOR}
+                  content={<ChartTooltipContent />}
                 />
                 <Legend wrapperStyle={{ fontSize: '12px' }} />
                 <Bar dataKey="present" fill="#10B981" radius={[4, 4, 0, 0]} name="Present (Onsite)" />
@@ -860,41 +870,107 @@ export default function AttendanceDashboardPage() {
               const dayOfWeek = new Date(year, month, cell.day).getDay();
               const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
               const isToday = attendanceDate === cell.dateStr;
+              const isSelected = selectedDateStr === cell.dateStr;
 
-              const dayPresent = dayRecords.filter(
-                (r) => r.status === 'PRESENT' || r.status === 'PRESENT_REMOTE',
+              const dayPresentOnsite = dayRecords.filter(
+                (r) => r.status === 'PRESENT' && !r.isRemote,
               ).length;
-              const dayAbsent = dayRecords.filter(
-                (r) => r.status === 'ABSENT',
+              const dayRemote = dayRecords.filter(
+                (r) => r.status === 'PRESENT_REMOTE' || (r.status === 'PRESENT' && r.isRemote),
               ).length;
-              const dayReview = dayRecords.filter((r) => ['ABSENT_PENDING_REVIEW', 'MISSING_CHECKOUT'].includes(r.status)).length;
+              const dayPresent = dayPresentOnsite + dayRemote;
+              const dayAbsent = dayRecords.filter((r) => r.status === 'ABSENT').length;
+              const dayReview = dayRecords.filter((r) =>
+                ['ABSENT_PENDING_REVIEW', 'MISSING_CHECKOUT'].includes(r.status),
+              ).length;
               const dayHalf = dayRecords.filter((r) => r.status === 'HALF_DAY').length;
               const dayOnLeave = dayRecords.filter((r) => r.status === 'ON_LEAVE').length;
+              const dayInProgress = dayRecords.filter((r) => r.status === 'IN_PROGRESS').length;
               const singleStatus = dayRecords[0]?.status ?? (isToday ? attendance?.status : null);
 
               let cellBadge = null;
               if (dayRecords.length > 1) {
+                const mobileDots = [
+                  dayPresent > 0 ? { key: 'P', color: 'bg-emerald-500', label: `${dayPresent} Present` } : null,
+                  dayHalf > 0 ? { key: 'H', color: 'bg-violet-500', label: `${dayHalf} Half day` } : null,
+                  dayAbsent > 0 ? { key: 'A', color: 'bg-rose-500', label: `${dayAbsent} Absent` } : null,
+                  dayReview > 0 ? { key: 'R', color: 'bg-amber-500', label: `${dayReview} Exceptions` } : null,
+                  dayOnLeave > 0 ? { key: 'L', color: 'bg-indigo-500', label: `${dayOnLeave} On Leave` } : null,
+                  dayInProgress > 0 ? { key: 'I', color: 'bg-sky-500', label: `${dayInProgress} In Progress` } : null,
+                ].filter(Boolean) as { key: string; color: string; label: string }[];
+
                 cellBadge = (
-                  <div className="mt-1 flex flex-wrap gap-0.5 text-[9px] font-semibold">
-                    <span title="Present" className="rounded bg-emerald-100 px-1 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
-                      {dayPresent} P
-                    </span>
-                    {dayHalf > 0 && <span title="Half day" className="rounded bg-violet-100 px-1 text-violet-700 dark:bg-violet-950 dark:text-violet-300">{dayHalf} H</span>}
-                    {dayAbsent > 0 && <span title="Absent" className="rounded bg-rose-100 px-1 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">{dayAbsent} A</span>}
-                    {dayReview > 0 && <span title="Pending review" className="rounded bg-amber-100 px-1 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">{dayReview} R</span>}
-                    {dayOnLeave > 0 && <span title="On Leave" className="rounded bg-indigo-100 px-1 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">{dayOnLeave} L</span>}
-                  </div>
+                  <>
+                    <div
+                      className="mt-1 flex items-center gap-1 sm:hidden"
+                      aria-label={mobileDots.map((d) => d.label).join(', ')}
+                    >
+                      {mobileDots.slice(0, 4).map((d) => (
+                        <span key={d.key} className={`h-1.5 w-1.5 shrink-0 rounded-full ${d.color}`} />
+                      ))}
+                    </div>
+                    <div className="mt-1 hidden flex-wrap gap-0.5 text-[9px] font-semibold sm:flex">
+                      {dayPresent > 0 && (
+                        <span title="Present" className="rounded bg-emerald-100 px-1 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                          {dayPresent} P
+                        </span>
+                      )}
+                      {dayHalf > 0 && (
+                        <span title="Half day" className="rounded bg-violet-100 px-1 text-violet-700 dark:bg-violet-950 dark:text-violet-300">
+                          {dayHalf} H
+                        </span>
+                      )}
+                      {dayAbsent > 0 && (
+                        <span title="Absent" className="rounded bg-rose-100 px-1 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">
+                          {dayAbsent} A
+                        </span>
+                      )}
+                      {dayReview > 0 && (
+                        <span title="Exceptions / Pending review" className="rounded bg-amber-100 px-1 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+                          {dayReview} R
+                        </span>
+                      )}
+                      {dayOnLeave > 0 && (
+                        <span title="On Leave" className="rounded bg-indigo-100 px-1 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                          {dayOnLeave} L
+                        </span>
+                      )}
+                      {dayInProgress > 0 && (
+                        <span title="In Progress" className="rounded bg-sky-100 px-1 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300">
+                          {dayInProgress} I
+                        </span>
+                      )}
+                    </div>
+                  </>
                 );
               } else if (singleStatus) {
-                const color = singleStatus === 'PRESENT' || singleStatus === 'PRESENT_REMOTE'
-                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                  : singleStatus === 'ABSENT'
-                    ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
-                    : 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300';
+                const dotColor =
+                  singleStatus === 'PRESENT' || singleStatus === 'PRESENT_REMOTE'
+                    ? 'bg-emerald-500'
+                    : singleStatus === 'ABSENT'
+                      ? 'bg-rose-500'
+                      : singleStatus === 'HALF_DAY'
+                        ? 'bg-violet-500'
+                        : singleStatus === 'ON_LEAVE'
+                          ? 'bg-indigo-500'
+                          : 'bg-amber-500';
+                const color =
+                  singleStatus === 'PRESENT' || singleStatus === 'PRESENT_REMOTE'
+                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                    : singleStatus === 'ABSENT'
+                      ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                      : singleStatus === 'HALF_DAY'
+                        ? 'bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300'
+                        : singleStatus === 'ON_LEAVE'
+                          ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'
+                          : 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300';
                 cellBadge = (
-                  <span className={`mt-1 truncate rounded px-1 py-0.5 text-[9px] font-bold ${color}`}>
-                    {calendarStatus[singleStatus] ?? singleStatus}
-                  </span>
+                  <>
+                    <span className={`mt-1 inline-block h-1.5 w-1.5 rounded-full sm:hidden ${dotColor}`} />
+                    <span className={`mt-1 hidden truncate rounded px-1 py-0.5 text-[9px] font-bold sm:inline-block ${color}`}>
+                      {calendarStatus[singleStatus] ?? singleStatus}
+                    </span>
+                  </>
                 );
               } else if (isWeekend) {
                 cellBadge = (
@@ -903,18 +979,26 @@ export default function AttendanceDashboardPage() {
               }
 
               return (
-                <div
+                <button
                   key={cell.dateStr}
+                  type="button"
+                  onClick={() =>
+                    setSelectedDateStr((prev) => (prev === cell.dateStr ? null : cell.dateStr!))
+                  }
                   aria-current={isToday ? 'date' : undefined}
-                  className={`h-14 rounded-lg border p-1.5 flex flex-col justify-between text-xs transition ${
-                    isToday
-                      ? 'border-indigo-500 bg-indigo-50/30 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
-                      : 'border-zinc-100 bg-white dark:border-zinc-800 dark:bg-zinc-900'
+                  aria-pressed={isSelected}
+                  aria-label={`Attendance for ${cell.dateStr}`}
+                  className={`min-h-14 sm:min-h-[4.25rem] overflow-hidden rounded-lg border p-1.5 flex flex-col justify-between text-left text-xs transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                    isSelected
+                      ? 'border-indigo-600 bg-indigo-50/60 ring-2 ring-indigo-500 dark:bg-indigo-950/50'
+                      : isToday
+                        ? 'border-indigo-500 bg-indigo-50/30 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
+                        : 'border-zinc-100 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700'
                   }`}
                 >
                   <span
-                    className={`text-[11px] font-bold ${
-                      isToday
+                    className={`text-[11px] font-bold leading-none ${
+                      isToday || isSelected
                         ? 'text-indigo-600 dark:text-indigo-400'
                         : isWeekend
                           ? 'text-zinc-400'
@@ -924,10 +1008,142 @@ export default function AttendanceDashboardPage() {
                     {cell.day}
                   </span>
                   {cellBadge}
-                </div>
+                </button>
               );
             })}
           </div>
+
+          {/* Calendar Status Legend */}
+          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-zinc-100 pt-3 text-[11px] text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />
+              Present (P)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-violet-500" aria-hidden="true" />
+              Half Day (H)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-rose-500" aria-hidden="true" />
+              Absent (A)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" />
+              Exception / Review (R)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-indigo-500" aria-hidden="true" />
+              On Leave (L)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-sky-500" aria-hidden="true" />
+              In Progress (I)
+            </span>
+          </div>
+
+          {/* Selected-Day Breakdown Panel */}
+          {selectedDateStr && (() => {
+            const selectedRecords = recordsList.filter((r) => {
+              const rDate = new Date(r.date).toISOString().slice(0, 10);
+              return rDate === selectedDateStr;
+            });
+            const presentOnsiteCount = selectedRecords.filter((r) => r.status === 'PRESENT' && !r.isRemote).length;
+            const presentRemoteCount = selectedRecords.filter(
+              (r) => r.status === 'PRESENT_REMOTE' || (r.status === 'PRESENT' && r.isRemote),
+            ).length;
+            const halfDayCount = selectedRecords.filter((r) => r.status === 'HALF_DAY').length;
+            const absentCount = selectedRecords.filter((r) => r.status === 'ABSENT').length;
+            const onLeaveCount = selectedRecords.filter((r) => r.status === 'ON_LEAVE').length;
+            const inProgressCount = selectedRecords.filter((r) => r.status === 'IN_PROGRESS').length;
+            const exceptionCount = selectedRecords.filter((r) =>
+              ['ABSENT_PENDING_REVIEW', 'MISSING_CHECKOUT'].includes(r.status),
+            ).length;
+
+            const summaryTiles = [
+              { label: 'Present (Onsite)', count: presentOnsiteCount, tone: 'text-emerald-600 dark:text-emerald-400' },
+              { label: 'Remote', count: presentRemoteCount, tone: 'text-blue-600 dark:text-blue-400' },
+              { label: 'Half Day', count: halfDayCount, tone: 'text-violet-600 dark:text-violet-400' },
+              { label: 'Absent', count: absentCount, tone: 'text-rose-600 dark:text-rose-400' },
+              { label: 'On Leave', count: onLeaveCount, tone: 'text-indigo-600 dark:text-indigo-400' },
+              { label: 'In Progress', count: inProgressCount, tone: 'text-sky-600 dark:text-sky-400' },
+              { label: 'Exceptions', count: exceptionCount, tone: 'text-amber-600 dark:text-amber-400' },
+            ];
+
+            return (
+              <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-950/50">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-200">
+                      Breakdown for{' '}
+                      {new Date(`${selectedDateStr}T12:00:00`).toLocaleDateString('en-US', {
+                        weekday: 'short',
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
+                    </h3>
+                    <p className="text-[11px] text-zinc-500">
+                      {selectedRecords.length} authorized record{selectedRecords.length === 1 ? '' : 's'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDateStr(null)}
+                    className="text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                  >
+                    Clear
+                  </button>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {summaryTiles.map((tile) => (
+                    <div
+                      key={tile.label}
+                      className="rounded-lg border border-zinc-200 bg-white px-2.5 py-2 dark:border-zinc-800 dark:bg-zinc-900"
+                    >
+                      <p className="text-[10px] font-medium text-zinc-500">{tile.label}</p>
+                      <p className={`text-sm font-bold ${tile.tone}`}>{tile.count}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {selectedRecords.length === 0 ? (
+                  <p className="mt-3 text-xs text-zinc-500">
+                    No attendance records recorded for this date.
+                  </p>
+                ) : (
+                  <div className="mt-3 max-h-48 space-y-1.5 overflow-y-auto pr-1">
+                    {selectedRecords.map((rec: any) => (
+                      <div
+                        key={rec.id}
+                        className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-900"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold text-zinc-900 dark:text-zinc-100">
+                            {rec.employee
+                              ? `${rec.employee.firstName} ${rec.employee.lastName}`
+                              : 'My Record'}
+                          </p>
+                          {rec.employee?.department?.name && (
+                            <p className="truncate text-[11px] text-zinc-500">
+                              {rec.employee.department.name}
+                            </p>
+                          )}
+                        </div>
+                        <StatusBadge
+                          status={
+                            rec.status === 'PRESENT' && rec.isRemote
+                              ? 'PRESENT_REMOTE'
+                              : rec.status
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       </div>
 

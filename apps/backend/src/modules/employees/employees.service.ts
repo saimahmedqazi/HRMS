@@ -16,6 +16,7 @@ import { StorageService, DEFAULT_IMAGE_MIMES, DEFAULT_DOCUMENT_MIMES } from '../
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { getLoginNetworkLocation, resolveLoginTelemetry } from '../../common/utils/login-network-location';
 import { getProbationEndDate, parseEmployeeDate } from '../../common/utils/employee-dates';
+import { getCompanyAttendanceTime } from '../../common/utils/attendance-date';
 import { isInactiveEmployeeStatus } from '../auth/account-state';
 import { validateStrongPassword } from '../../common/utils/password-policy';
 import { AdminResetPasswordDto } from './dto/admin-reset-password.dto';
@@ -57,6 +58,8 @@ export interface EmployeeQueryFilter {
   status?: EmployeeStatus;
   page?: number;
   limit?: number;
+  sortBy?: 'createdAt' | 'firstName' | 'lastName' | 'employeeCode';
+  sortOrder?: 'asc' | 'desc';
 }
 
 @Injectable()
@@ -139,7 +142,7 @@ export class EmployeesService {
             },
           },
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { [query.sortBy || 'createdAt']: query.sortOrder || 'desc' },
         skip,
         take: limit,
       }),
@@ -216,9 +219,11 @@ export class EmployeesService {
 
     const profile = {
       ...employee,
-      probationEndDate: employee.status === EmployeeStatus.ON_PROBATION
-        ? getProbationEndDate(employee.hireDate)
-        : employee.probationEndDate,
+      probationEndDate:
+        employee.probationEndDate ??
+        (employee.status === EmployeeStatus.ON_PROBATION
+          ? getProbationEndDate(employee.hireDate)
+          : null),
       user: employee.user ? {
         ...employee.user,
         ...resolveLoginTelemetry({
@@ -250,6 +255,88 @@ export class EmployeesService {
     const dateOfBirth = dto.dateOfBirth ? parseEmployeeDate(dto.dateOfBirth) : null;
     if (dto.dateOfBirth && (!dateOfBirth || dateOfBirth.getTime() > Date.now())) {
       throw new BadRequestException('Date of birth must be a valid date that is not in the future.');
+    }
+
+    const initialStatusMode = dto.initialStatus ?? 'AUTO';
+    const canOverrideStatus =
+      user.role === UserRole.COMPANY_ADMIN ||
+      user.role === UserRole.HR_MANAGER ||
+      user.role === UserRole.SUPER_ADMIN;
+    if ((initialStatusMode !== 'AUTO' || dto.probationEndDate !== undefined) && !canOverrideStatus) {
+      throw new ForbiddenException('Only authorized CEO or HR users may override initial employment status.');
+    }
+
+    const customProbationEnd = dto.probationEndDate ? parseEmployeeDate(dto.probationEndDate) : null;
+    if (dto.probationEndDate && !customProbationEnd) {
+      throw new BadRequestException('Probation end date must be a valid calendar date (YYYY-MM-DD).');
+    }
+    if (customProbationEnd && customProbationEnd.getTime() < hireDate.getTime()) {
+      throw new BadRequestException('Probation end date cannot be earlier than the hire date.');
+    }
+
+    let companyToday: Date;
+    try {
+      if (typeof (this.prisma as unknown as { company?: { findUnique?: unknown } }).company?.findUnique === 'function') {
+        const local = await getCompanyAttendanceTime(this.prisma, companyId, new Date());
+        companyToday = local.date;
+      } else {
+        const now = new Date();
+        companyToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      }
+    } catch {
+      const now = new Date();
+      companyToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    }
+
+    const calculatedProbationEnd = getProbationEndDate(hireDate);
+    const calculatedEndDay = new Date(
+      Date.UTC(
+        calculatedProbationEnd.getUTCFullYear(),
+        calculatedProbationEnd.getUTCMonth(),
+        calculatedProbationEnd.getUTCDate(),
+      ),
+    );
+    const customEndDay = customProbationEnd
+      ? new Date(
+          Date.UTC(
+            customProbationEnd.getUTCFullYear(),
+            customProbationEnd.getUTCMonth(),
+            customProbationEnd.getUTCDate(),
+          ),
+        )
+      : null;
+
+    let resolvedStatus: EmployeeStatus;
+    let resolvedProbationEndDate: Date | null;
+
+    if (initialStatusMode === 'ACTIVE') {
+      if (customEndDay && customEndDay.getTime() > companyToday.getTime()) {
+        throw new BadRequestException('An active employee cannot have a future probation end date.');
+      }
+      resolvedStatus = EmployeeStatus.ACTIVE;
+      resolvedProbationEndDate = customProbationEnd
+        ? customProbationEnd
+        : calculatedEndDay.getTime() <= companyToday.getTime()
+          ? calculatedProbationEnd
+          : null;
+    } else if (initialStatusMode === 'ON_PROBATION') {
+      const targetEnd = customProbationEnd ?? calculatedProbationEnd;
+      const targetEndDay = customEndDay ?? calculatedEndDay;
+      if (targetEndDay.getTime() <= companyToday.getTime()) {
+        throw new BadRequestException(
+          'Original probation period has elapsed. Provide a valid future probation end date to place this employee on probation.',
+        );
+      }
+      resolvedStatus = EmployeeStatus.ON_PROBATION;
+      resolvedProbationEndDate = targetEnd;
+    } else {
+      const effectiveEnd = customProbationEnd ?? calculatedProbationEnd;
+      const effectiveEndDay = customEndDay ?? calculatedEndDay;
+      resolvedStatus =
+        effectiveEndDay.getTime() <= companyToday.getTime()
+          ? EmployeeStatus.ACTIVE
+          : EmployeeStatus.ON_PROBATION;
+      resolvedProbationEndDate = effectiveEnd;
     }
 
     // 1. Check email uniqueness
@@ -345,8 +432,8 @@ export class EmployeesService {
           city: dto.city,
           country: dto.country,
           hireDate,
-          probationEndDate: getProbationEndDate(hireDate),
-          status: EmployeeStatus.ON_PROBATION,
+          probationEndDate: resolvedProbationEndDate,
+          status: resolvedStatus,
           departmentId: dto.departmentId,
           designationId: dto.designationId,
           teamId: dto.teamId,

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsInt, IsOptional, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, Max, Min } from 'class-validator';
 
 export class UpdateLeaveTypeDto {
   @ApiPropertyOptional({ example: 14 })
@@ -28,4 +28,21 @@ export class UpdateLeaveTypeDto {
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+  @IsBoolean()
+  @IsOptional()
+  isPaid?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  enforceEntitlement?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  allowDuringProbation?: boolean;
+
+  @IsInt()
+  @Min(1)
+  @Max(366)
+  @IsOptional()
+  maxConsecutiveDays?: number | null;
 }
