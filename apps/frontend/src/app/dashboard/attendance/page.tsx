@@ -43,6 +43,36 @@ import {
   CHART_TOOLTIP_CURSOR,
 } from '@/components/ui/chart-tooltip';
 
+const reportCategories = [
+  { key: 'present', name: 'Present (Onsite)', color: '#10B981' },
+  { key: 'remote', name: 'Present (Remote)', color: '#3B82F6' },
+  { key: 'absent', name: 'Absent', color: '#F43F5E' },
+  { key: 'halfDay', name: 'Half Day', color: '#8B5CF6' },
+  { key: 'exceptions', name: 'Exceptions / Pending', color: '#F59E0B' },
+  { key: 'leave', name: 'Approved Leave', color: '#6366F1' },
+] as const;
+
+type ReportingPeriod = 'today' | 'week' | 'month' | 'historical';
+
+function countAttendance(records: { status: string; isRemote?: boolean }[]) {
+  const totals = { present: 0, remote: 0, absent: 0, halfDay: 0, exceptions: 0, leave: 0 };
+  for (const { status, isRemote } of records) {
+    switch (status) {
+      case 'PRESENT': totals[isRemote ? 'remote' : 'present']++; break;
+      case 'PRESENT_REMOTE': totals.remote++; break;
+      case 'ABSENT': totals.absent++; break;
+      case 'HALF_DAY': totals.halfDay++; break;
+      case 'ABSENT_PENDING_REVIEW':
+      case 'MISSING_CHECKOUT': totals.exceptions++; break;
+      case 'ON_LEAVE': totals.leave++; break;
+    }
+  }
+  return totals;
+}
+
+const dateKey = (date: Date) => date.toISOString().slice(0, 10);
+const dayMs = 86_400_000;
+
 const calendarStatus: Record<string, string> = {
   PRESENT: 'Present',
   IN_PROGRESS: 'Checked in',
@@ -129,6 +159,7 @@ export default function AttendanceDashboardPage() {
   const [remoteStartDate, setRemoteStartDate] = useState('');
   const [remoteEndDate, setRemoteEndDate] = useState('');
   const [remoteReason, setRemoteReason] = useState('');
+  const [period, setPeriod] = useState<ReportingPeriod>('month');
   const [selectedMonth, setCalendarMonth] = useState<Date | null>(null);
   const [selectedDateStr, setSelectedDateStr] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -149,15 +180,10 @@ export default function AttendanceDashboardPage() {
     refetchInterval: 60_000,
   });
 
-  // Fetch attendance records for calendar & graph
-  const { data: recordsData } = useQuery({
-    queryKey: ['attendance-records'],
-    queryFn: () => api.get<any>('/attendance/records'),
-  });
-
   // Fetch dashboard overview for 7-day trend & headcount
-  const { data: overviewData } = useQuery({
-    queryKey: ['dashboard-overview'],
+  const overviewQuery = useQuery({
+    queryKey: ['dashboard-overview', user?.id, user?.supportModeCompanyId ?? user?.companyId, user?.role],
+    enabled: Boolean(user),
     queryFn: () => api.get<any>('/analytics/overview'),
     refetchInterval: 60_000,
   });
@@ -174,8 +200,9 @@ export default function AttendanceDashboardPage() {
     queryFn: () => api.get<any[]>('/attendance/remote-permissions'),
   });
 
+  const overviewData = overviewQuery.data;
   const attendance = attendanceQuery.data;
-  const attendanceDate = overviewData?.attendanceDate ?? attendance?.date?.slice(0, 10);
+  const attendanceDate: string | undefined = overviewData?.attendanceDate;
   const shiftDate = attendance?.date?.slice(0, 10);
   const overnightShiftDate = shiftDate && attendanceDate && shiftDate !== attendanceDate ? shiftDate : null;
   const calendarMonth = selectedMonth ?? (attendanceDate
@@ -184,6 +211,22 @@ export default function AttendanceDashboardPage() {
   const timer = timerQuery.data;
   const currentLatitude = whitelistData?.currentGeo?.latitude;
   const currentLongitude = whitelistData?.currentGeo?.longitude;
+  const monthStart = dateKey(new Date(Date.UTC(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)));
+  const monthEnd = dateKey(new Date(Date.UTC(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0)));
+  const today = Date.parse(attendanceDate ?? monthStart);
+  const weekStart = today - ((new Date(today).getUTCDay() + 6) % 7) * dayMs;
+  const reportStart = period === 'today' ? dateKey(new Date(today))
+    : period === 'week' ? dateKey(new Date(weekStart)) : monthStart;
+  const reportEnd = period === 'today' ? reportStart
+    : period === 'week' ? dateKey(new Date(weekStart + 6 * dayMs)) : monthEnd;
+  const startDate = reportStart < monthStart ? reportStart : monthStart;
+  const endDate = reportEnd > monthEnd ? reportEnd : monthEnd;
+  const recordsQuery = useQuery({
+    queryKey: ['attendance-records', user?.id, user?.supportModeCompanyId ?? user?.companyId, user?.role, startDate, endDate],
+    queryFn: ({ signal }) => api.get<any>('/attendance/records?' + new URLSearchParams({ startDate, endDate }), { signal }),
+    enabled: Boolean(user && attendanceDate),
+  });
+  const recordsData = recordsQuery.data;
   const recordsList: any[] = Array.isArray(recordsData)
     ? recordsData
     : recordsData?.data || [];
@@ -350,14 +393,26 @@ export default function AttendanceDashboardPage() {
     return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
-  const { present: presentCount, remote: remoteCount, absent: absentCount, exceptions: exceptionCount } =
-    overviewData?.todaySummary ?? { present: 0, remote: 0, absent: 0, exceptions: 0 };
-
-  const hasTrend = Boolean(overviewData?.attendanceTrend?.length);
-  const trendChartData = hasTrend ? overviewData.attendanceTrend : [{
-    day: 'Today', present: presentCount, remote: remoteCount, absent: absentCount, exceptions: exceptionCount,
-    halfDay: overviewData?.todaySummary?.halfDay ?? 0,
-  }];
+  const recordsByDate = new Map<string, any[]>();
+  for (const record of recordsList) {
+    const key = record.date.slice(0, 10);
+    const existing = recordsByDate.get(key);
+    if (existing) existing.push(record);
+    else recordsByDate.set(key, [record]);
+  }
+  const reportRecords = recordsList.filter((record) => {
+    const key = record.date.slice(0, 10);
+    return key >= reportStart && key <= reportEnd;
+  });
+  const totals = countAttendance(reportRecords);
+  const hasReport = reportCategories.some(({ key }) => totals[key] > 0);
+  const trendChartData = [];
+  for (let day = Date.parse(reportStart); day <= Date.parse(reportEnd); day += dayMs) {
+    const key = dateKey(new Date(day));
+    trendChartData.push({ day: key.slice(5), ...countAttendance(recordsByDate.get(key) ?? []) });
+  }
+  const reportLabel = reportStart === reportEnd ? reportStart : reportStart + ' – ' + reportEnd;
+  const reportReady = Boolean(attendanceDate && recordsQuery.isSuccess);
 
   // Monthly Calendar computation
   const year = calendarMonth.getFullYear();
@@ -439,40 +494,32 @@ export default function AttendanceDashboardPage() {
         description="Check in onsite from an authorized IP or submit a Remote Work Request before working remotely. Check out at shift end to finalize working hours and classification. Need to fix a missed past day? Use Regularize absence in the Monthly Calendar."
       />
 
-      {/* Attendance KPI Summary Cards (Present vs Remote vs Exceptions vs Absent) */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-          <span className="text-[11px] font-semibold uppercase text-zinc-500">Present (Onsite)</span>
-          <p className="mt-1 text-2xl font-extrabold text-emerald-600 dark:text-emerald-400">
-            {presentCount}
-          </p>
-          <span className="text-[11px] text-zinc-400">Verified onsite check-ins</span>
+      <section aria-label="Attendance reporting">
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <label htmlFor="attendance-period" className="text-sm font-semibold">Reporting period</label>
+          <select id="attendance-period" value={period}
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            onChange={(event) => {
+              setPeriod(event.target.value as ReportingPeriod);
+              setCalendarMonth(null);
+              setSelectedDateStr(null);
+            }}>
+            <option value="today">Today</option>
+            <option value="week">This Week</option>
+            <option value="month">This Month</option>
+            {period === 'historical' && <option value="historical" disabled>Selected Month</option>}
+          </select>
+          {attendanceDate && <span className="text-sm text-zinc-500 dark:text-zinc-400">{reportLabel}</span>}
         </div>
-
-        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-          <span className="text-[11px] font-semibold uppercase text-zinc-500">Present (Remote)</span>
-          <p className="mt-1 text-2xl font-extrabold text-blue-600 dark:text-blue-400">
-            {remoteCount}
-          </p>
-          <span className="text-[11px] text-zinc-400">Authorized remote sessions</span>
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+          {reportCategories.map(({ key, name }) => (
+            <div key={key} className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <span className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">{name}</span>
+              <p className="mt-1 text-2xl font-extrabold">{reportReady ? totals[key] : '—'}</p>
+            </div>
+          ))}
         </div>
-
-        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-          <span className="text-[11px] font-semibold uppercase text-zinc-500">Absent Count</span>
-          <p className="mt-1 text-2xl font-extrabold text-rose-600 dark:text-rose-400">
-            {absentCount}
-          </p>
-          <span className="text-[11px] text-zinc-400">Unexcused / no check-in</span>
-        </div>
-
-        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-          <span className="text-[11px] font-semibold uppercase text-zinc-500">Exceptions / Pending</span>
-          <p className="mt-1 text-2xl font-extrabold text-amber-600 dark:text-amber-400">
-            {exceptionCount}
-          </p>
-          <span className="text-[11px] text-zinc-400">Awaiting HR review</span>
-        </div>
-      </div>
+      </section>
 
       {/* Main Grid: Punch Card + Work Timer */}
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
@@ -782,15 +829,15 @@ export default function AttendanceDashboardPage() {
             <div>
               <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
                 <BarChart3 className="h-5 w-5 text-indigo-600" />
-                Attendance Analytics Graph (Present vs. Absent)
+                Attendance Analytics
               </h2>
               <p className="text-xs text-zinc-500">
-                {hasTrend ? 'Daily attendance counts.' : 'Current attendance status counts.'}
+                {attendanceDate ? reportLabel : 'Company attendance dates'}
               </p>
             </div>
           </div>
 
-          <div className="h-72 w-full">
+          {reportReady && hasReport ? <div className="h-72 w-full min-w-0">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={trendChartData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
@@ -801,14 +848,15 @@ export default function AttendanceDashboardPage() {
                   content={<ChartTooltipContent />}
                 />
                 <Legend wrapperStyle={{ fontSize: '12px' }} />
-                <Bar dataKey="present" fill="#10B981" radius={[4, 4, 0, 0]} name="Present (Onsite)" />
-                <Bar dataKey="remote" fill="#3B82F6" radius={[4, 4, 0, 0]} name="Present (Remote)" />
-                <Bar dataKey="absent" fill="#F43F5E" radius={[4, 4, 0, 0]} name="Absent" />
-                <Bar dataKey="halfDay" fill="#8B5CF6" radius={[4, 4, 0, 0]} name="Half day" />
-                {!hasTrend && <Bar dataKey="exceptions" fill="#F59E0B" radius={[4, 4, 0, 0]} name="Exceptions" />}
+                {reportCategories.map(({ key, color, name }) => (
+                  <Bar key={key} dataKey={key} stackId="attendance" fill={color} name={name} />
+                ))}
               </BarChart>
             </ResponsiveContainer>
-          </div>
+          </div> : <p role="status" className="py-8 text-sm text-zinc-500">
+            {overviewQuery.isError || recordsQuery.isError ? 'Unable to load attendance reporting.'
+              : reportReady ? 'No reportable attendance in this period.' : 'Loading attendance reporting…'}
+          </p>}
         </div>
 
         {/* Interactive Monthly Attendance Calendar */}
@@ -826,7 +874,12 @@ export default function AttendanceDashboardPage() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setCalendarMonth(new Date(year, month - 1, 1))}
+                aria-label="Previous month"
+                onClick={() => {
+                  setCalendarMonth(new Date(year, month - 1, 1));
+                  setPeriod('historical');
+                  setSelectedDateStr(null);
+                }}
                 className="rounded-lg border border-zinc-200 p-1.5 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300"
               >
                 <ChevronLeft className="h-4 w-4" />
@@ -836,7 +889,12 @@ export default function AttendanceDashboardPage() {
               </span>
               <button
                 type="button"
-                onClick={() => setCalendarMonth(new Date(year, month + 1, 1))}
+                aria-label="Next month"
+                onClick={() => {
+                  setCalendarMonth(new Date(year, month + 1, 1));
+                  setPeriod('historical');
+                  setSelectedDateStr(null);
+                }}
                 className="rounded-lg border border-zinc-200 p-1.5 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300"
               >
                 <ChevronRight className="h-4 w-4" />
@@ -872,21 +930,11 @@ export default function AttendanceDashboardPage() {
               const isToday = attendanceDate === cell.dateStr;
               const isSelected = selectedDateStr === cell.dateStr;
 
-              const dayPresentOnsite = dayRecords.filter(
-                (r) => r.status === 'PRESENT' && !r.isRemote,
-              ).length;
-              const dayRemote = dayRecords.filter(
-                (r) => r.status === 'PRESENT_REMOTE' || (r.status === 'PRESENT' && r.isRemote),
-              ).length;
+              const { present: dayPresentOnsite, remote: dayRemote, absent: dayAbsent,
+                exceptions: dayReview, halfDay: dayHalf, leave: dayOnLeave } = countAttendance(dayRecords);
               const dayPresent = dayPresentOnsite + dayRemote;
-              const dayAbsent = dayRecords.filter((r) => r.status === 'ABSENT').length;
-              const dayReview = dayRecords.filter((r) =>
-                ['ABSENT_PENDING_REVIEW', 'MISSING_CHECKOUT'].includes(r.status),
-              ).length;
-              const dayHalf = dayRecords.filter((r) => r.status === 'HALF_DAY').length;
-              const dayOnLeave = dayRecords.filter((r) => r.status === 'ON_LEAVE').length;
               const dayInProgress = dayRecords.filter((r) => r.status === 'IN_PROGRESS').length;
-              const singleStatus = dayRecords[0]?.status ?? (isToday ? attendance?.status : null);
+              const singleStatus = dayPresentOnsite === 0 && dayRemote > 0 ? 'PRESENT_REMOTE' : dayRecords[0]?.status;
 
               let cellBadge = null;
               if (dayRecords.length > 1) {

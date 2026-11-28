@@ -46,20 +46,46 @@ test('the shared attendance calendar shows approved leave and history validates 
   try {
     const page = await context.newPage();
     const day = '2026-11-03';
-    const records = ['PRESENT', 'ON_LEAVE'].map((status) => ({
-      id: status, date: `${day}T00:00:00.000Z`, status, employee: { firstName: 'Fixture', lastName: status },
+    const records = [
+      ['PRESENT', day], ['ON_LEAVE', day], ['PRESENT_REMOTE', '2026-11-06'],
+      ['HALF_DAY', '2026-11-09'], ['ABSENT', '2026-11-10'],
+      ['MISSING_CHECKOUT', '2026-11-11'], ['ABSENT_PENDING_REVIEW', '2026-11-12'],
+      ['WEEKEND', '2026-11-15'], ['PRESENT', '2026-10-30'],
+    ].map(([status, date], index) => ({
+      id: String(index), date: date + 'T00:00:00.000Z', status, employee: { firstName: 'Fixture', lastName: status },
     }));
     await page.route('**/api/v1/**', (route) => {
-      const path = new URL(route.request().url()).pathname;
+      const { pathname: path, searchParams } = new URL(route.request().url());
       if (path.endsWith('/auth/me/modules')) return route.fulfill({ json: { data: {
         role: 'HR_MANAGER', allowedModules: ['dashboard', 'attendance'],
       } } });
       if (path.endsWith('/auth/me')) return route.fulfill({ json: { data: { id: 'fixture-hr', role: 'HR_MANAGER', firstName: 'Fixture', lastName: 'HR', companyId: 'fixture-company' } } });
       if (path.endsWith('/analytics/overview')) return route.fulfill({ json: { data: { attendanceDate: day } } });
-      return route.fulfill({ json: { data: path.endsWith('/attendance/records') ? records : [] } });
+      return route.fulfill({ json: { data: path.endsWith('/attendance/records') ? records.filter(({ date }) =>
+        date.slice(0, 10) >= (searchParams.get('startDate') ?? '') &&
+        date.slice(0, 10) <= (searchParams.get('endDate') ?? '9999')) : [] } });
     });
     await page.goto('/dashboard/attendance');
     await expect(page.getByTitle('On Leave', { exact: true })).toHaveText('1 L');
+    const cards = page.getByRole('region', { name: 'Attendance reporting' }).locator('p');
+    await expect(cards).toHaveText(['1', '1', '1', '1', '2', '1']);
+    const chart = page.locator('.recharts-responsive-container');
+    await expect(chart.locator('.recharts-surface').first()).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => document.documentElement.classList.add('dark'));
+    await expect(chart.locator('.recharts-surface').first()).toBeVisible();
+    expect((await chart.boundingBox())?.width).toBeLessThanOrEqual(390);
+
+    const period = page.getByLabel('Reporting period');
+    await period.selectOption('today');
+    await expect(cards).toHaveText(['1', '0', '0', '0', '0', '1']);
+    await period.selectOption('week');
+    await expect(cards).toHaveText(['1', '1', '0', '0', '0', '1']);
+    const previousMonth = page.getByRole('button', { name: /previous month/i });
+    await previousMonth.click();
+    await expect(cards).toHaveText(['1', '0', '0', '0', '0', '0']);
+    await previousMonth.click();
+    await expect(page.getByText('No reportable attendance in this period.')).toBeVisible();
     await page.goto('/dashboard/attendance/history');
     await expect(page.getByRole('row').filter({ hasText: 'Fixture ON_LEAVE' })).toContainText('11/3/2026');
     await page.getByLabel('Start Date').fill(day);
